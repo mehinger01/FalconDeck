@@ -1,0 +1,60 @@
+@import "tailwindcss";
+
+/*
+ * Ogemaw Heights Falcons brand palette: deep brown, gold, cream/off-white.
+ * Deliberately no navy anywhere in this file.
+ */
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+
+  --color-falcon-brown-950: #21140b;
+  --color-falcon-brown-900: #2f1d10;
+  --color-falcon-brown-800: #402a17;
+  --color-falcon-brown-700: #5a3a1f;
+  --color-falcon-brown-600: #7a4f2a;
+
+  --color-falcon-gold-600: #a3781c;
+  --color-falcon-gold-500: #c9a227;
+  --color-falcon-gold-400: #dcb94a;
+  --color-falcon-gold-300: #e9cd7b;
+
+  --color-falcon-cream-100: #fbf7ee;
+  --color-falcon-cream-200: #f5efe0;
+  --color-falcon-cream-300: #ece2c8;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+
+  --color-falcon-brown-950: var(--color-falcon-brown-950);
+  --color-falcon-brown-900: var(--color-falcon-brown-900);
+  --color-falcon-brown-800: var(--color-falcon-brown-800);
+  --color-falcon-brown-700: var(--color-falcon-brown-700);
+  --color-falcon-brown-600: var(--color-falcon-brown-600);
+
+  --color-falcon-gold-600: var(--color-falcon-gold-600);
+  --color-falcon-gold-500: var(--color-falcon-gold-500);
+  --color-falcon-gold-400: var(--color-falcon-gold-400);
+  --color-falcon-gold-300: var(--color-falcon-gold-300);
+
+  --color-falcon-cream-100: var(--color-falcon-cream-100);
+  --color-falcon-cream-200: var(--color-falcon-cream-200);
+  --color-falcon-cream-300: var(--color-falcon-cream-300);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
