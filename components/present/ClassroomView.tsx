@@ -15,6 +15,7 @@ export function ClassroomView({
   showCountdown,
   dateKey,
   lesson,
+  noLessonMessage = "No lesson has been prepared for today.",
 }: {
   block: ResolvedScheduleBlock;
   displayName: string;
@@ -22,6 +23,8 @@ export function ClassroomView({
   showCountdown: boolean;
   dateKey: string;
   lesson: DailyLesson | null;
+  /** Overridable so Preview Mode can name the date it's actually showing, instead of always saying "today". */
+  noLessonMessage?: string;
 }) {
   const { actions } = useAppData();
 
@@ -47,9 +50,7 @@ export function ClassroomView({
         />
       ) : (
         <div className="w-full max-w-2xl rounded-xl border border-falcon-gold-500/30 bg-falcon-cream-100/5 px-8 py-10">
-          <p className="text-2xl font-bold text-falcon-cream-100">
-            No lesson has been prepared for today.
-          </p>
+          <p className="text-2xl font-bold text-falcon-cream-100">{noLessonMessage}</p>
           <p className="mt-2 text-sm text-falcon-cream-200/60">
             Add one from the Lessons screen and it will appear here automatically.
           </p>
