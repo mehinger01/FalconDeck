@@ -40,14 +40,14 @@ export function LessonResourceEditor({
                 onChange={(e) =>
                   actions.updateResource(date, classSectionId, resource.id, { title: e.target.value })
                 }
-                className="min-w-[8rem] flex-1 rounded-md border border-falcon-brown-700/20 bg-white px-2 py-1 text-sm font-medium"
+                className="min-w-[8rem] flex-1 rounded-md border border-falcon-brown-700/20 bg-white px-2 py-1 text-sm font-medium text-falcon-brown-900"
               />
               <input
                 value={resource.url}
                 onChange={(e) =>
                   actions.updateResource(date, classSectionId, resource.id, { url: e.target.value })
                 }
-                className="min-w-[10rem] flex-[2] rounded-md border border-falcon-brown-700/20 bg-white px-2 py-1 text-xs"
+                className="min-w-[10rem] flex-[2] rounded-md border border-falcon-brown-700/20 bg-white px-2 py-1 text-xs text-falcon-brown-900"
               />
               <select
                 value={resource.type}
@@ -56,7 +56,7 @@ export function LessonResourceEditor({
                     type: e.target.value as ResourceType,
                   })
                 }
-                className="rounded-md border border-falcon-brown-700/20 bg-white px-2 py-1 text-xs"
+                className="rounded-md border border-falcon-brown-700/20 bg-white px-2 py-1 text-xs text-falcon-brown-900"
               >
                 {RESOURCE_TYPES.map((t) => (
                   <option key={t} value={t}>
@@ -93,18 +93,18 @@ export function LessonResourceEditor({
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           placeholder="Title"
-          className="min-w-[8rem] flex-1 rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm"
+          className="min-w-[8rem] flex-1 rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm text-falcon-brown-900"
         />
         <input
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           placeholder="https://…"
-          className="min-w-[10rem] flex-[2] rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm"
+          className="min-w-[10rem] flex-[2] rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm text-falcon-brown-900"
         />
         <select
           value={type}
           onChange={(e) => setType(e.target.value as ResourceType)}
-          className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm"
+          className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm text-falcon-brown-900"
         >
           {RESOURCE_TYPES.map((t) => (
             <option key={t} value={t}>

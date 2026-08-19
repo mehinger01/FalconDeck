@@ -48,7 +48,7 @@ export function LessonAgendaEditor({
                         title: e.target.value,
                       })
                     }
-                    className="w-full rounded-md border border-falcon-brown-700/20 bg-white px-2 py-1 text-sm font-medium"
+                    className="w-full rounded-md border border-falcon-brown-700/20 bg-white px-2 py-1 text-sm font-medium text-falcon-brown-900"
                   />
                   <input
                     value={item.details ?? ""}
@@ -58,7 +58,7 @@ export function LessonAgendaEditor({
                       })
                     }
                     placeholder="Optional details"
-                    className="mt-1 w-full rounded-md border border-falcon-brown-700/20 bg-white px-2 py-1 text-xs"
+                    className="mt-1 w-full rounded-md border border-falcon-brown-700/20 bg-white px-2 py-1 text-xs text-falcon-brown-900"
                   />
                 </div>
                 <div className="flex flex-col gap-1">
@@ -67,7 +67,7 @@ export function LessonAgendaEditor({
                     aria-label="Move earlier"
                     disabled={index === 0}
                     onClick={() => actions.reorderAgendaItem(date, classSectionId, item.id, "up")}
-                    className="rounded-md border border-falcon-brown-700/30 px-1.5 py-0.5 text-xs disabled:opacity-30"
+                    className="rounded-md border border-falcon-brown-700/30 px-1.5 py-0.5 text-xs text-falcon-brown-900 disabled:opacity-30"
                   >
                     ↑
                   </button>
@@ -76,7 +76,7 @@ export function LessonAgendaEditor({
                     aria-label="Move later"
                     disabled={index === items.length - 1}
                     onClick={() => actions.reorderAgendaItem(date, classSectionId, item.id, "down")}
-                    className="rounded-md border border-falcon-brown-700/30 px-1.5 py-0.5 text-xs disabled:opacity-30"
+                    className="rounded-md border border-falcon-brown-700/30 px-1.5 py-0.5 text-xs text-falcon-brown-900 disabled:opacity-30"
                   >
                     ↓
                   </button>
@@ -108,7 +108,7 @@ export function LessonAgendaEditor({
           value={newTitle}
           onChange={(e) => setNewTitle(e.target.value)}
           placeholder="New agenda item"
-          className="flex-1 rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm"
+          className="flex-1 rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm text-falcon-brown-900"
         />
         <button
           type="submit"

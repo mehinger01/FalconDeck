@@ -77,7 +77,7 @@ export function OverrideForm({
             <input
               value={label}
               onChange={(e) => setLabel(e.target.value)}
-              className="ml-1 flex-1 rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1 text-sm"
+              className="ml-1 flex-1 rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1 text-sm text-falcon-brown-900"
             />
           )}
         </label>
@@ -98,7 +98,7 @@ export function OverrideForm({
                 value={customKindLabel}
                 onChange={(e) => setCustomKindLabel(e.target.value)}
                 placeholder="Custom label"
-                className="flex-1 rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1 text-sm"
+                className="flex-1 rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1 text-sm text-falcon-brown-900"
               />
             )}
           </div>
@@ -132,14 +132,14 @@ export function OverrideForm({
               type="time"
               value={startTime}
               onChange={(e) => setStartTime(e.target.value)}
-              className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1 text-sm"
+              className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1 text-sm text-falcon-brown-900"
             />
             <span className="text-falcon-brown-700">to</span>
             <input
               type="time"
               value={endTime}
               onChange={(e) => setEndTime(e.target.value)}
-              className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1 text-sm"
+              className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1 text-sm text-falcon-brown-900"
             />
           </div>
         )}

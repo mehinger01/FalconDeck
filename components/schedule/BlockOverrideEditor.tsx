@@ -105,7 +105,7 @@ export function BlockOverrideEditor({
           <select
             value={pickerWeekday}
             onChange={(e) => setPickerWeekday(e.target.value as Weekday | "")}
-            className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1 text-sm"
+            className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1 text-sm text-falcon-brown-900"
           >
             <option value="">Choose a weekday…</option>
             {availableWeekdays.map((day) => (

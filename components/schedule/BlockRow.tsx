@@ -30,7 +30,7 @@ export function BlockRow({
               aria-label="Move block earlier"
               disabled={isFirst}
               onClick={() => actions.moveBlock(scheduleId, block.id, "up")}
-              className="rounded-md border border-falcon-brown-700/30 px-2 py-1 text-sm disabled:opacity-30"
+              className="rounded-md border border-falcon-brown-700/30 px-2 py-1 text-sm text-falcon-brown-900 disabled:opacity-30"
             >
               ↑
             </button>
@@ -39,7 +39,7 @@ export function BlockRow({
               aria-label="Move block later"
               disabled={isLast}
               onClick={() => actions.moveBlock(scheduleId, block.id, "down")}
-              className="rounded-md border border-falcon-brown-700/30 px-2 py-1 text-sm disabled:opacity-30"
+              className="rounded-md border border-falcon-brown-700/30 px-2 py-1 text-sm text-falcon-brown-900 disabled:opacity-30"
             >
               ↓
             </button>
@@ -51,7 +51,7 @@ export function BlockRow({
           <input
             value={block.label}
             onChange={(e) => actions.updateBlock(scheduleId, block.id, { label: e.target.value })}
-            className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm"
+            className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm text-falcon-brown-900"
           />
         </label>
 
@@ -71,7 +71,7 @@ export function BlockRow({
               onChange={(e) =>
                 actions.updateBlock(scheduleId, block.id, { customKindLabel: e.target.value })
               }
-              className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm"
+              className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm text-falcon-brown-900"
             />
           </label>
         )}
@@ -82,7 +82,7 @@ export function BlockRow({
             type="time"
             value={block.startTime}
             onChange={(e) => actions.updateBlock(scheduleId, block.id, { startTime: e.target.value })}
-            className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm"
+            className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm text-falcon-brown-900"
           />
         </label>
 
@@ -92,7 +92,7 @@ export function BlockRow({
             type="time"
             value={block.endTime}
             onChange={(e) => actions.updateBlock(scheduleId, block.id, { endTime: e.target.value })}
-            className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm"
+            className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm text-falcon-brown-900"
           />
         </label>
 

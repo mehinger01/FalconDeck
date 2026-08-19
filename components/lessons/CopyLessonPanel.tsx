@@ -59,7 +59,7 @@ export function CopyLessonPanel({ lesson }: { lesson: DailyLesson }) {
             <select
               value={targetSectionId}
               onChange={(e) => setTargetSectionId(e.target.value)}
-              className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm"
+              className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm text-falcon-brown-900"
             >
               {destinationSections.map((section) => (
                 <option key={section.id} value={section.id}>
@@ -74,7 +74,7 @@ export function CopyLessonPanel({ lesson }: { lesson: DailyLesson }) {
               type="date"
               value={targetDate}
               onChange={(e) => setTargetDate(e.target.value)}
-              className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm"
+              className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm text-falcon-brown-900"
             />
           </label>
           <button

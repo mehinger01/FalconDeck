@@ -46,12 +46,16 @@
   --color-falcon-cream-300: var(--color-falcon-cream-300);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+/*
+ * Falcon Deck does not have an OS-dark-mode variant of its cream/brown app
+ * shell - Present Mode is the only intentionally-dark surface, and it's
+ * dark by explicit design (falcon-brown-950 + falcon-cream text classes),
+ * not by following the system preference. --background/--foreground must
+ * therefore stay fixed to the light pair below; letting them flip under
+ * `prefers-color-scheme: dark` left inherited text (mainly native form
+ * controls with no explicit text-* class) near-white on the app shell's
+ * light/cream surfaces - unreadable in system dark mode.
+ */
 
 body {
   background: var(--background);

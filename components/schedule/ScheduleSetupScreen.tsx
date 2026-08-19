@@ -42,7 +42,7 @@ export function ScheduleSetupScreen() {
                     onChange={(e) =>
                       actions.renameSchedule(selectedSchedule.id, e.target.value)
                     }
-                    className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm font-semibold"
+                    className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm font-semibold text-falcon-brown-900"
                   />
                 </label>
                 {selectedSchedule.description && (

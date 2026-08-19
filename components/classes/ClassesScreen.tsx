@@ -58,7 +58,7 @@ export function ClassesScreen() {
               value={newCourseName}
               onChange={(e) => setNewCourseName(e.target.value)}
               placeholder="New course name"
-              className="flex-1 rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm"
+              className="flex-1 rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm text-falcon-brown-900"
             />
             <button
               type="submit"
@@ -109,7 +109,7 @@ export function ClassesScreen() {
             <select
               value={newSectionCourseId}
               onChange={(e) => setNewSectionCourseId(e.target.value)}
-              className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm"
+              className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm text-falcon-brown-900"
             >
               <option value="">Choose a course…</option>
               {data.courses.map((course) => (
@@ -122,7 +122,7 @@ export function ClassesScreen() {
               value={newSectionName}
               onChange={(e) => setNewSectionName(e.target.value)}
               placeholder="New section name"
-              className="flex-1 rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm"
+              className="flex-1 rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm text-falcon-brown-900"
             />
             <button
               type="submit"

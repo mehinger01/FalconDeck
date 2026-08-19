@@ -60,7 +60,7 @@ export function LessonsScreen() {
             type="date"
             value={date}
             onChange={(e) => setDate(e.target.value)}
-            className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm"
+            className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm text-falcon-brown-900"
           />
         </label>
 
@@ -68,21 +68,21 @@ export function LessonsScreen() {
           <button
             type="button"
             onClick={() => setDate((d) => addDaysToDateKey(d, -1))}
-            className="rounded-md border border-falcon-brown-700/30 px-3 py-1.5 text-sm font-medium hover:bg-falcon-gold-300/30"
+            className="rounded-md border border-falcon-brown-700/30 px-3 py-1.5 text-sm font-medium text-falcon-brown-900 hover:bg-falcon-gold-300/30"
           >
             ← Previous Day
           </button>
           <button
             type="button"
             onClick={() => setDate(getLocalDateKey(new Date(), timeZone))}
-            className="rounded-md border border-falcon-brown-700/30 px-3 py-1.5 text-sm font-medium hover:bg-falcon-gold-300/30"
+            className="rounded-md border border-falcon-brown-700/30 px-3 py-1.5 text-sm font-medium text-falcon-brown-900 hover:bg-falcon-gold-300/30"
           >
             Today
           </button>
           <button
             type="button"
             onClick={() => setDate((d) => addDaysToDateKey(d, 1))}
-            className="rounded-md border border-falcon-brown-700/30 px-3 py-1.5 text-sm font-medium hover:bg-falcon-gold-300/30"
+            className="rounded-md border border-falcon-brown-700/30 px-3 py-1.5 text-sm font-medium text-falcon-brown-900 hover:bg-falcon-gold-300/30"
           >
             Next Day →
           </button>
@@ -117,7 +117,7 @@ export function LessonsScreen() {
               onChange={(e) => actions.updateLearningTarget(date, classSectionId, e.target.value)}
               placeholder="What should students be able to do by the end of class?"
               rows={2}
-              className="w-full rounded-md border border-falcon-brown-700/30 bg-white px-3 py-2 text-sm"
+              className="w-full rounded-md border border-falcon-brown-700/30 bg-white px-3 py-2 text-sm text-falcon-brown-900"
             />
           </section>
 

@@ -91,7 +91,7 @@ export function ScheduleList({
           value={newName}
           onChange={(e) => setNewName(e.target.value)}
           placeholder="New schedule name"
-          className="flex-1 rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm"
+          className="flex-1 rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm text-falcon-brown-900"
         />
         <button
           type="submit"

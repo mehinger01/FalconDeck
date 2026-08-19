@@ -34,7 +34,7 @@ export function LessonAnnouncementEditor({
               <input
                 value={note.text}
                 onChange={(e) => actions.updateAnnouncement(date, classSectionId, note.id, e.target.value)}
-                className="flex-1 rounded-md border border-falcon-brown-700/20 bg-white px-2 py-1 text-sm"
+                className="flex-1 rounded-md border border-falcon-brown-700/20 bg-white px-2 py-1 text-sm text-falcon-brown-900"
               />
               <button
                 type="button"
@@ -62,7 +62,7 @@ export function LessonAnnouncementEditor({
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder="New announcement"
-          className="flex-1 rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm"
+          className="flex-1 rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm text-falcon-brown-900"
         />
         <button
           type="submit"

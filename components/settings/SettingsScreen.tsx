@@ -26,7 +26,7 @@ export function SettingsScreen() {
         <select
           value={defaultSchedule?.id ?? ""}
           onChange={(e) => actions.setDefaultSchedule(e.target.value)}
-          className="mt-3 w-full rounded-md border border-falcon-brown-700/30 bg-white px-2 py-2 text-sm"
+          className="mt-3 w-full rounded-md border border-falcon-brown-700/30 bg-white px-2 py-2 text-sm text-falcon-brown-900"
         >
           {data.schedules.map((schedule) => (
             <option key={schedule.id} value={schedule.id}>
