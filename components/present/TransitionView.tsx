@@ -3,14 +3,14 @@ import { CountdownBanner } from "./CountdownBanner";
 
 export function TransitionView({
   interimBlock,
-  nextInstructionalBlock,
-  nextInstructionalDisplayName,
-  secondsUntilNextInstructional,
+  nextStudentFacingBlock,
+  nextStudentFacingDisplayName,
+  secondsUntilNextStudentFacing,
 }: {
   interimBlock: ResolvedScheduleBlock | null;
-  nextInstructionalBlock: ResolvedScheduleBlock | null;
-  nextInstructionalDisplayName: string | null;
-  secondsUntilNextInstructional: number | null;
+  nextStudentFacingBlock: ResolvedScheduleBlock | null;
+  nextStudentFacingDisplayName: string | null;
+  secondsUntilNextStudentFacing: number | null;
 }) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-6 px-10 text-center">
@@ -22,14 +22,14 @@ export function TransitionView({
 
       <p className="text-sm font-bold uppercase tracking-[0.3em] text-falcon-gold-400">Up Next</p>
 
-      {nextInstructionalBlock && nextInstructionalDisplayName ? (
+      {nextStudentFacingBlock && nextStudentFacingDisplayName ? (
         <>
           <h1 className="text-5xl font-black text-falcon-cream-100 sm:text-6xl">
-            {nextInstructionalDisplayName}
+            {nextStudentFacingDisplayName}
           </h1>
-          {secondsUntilNextInstructional !== null && (
+          {secondsUntilNextStudentFacing !== null && (
             <CountdownBanner
-              remainingSeconds={secondsUntilNextInstructional}
+              remainingSeconds={secondsUntilNextStudentFacing}
               label="Class Begins In"
             />
           )}

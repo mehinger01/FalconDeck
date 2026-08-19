@@ -1,4 +1,5 @@
 import type { BellSchedule, ResolvedScheduleBlock } from "@/types/schedule";
+import { isStudentFacingBlock } from "./isStudentFacingBlock";
 import { resolveScheduleForWeekday } from "./resolveBlockOverride";
 import { getZonedNow, timeStringToSeconds } from "./time";
 
@@ -24,12 +25,13 @@ export function getNextBlock(
 }
 
 /**
- * Returns the next block strictly after `now` today whose kind is
- * "instructional" - i.e. the next student-facing class. Lunch, Prep,
- * Passing, and Enrichment (unless a weekday override promotes it to
- * "instructional", as with a Thursday SAT Prep override) are skipped.
+ * Returns the next student-facing block (see `isStudentFacingBlock`)
+ * strictly after `now` today - i.e. the next class students will see on the
+ * presentation screen. Lunch, Prep, and Passing are always skipped;
+ * Enrichment is always eligible, whether or not a weekday override has
+ * substituted its content (as with a Thursday SAT Prep override).
  */
-export function getNextInstructionalBlock(
+export function getNextStudentFacingBlock(
   schedule: BellSchedule,
   now: Date = new Date(),
 ): ResolvedScheduleBlock | null {
@@ -40,8 +42,7 @@ export function getNextInstructionalBlock(
   const upcoming = blocks
     .filter(
       (block) =>
-        block.kind === "instructional" &&
-        timeStringToSeconds(block.startTime) > nowSeconds,
+        isStudentFacingBlock(block) && timeStringToSeconds(block.startTime) > nowSeconds,
     )
     .sort(
       (a, b) => timeStringToSeconds(a.startTime) - timeStringToSeconds(b.startTime),

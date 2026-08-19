@@ -40,20 +40,20 @@ function ClassroomViewContainer({
 
 function TransitionViewContainer({
   interimBlock,
-  nextInstructionalBlock,
-  secondsUntilNextInstructional,
+  nextStudentFacingBlock,
+  secondsUntilNextStudentFacing,
 }: {
   interimBlock: ResolvedScheduleBlock | null;
-  nextInstructionalBlock: ResolvedScheduleBlock | null;
-  secondsUntilNextInstructional: number | null;
+  nextStudentFacingBlock: ResolvedScheduleBlock | null;
+  secondsUntilNextStudentFacing: number | null;
 }) {
-  const nextDisplayName = useDisplayName(nextInstructionalBlock?.classSectionId);
+  const nextDisplayName = useDisplayName(nextStudentFacingBlock?.classSectionId);
   return (
     <TransitionView
       interimBlock={interimBlock}
-      nextInstructionalBlock={nextInstructionalBlock}
-      nextInstructionalDisplayName={nextInstructionalBlock ? nextDisplayName : null}
-      secondsUntilNextInstructional={secondsUntilNextInstructional}
+      nextStudentFacingBlock={nextStudentFacingBlock}
+      nextStudentFacingDisplayName={nextStudentFacingBlock ? nextDisplayName : null}
+      secondsUntilNextStudentFacing={secondsUntilNextStudentFacing}
     />
   );
 }
@@ -76,7 +76,7 @@ export function PresentScreen() {
     <div className="flex min-h-screen flex-1 flex-col bg-falcon-brown-950">
       <PresentHeader now={now} timeZone={schedule.timeZone} />
 
-      {state.mode === "instructional" && (
+      {state.mode === "student-facing" && (
         <ClassroomViewContainer
           block={state.block}
           remainingSeconds={state.remainingSeconds}
@@ -91,8 +91,8 @@ export function PresentScreen() {
       {state.mode === "transition" && (
         <TransitionViewContainer
           interimBlock={state.currentBlock}
-          nextInstructionalBlock={state.nextInstructionalBlock}
-          secondsUntilNextInstructional={state.secondsUntilNextInstructional}
+          nextStudentFacingBlock={state.nextStudentFacingBlock}
+          secondsUntilNextStudentFacing={state.secondsUntilNextStudentFacing}
         />
       )}
 

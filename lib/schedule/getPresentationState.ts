@@ -1,10 +1,11 @@
 import type { BellSchedule, ResolvedScheduleBlock, Weekday } from "@/types/schedule";
 import { getScheduleState } from "./getScheduleState";
 import { getSecondsUntilStart } from "./getRemainingTime";
+import { isStudentFacingBlock } from "./isStudentFacingBlock";
 
 export type PresentationState =
   | {
-      mode: "instructional";
+      mode: "student-facing";
       weekday: Weekday;
       block: ResolvedScheduleBlock;
       remainingSeconds: number;
@@ -22,22 +23,23 @@ export type PresentationState =
       mode: "transition";
       weekday: Weekday;
       currentBlock: ResolvedScheduleBlock | null;
-      nextInstructionalBlock: ResolvedScheduleBlock | null;
-      secondsUntilNextInstructional: number | null;
+      nextStudentFacingBlock: ResolvedScheduleBlock | null;
+      secondsUntilNextStudentFacing: number | null;
     }
   | { mode: "no-blocks-today"; weekday: Weekday };
 
 /**
  * Present Mode's rendering decision, layered on top of getScheduleState.
  *
- * - An active "instructional" block gets the classroom view.
+ * - An active student-facing block (see `isStudentFacingBlock` -
+ *   "instructional" or "enrichment", regardless of weekday overrides) gets
+ *   the classroom view.
  * - An active "prep" block gets its own private view (never the classroom
  *   view - see PrepView).
- * - Everything else - Lunch, Passing, a non-overridden Enrichment block, a
- *   custom kind, or a literal gap with no active block at all - is treated
- *   as "between instructional periods" and shows the transition countdown
- *   to the next instructional block. Lunch and Prep are never surfaced as
- *   that next instructional class.
+ * - Everything else - Lunch, Passing, a custom kind, or a literal gap with
+ *   no active block at all - is treated as "between student-facing
+ *   periods" and shows the transition countdown to the next student-facing
+ *   block. Lunch and Prep are never surfaced as that next block.
  */
 export function getPresentationState(
   schedule: BellSchedule,
@@ -49,9 +51,9 @@ export function getPresentationState(
     return { mode: "no-blocks-today", weekday: state.weekday };
   }
 
-  if (state.status === "in-block" && state.block.kind === "instructional") {
+  if (state.status === "in-block" && isStudentFacingBlock(state.block)) {
     return {
-      mode: "instructional",
+      mode: "student-facing",
       weekday: state.weekday,
       block: state.block,
       remainingSeconds: state.remainingSeconds,
@@ -71,16 +73,16 @@ export function getPresentationState(
   }
 
   const currentBlock = state.status === "in-block" ? state.block : null;
-  const nextInstructionalBlock = state.nextInstructionalBlock;
-  const secondsUntilNextInstructional = nextInstructionalBlock
-    ? getSecondsUntilStart(nextInstructionalBlock, now, schedule.timeZone)
+  const nextStudentFacingBlock = state.nextStudentFacingBlock;
+  const secondsUntilNextStudentFacing = nextStudentFacingBlock
+    ? getSecondsUntilStart(nextStudentFacingBlock, now, schedule.timeZone)
     : null;
 
   return {
     mode: "transition",
     weekday: state.weekday,
     currentBlock,
-    nextInstructionalBlock,
-    secondsUntilNextInstructional,
+    nextStudentFacingBlock,
+    secondsUntilNextStudentFacing,
   };
 }

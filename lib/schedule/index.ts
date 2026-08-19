@@ -1,5 +1,6 @@
 export * from "./time";
 export * from "./resolveBlockOverride";
+export * from "./isStudentFacingBlock";
 export * from "./getCurrentBlock";
 export * from "./getNextBlock";
 export * from "./getRemainingTime";

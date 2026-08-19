@@ -1,6 +1,7 @@
 "use client";
 
 import { createDemoAppData } from "@/lib/data/demoData";
+import { dataRepository } from "@/lib/data/localStorageRepository";
 import type { AppData } from "@/lib/data/types";
 import type { ClassSection, Course } from "@/types/course";
 import type { BellSchedule, ScheduleBlock, ScheduleBlockOverride, Weekday } from "@/types/schedule";
@@ -15,7 +16,6 @@ import {
 } from "react";
 import { generateId } from "./id";
 import { appDataReducer } from "./reducer";
-import { loadFromStorage, saveToStorage } from "./storage";
 
 export interface AppDataActions {
   createSchedule: (name: string) => void;
@@ -56,14 +56,20 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   const hydrated = useRef(false);
 
   useEffect(() => {
-    const saved = loadFromStorage();
-    if (saved) dispatch({ type: "HYDRATE", data: saved });
-    hydrated.current = true;
+    let cancelled = false;
+    dataRepository.load().then((loaded) => {
+      if (cancelled) return;
+      dispatch({ type: "HYDRATE", data: loaded });
+      hydrated.current = true;
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
     if (!hydrated.current) return; // avoid clobbering storage before hydration runs
-    saveToStorage(data);
+    dataRepository.save(data);
   }, [data]);
 
   const actions = useMemo<AppDataActions>(

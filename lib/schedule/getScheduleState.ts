@@ -1,6 +1,6 @@
 import type { BellSchedule, ResolvedScheduleBlock, Weekday } from "@/types/schedule";
 import { getCurrentBlock } from "./getCurrentBlock";
-import { getNextBlock, getNextInstructionalBlock, getPreviousBlock } from "./getNextBlock";
+import { getNextBlock, getNextStudentFacingBlock, getPreviousBlock } from "./getNextBlock";
 import {
   getBlockDurationSeconds,
   getRemainingSeconds,
@@ -18,15 +18,15 @@ export type ScheduleState =
       remainingSeconds: number;
       totalSeconds: number;
       showCountdown: boolean;
-      nextInstructionalBlock: ResolvedScheduleBlock | null;
+      nextStudentFacingBlock: ResolvedScheduleBlock | null;
     }
   | {
       status: "between-blocks";
       weekday: Weekday;
       previousBlock: ResolvedScheduleBlock | null;
       nextBlock: ResolvedScheduleBlock | null;
-      nextInstructionalBlock: ResolvedScheduleBlock | null;
-      secondsUntilNextInstructional: number | null;
+      nextStudentFacingBlock: ResolvedScheduleBlock | null;
+      secondsUntilNextStudentFacing: number | null;
     }
   | {
       status: "no-blocks-today";
@@ -60,13 +60,13 @@ export function getScheduleState(
       remainingSeconds,
       totalSeconds: getBlockDurationSeconds(currentBlock),
       showCountdown: shouldShowCountdown(remainingSeconds),
-      nextInstructionalBlock: getNextInstructionalBlock(schedule, now),
+      nextStudentFacingBlock: getNextStudentFacingBlock(schedule, now),
     };
   }
 
-  const nextInstructionalBlock = getNextInstructionalBlock(schedule, now);
-  const secondsUntilNextInstructional = nextInstructionalBlock
-    ? getSecondsUntilStart(nextInstructionalBlock, now, schedule.timeZone)
+  const nextStudentFacingBlock = getNextStudentFacingBlock(schedule, now);
+  const secondsUntilNextStudentFacing = nextStudentFacingBlock
+    ? getSecondsUntilStart(nextStudentFacingBlock, now, schedule.timeZone)
     : null;
 
   return {
@@ -74,7 +74,7 @@ export function getScheduleState(
     weekday: zoned.weekday,
     previousBlock: getPreviousBlock(schedule, now),
     nextBlock: getNextBlock(schedule, now),
-    nextInstructionalBlock,
-    secondsUntilNextInstructional,
+    nextStudentFacingBlock,
+    secondsUntilNextStudentFacing,
   };
 }

@@ -9,10 +9,11 @@ export interface AppData {
 
 /**
  * Abstraction over where Falcon Deck's data lives. Phase 1 ships only
- * `DemoDataRepository` (in-memory seed data, no network/auth required). A
- * future `SupabaseDataRepository` can implement this same interface without
- * any changes to the store or UI that consume it - `load`/`save` are async
- * on purpose, even though the demo implementation resolves instantly.
+ * `LocalStorageDataRepository` (browser localStorage, seeded with demo data,
+ * no network/auth required). A future `SupabaseDataRepository` can
+ * implement this same interface without any changes to the store or UI
+ * that consume it - `load`/`save` are async on purpose, even though the
+ * localStorage implementation resolves synchronously under the hood.
  */
 export interface DataRepository {
   load(): Promise<AppData>;
