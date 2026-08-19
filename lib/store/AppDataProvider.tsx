@@ -15,9 +15,10 @@ import {
   type ReactNode,
 } from "react";
 import { generateId } from "./id";
+import { createLessonActions, type LessonActions } from "./lessonActions";
 import { appDataReducer } from "./reducer";
 
-export interface AppDataActions {
+export interface AppDataActions extends LessonActions {
   createSchedule: (name: string) => void;
   duplicateSchedule: (scheduleId: string) => void;
   deleteSchedule: (scheduleId: string) => void;
@@ -141,6 +142,8 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
         dispatch({ type: "ADD_CLASS_SECTION", section: { ...section, id: generateId("section") } }),
 
       resetToDemo: () => dispatch({ type: "RESET_TO_DEMO" }),
+
+      ...createLessonActions(data, dispatch),
     }),
     [data],
   );

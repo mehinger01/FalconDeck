@@ -1,10 +1,12 @@
 import type { BellSchedule } from "@/types/schedule";
 import type { ClassSection, Course } from "@/types/course";
+import type { DailyLesson } from "@/types/lesson";
 
 export interface AppData {
   courses: Course[];
   classSections: ClassSection[];
   schedules: BellSchedule[];
+  lessons: DailyLesson[];
 }
 
 /**

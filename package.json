@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "verify:schedule": "tsx scripts/verify-schedule.ts"
+    "verify:schedule": "tsx scripts/verify-schedule.ts",
+    "verify:lessons": "tsx scripts/verify-lessons.ts",
+    "verify": "npm run verify:schedule && npm run verify:lessons"
   },
   "dependencies": {
     "next": "16.3.1",

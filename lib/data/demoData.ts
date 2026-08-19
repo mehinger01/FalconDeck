@@ -1,6 +1,9 @@
 import { DEFAULT_TIME_ZONE } from "@/lib/schedule/time";
+import { addDaysToDateKey, getLocalDateKey, weekdayForDateKey } from "@/lib/schedule/localDate";
+import { WEEKDAYS } from "@/types/schedule";
 import type { ClassSection, Course } from "@/types/course";
-import type { BellSchedule } from "@/types/schedule";
+import type { BellSchedule, Weekday } from "@/types/schedule";
+import type { AgendaItem, DailyLesson } from "@/types/lesson";
 import type { AppData } from "./types";
 
 /**
@@ -177,11 +180,112 @@ const HALF_DAY_SCHEDULE: BellSchedule = {
 
 export const DEMO_SCHEDULES: BellSchedule[] = [STANDARD_DAY_SCHEDULE, HALF_DAY_SCHEDULE];
 
+let demoLessonSequence = 0;
+/** Deterministic-enough ids for static demo content (no crypto needed here). */
+function demoId(prefix: string): string {
+  demoLessonSequence += 1;
+  return `demo-${prefix}-${demoLessonSequence}`;
+}
+
+function demoAgendaItem(title: string, sortOrder: number, details?: string): AgendaItem {
+  return { id: demoId("agenda"), title, details, isCompleted: false, sortOrder };
+}
+
+/** The next date (today included) that falls on `weekday`, in `timeZone`. */
+function nextDateKeyForWeekday(weekday: Weekday, timeZone: string): string {
+  const todayKey = getLocalDateKey(new Date(), timeZone);
+  const offset = (WEEKDAYS.indexOf(weekday) - WEEKDAYS.indexOf(weekdayForDateKey(todayKey)) + 7) % 7;
+  return addDaysToDateKey(todayKey, offset);
+}
+
+/**
+ * ---------------------------------------------------------------------
+ * PLACEHOLDER / DEMO LESSONS
+ *
+ * A handful of clearly-labeled example DailyLessons so Present Mode and
+ * the Lessons screen have something to show out of the box. Not real OHHS
+ * curriculum - replace or delete freely. Algebra 1 and Geometry are seeded
+ * for today; Enrichment is seeded for today (shows whenever today isn't
+ * Thursday); SAT Prep is seeded for the coming Thursday (shows through the
+ * schedule's Thursday override, exactly like a real prepared lesson would).
+ * ---------------------------------------------------------------------
+ */
+function createDemoLessons(): DailyLesson[] {
+  const timeZone = DEFAULT_TIME_ZONE;
+  const today = getLocalDateKey(new Date(), timeZone);
+  const nextThursday = nextDateKeyForWeekday("thursday", timeZone);
+  const now = new Date().toISOString();
+
+  const lessons: Array<Omit<DailyLesson, "createdAt" | "updatedAt">> = [
+    {
+      id: demoId("lesson"),
+      date: today,
+      classSectionId: "section-algebra-1-p1",
+      learningTarget: "Placeholder demo lesson — I can solve two-step linear equations.",
+      agendaItems: [
+        demoAgendaItem("Warm-up: review one-step equations", 0),
+        demoAgendaItem("Notes: solving two-step equations", 1),
+        demoAgendaItem("Practice set, problems 1–12", 2),
+      ],
+      resources: [
+        { id: demoId("resource"), title: "Practice Set (Placeholder)", url: "https://example.com/practice", type: "document" },
+        { id: demoId("resource"), title: "Desmos Graphing Calculator", url: "https://www.desmos.com/calculator", type: "desmos" },
+      ],
+      announcements: [{ id: demoId("announcement"), text: "Placeholder demo announcement — quiz Friday." }],
+    },
+    {
+      id: demoId("lesson"),
+      date: today,
+      classSectionId: "section-geometry-p2",
+      learningTarget: "Placeholder demo lesson — I can identify angle pair relationships.",
+      agendaItems: [
+        demoAgendaItem("Warm-up: label a diagram", 0),
+        demoAgendaItem("Notes: complementary and supplementary angles", 1),
+        demoAgendaItem("Partner practice", 2, "Work in pairs, check answers as a class."),
+      ],
+      resources: [
+        { id: demoId("resource"), title: "Angle Pairs Slides (Placeholder)", url: "https://example.com/slides", type: "slides" },
+      ],
+      announcements: [],
+    },
+    {
+      id: demoId("lesson"),
+      date: today,
+      classSectionId: "section-enrichment-open",
+      learningTarget: "Placeholder demo lesson — open work time / silent reading.",
+      agendaItems: [
+        demoAgendaItem("Check in with students who requested help", 0),
+        demoAgendaItem("Silent reading or homework catch-up", 1),
+      ],
+      resources: [],
+      announcements: [{ id: demoId("announcement"), text: "Placeholder demo announcement — library pass sign-up on the side table." }],
+    },
+    {
+      id: demoId("lesson"),
+      date: nextThursday,
+      classSectionId: "section-sat-prep-thursday",
+      learningTarget: "Placeholder demo lesson — I can eliminate wrong answers on SAT-style reading questions.",
+      agendaItems: [
+        demoAgendaItem("Timed practice set: reading, 10 questions", 0),
+        demoAgendaItem("Review answers and strategy", 1),
+      ],
+      resources: [
+        { id: demoId("resource"), title: "SAT Practice Set (Placeholder)", url: "https://example.com/sat-practice", type: "document" },
+        { id: demoId("resource"), title: "Timer", url: "https://example.com/timer", type: "calculator" },
+      ],
+      announcements: [],
+    },
+  ];
+
+  return lessons.map((lesson) => ({ ...lesson, createdAt: now, updatedAt: now }));
+}
+
 export function createDemoAppData(): AppData {
   // Deep clone so callers can freely mutate their own copy of the seed.
   return structuredClone({
     courses: DEMO_COURSES,
     classSections: DEMO_CLASS_SECTIONS,
     schedules: DEMO_SCHEDULES,
+    lessons: createDemoLessons(),
   });
 }

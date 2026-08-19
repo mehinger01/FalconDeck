@@ -3,11 +3,11 @@ import type { AppData, DataRepository } from "./types";
 
 const STORAGE_KEY = "falcon-deck:app-data:v1";
 
-function readStoredData(): AppData | null {
+function readStoredData(): Partial<AppData> | null {
   if (typeof window === "undefined") return null;
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as AppData) : null;
+    return raw ? (JSON.parse(raw) as Partial<AppData>) : null;
   } catch {
     return null;
   }
@@ -31,7 +31,17 @@ function writeStoredData(data: AppData): void {
  */
 export class LocalStorageDataRepository implements DataRepository {
   async load(): Promise<AppData> {
-    return readStoredData() ?? createDemoAppData();
+    const stored = readStoredData();
+    if (!stored) return createDemoAppData();
+    // Defensive defaults for data saved by an earlier schema version (e.g.
+    // pre-Phase-2, before `lessons` existed) - avoids a hard crash on
+    // .map/.filter over a missing field for anyone with existing local data.
+    return {
+      courses: stored.courses ?? [],
+      classSections: stored.classSections ?? [],
+      schedules: stored.schedules ?? [],
+      lessons: stored.lessons ?? [],
+    };
   }
 
   async save(data: AppData): Promise<void> {

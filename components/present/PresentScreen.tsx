@@ -3,6 +3,8 @@
 import { useAppData, useDefaultSchedule } from "@/lib/store/AppDataProvider";
 import { useNow } from "@/lib/hooks/useNow";
 import { getPresentationState } from "@/lib/schedule/getPresentationState";
+import { getLocalDateKey } from "@/lib/schedule/localDate";
+import { findLessonForSection } from "@/lib/data/lessons";
 import { resolveClassSection, resolveCourseForSection } from "@/lib/data/resolve";
 import type { ResolvedScheduleBlock } from "@/types/schedule";
 import { ClassroomView } from "./ClassroomView";
@@ -22,18 +24,30 @@ function ClassroomViewContainer({
   block,
   remainingSeconds,
   showCountdown,
+  dateKey,
 }: {
   block: ResolvedScheduleBlock;
   remainingSeconds: number;
   showCountdown: boolean;
+  dateKey: string;
 }) {
+  const { data } = useAppData();
   const displayName = useDisplayName(block.classSectionId);
+  // The schedule override (if any) already resolved `block.classSectionId`
+  // to the right section for today - e.g. Thursday's SAT Prep section
+  // instead of the normal Enrichment section - so lesson lookup never
+  // needs to know about weekdays or SAT Prep itself.
+  const lesson = block.classSectionId
+    ? findLessonForSection(data.lessons, dateKey, block.classSectionId)
+    : null;
   return (
     <ClassroomView
       block={block}
       displayName={displayName}
       remainingSeconds={remainingSeconds}
       showCountdown={showCountdown}
+      dateKey={dateKey}
+      lesson={lesson}
     />
   );
 }
@@ -71,6 +85,7 @@ export function PresentScreen() {
   }
 
   const state = getPresentationState(schedule, now);
+  const dateKey = getLocalDateKey(now, schedule.timeZone);
 
   return (
     <div className="flex min-h-screen flex-1 flex-col bg-falcon-brown-950">
@@ -81,6 +96,7 @@ export function PresentScreen() {
           block={state.block}
           remainingSeconds={state.remainingSeconds}
           showCountdown={state.showCountdown}
+          dateKey={dateKey}
         />
       )}
 

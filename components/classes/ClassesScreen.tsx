@@ -1,10 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { useAppData } from "@/lib/store/AppDataProvider";
+import Link from "next/link";
+import { useAppData, useDefaultSchedule } from "@/lib/store/AppDataProvider";
+import { getLocalDateKey } from "@/lib/schedule/localDate";
+import { DEFAULT_TIME_ZONE } from "@/lib/schedule/time";
 
 export function ClassesScreen() {
   const { data, actions } = useAppData();
+  const defaultSchedule = useDefaultSchedule();
+  const todayKey = getLocalDateKey(new Date(), defaultSchedule?.timeZone ?? DEFAULT_TIME_ZONE);
   const [newCourseName, setNewCourseName] = useState("");
   const [newSectionName, setNewSectionName] = useState("");
   const [newSectionCourseId, setNewSectionCourseId] = useState("");
@@ -74,10 +79,18 @@ export function ClassesScreen() {
               return (
                 <li
                   key={section.id}
-                  className="rounded-lg border border-falcon-brown-700/15 bg-white/60 p-3"
+                  className="flex items-center justify-between gap-3 rounded-lg border border-falcon-brown-700/15 bg-white/60 p-3"
                 >
-                  <p className="font-semibold text-falcon-brown-900">{section.name}</p>
-                  <p className="text-xs text-falcon-brown-700/60">{course?.name ?? "Unknown course"}</p>
+                  <div>
+                    <p className="font-semibold text-falcon-brown-900">{section.name}</p>
+                    <p className="text-xs text-falcon-brown-700/60">{course?.name ?? "Unknown course"}</p>
+                  </div>
+                  <Link
+                    href={`/lessons?date=${todayKey}&section=${section.id}`}
+                    className="shrink-0 rounded-md border border-falcon-brown-700/30 px-3 py-1.5 text-xs font-semibold text-falcon-brown-800 hover:bg-falcon-gold-300/40"
+                  >
+                    Today&rsquo;s Lesson
+                  </Link>
                 </li>
               );
             })}

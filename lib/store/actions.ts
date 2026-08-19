@@ -1,5 +1,6 @@
 import type { AppData } from "@/lib/data/types";
 import type { ClassSection, Course } from "@/types/course";
+import type { DailyLesson } from "@/types/lesson";
 import type { BellSchedule, ScheduleBlock, ScheduleBlockOverride, Weekday } from "@/types/schedule";
 
 export type AppDataAction =
@@ -22,4 +23,6 @@ export type AppDataAction =
   | { type: "SET_BLOCK_OVERRIDE"; scheduleId: string; blockId: string; override: ScheduleBlockOverride }
   | { type: "REMOVE_BLOCK_OVERRIDE"; scheduleId: string; blockId: string; weekday: Weekday }
   | { type: "ADD_COURSE"; course: Course }
-  | { type: "ADD_CLASS_SECTION"; section: ClassSection };
+  | { type: "ADD_CLASS_SECTION"; section: ClassSection }
+  | { type: "UPSERT_LESSON"; lesson: DailyLesson }
+  | { type: "DELETE_LESSON"; lessonId: string };

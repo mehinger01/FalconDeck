@@ -1,6 +1,8 @@
+import { useAppData } from "@/lib/store/AppDataProvider";
+import type { DailyLesson } from "@/types/lesson";
 import type { ResolvedScheduleBlock } from "@/types/schedule";
 import { CountdownBanner } from "./CountdownBanner";
-import { PlaceholderPanel } from "./PlaceholderPanel";
+import { LessonPanels } from "./LessonPanels";
 
 function kindLabel(block: ResolvedScheduleBlock): string {
   return block.kind === "custom" && block.customKindLabel ? block.customKindLabel : block.kind;
@@ -11,12 +13,18 @@ export function ClassroomView({
   displayName,
   remainingSeconds,
   showCountdown,
+  dateKey,
+  lesson,
 }: {
   block: ResolvedScheduleBlock;
   displayName: string;
   remainingSeconds: number;
   showCountdown: boolean;
+  dateKey: string;
+  lesson: DailyLesson | null;
 }) {
+  const { actions } = useAppData();
+
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-8 px-10 py-6 text-center sm:px-16">
       <div>
@@ -30,24 +38,23 @@ export function ClassroomView({
 
       {showCountdown && <CountdownBanner remainingSeconds={remainingSeconds} />}
 
-      <div className="grid w-full max-w-4xl grid-cols-1 gap-4 sm:grid-cols-2">
-        <PlaceholderPanel
-          title="Today's Agenda"
-          note="Placeholder — agenda items will appear here in a future phase."
+      {lesson ? (
+        <LessonPanels
+          lesson={lesson}
+          onToggleAgendaItem={(itemId) =>
+            actions.toggleAgendaItemCompleted(dateKey, lesson.classSectionId, itemId)
+          }
         />
-        <PlaceholderPanel
-          title="Learning Target"
-          note="Placeholder — today's learning target will appear here."
-        />
-        <PlaceholderPanel
-          title="Resources"
-          note="Placeholder — linked resources will appear here."
-        />
-        <PlaceholderPanel
-          title="Announcements"
-          note="Placeholder — announcements will appear here."
-        />
-      </div>
+      ) : (
+        <div className="w-full max-w-2xl rounded-xl border border-falcon-gold-500/30 bg-falcon-cream-100/5 px-8 py-10">
+          <p className="text-2xl font-bold text-falcon-cream-100">
+            No lesson has been prepared for today.
+          </p>
+          <p className="mt-2 text-sm text-falcon-cream-200/60">
+            Add one from the Lessons screen and it will appear here automatically.
+          </p>
+        </div>
+      )}
     </div>
   );
 }

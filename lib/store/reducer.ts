@@ -129,6 +129,19 @@ export function appDataReducer(state: AppData, action: AppDataAction): AppData {
     case "ADD_CLASS_SECTION":
       return { ...state, classSections: [...state.classSections, action.section] };
 
+    case "UPSERT_LESSON": {
+      const exists = state.lessons.some((lesson) => lesson.id === action.lesson.id);
+      return {
+        ...state,
+        lessons: exists
+          ? state.lessons.map((lesson) => (lesson.id === action.lesson.id ? action.lesson : lesson))
+          : [...state.lessons, action.lesson],
+      };
+    }
+
+    case "DELETE_LESSON":
+      return { ...state, lessons: state.lessons.filter((lesson) => lesson.id !== action.lessonId) };
+
     default:
       return state;
   }
