@@ -10,7 +10,8 @@
     "verify:schedule": "tsx scripts/verify-schedule.ts",
     "verify:lessons": "tsx scripts/verify-lessons.ts",
     "verify:preview": "tsx scripts/verify-preview.ts",
-    "verify": "npm run verify:schedule && npm run verify:lessons && npm run verify:preview"
+    "verify:week": "tsx scripts/verify-week.ts",
+    "verify": "npm run verify:schedule && npm run verify:lessons && npm run verify:preview && npm run verify:week"
   },
   "dependencies": {
     "next": "16.3.1",
