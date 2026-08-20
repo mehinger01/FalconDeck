@@ -9,6 +9,9 @@ export const RESOURCE_TYPE_LABELS: Record<ResourceType, string> = {
   video: "Video",
   desmos: "Desmos",
   calculator: "Calculator",
+  pdf: "PDF",
+  image: "Image",
+  spreadsheet: "Spreadsheet",
   other: "Other",
 };
 

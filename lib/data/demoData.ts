@@ -6,6 +6,7 @@ import type { BellSchedule, Weekday } from "@/types/schedule";
 import type { AgendaItem, DailyLesson } from "@/types/lesson";
 import { DEFAULT_CLASSROOM_EXPERIENCE_SETTINGS } from "@/types/classPresentation";
 import type { ClassPresentationSettings } from "@/types/classPresentation";
+import type { LibraryResource } from "@/types/resource";
 import type { AppData } from "./types";
 
 /**
@@ -298,6 +299,51 @@ const DEMO_CLASS_PRESENTATION_SETTINGS: ClassPresentationSettings[] = [
   },
 ];
 
+/**
+ * A handful of example Resource Library entries - reusable across
+ * lessons, unlike the demo DailyLesson resources above (which are
+ * per-lesson snapshots). Not real curriculum; replace or delete freely.
+ */
+const DEMO_LIBRARY_RESOURCES: LibraryResource[] = [
+  {
+    id: "demo-library-desmos",
+    title: "Desmos Graphing Calculator",
+    url: "https://www.desmos.com/calculator",
+    type: "desmos",
+    courseIds: ["course-algebra-1", "course-geometry"],
+    tags: ["practice", "warm-up"],
+    notes: "General-purpose graphing tool - useful across most units.",
+    isFavorite: true,
+    source: { kind: "manual" },
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  },
+  {
+    id: "demo-library-sat-practice",
+    title: "SAT Practice Set (Placeholder)",
+    url: "https://example.com/sat-practice",
+    type: "document",
+    courseIds: ["course-sat-prep"],
+    tags: ["SAT", "practice"],
+    isFavorite: false,
+    source: { kind: "manual" },
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  },
+  {
+    id: "demo-library-exit-ticket",
+    title: "Exit Ticket Template (Placeholder)",
+    url: "https://example.com/exit-ticket",
+    type: "document",
+    courseIds: [],
+    tags: ["exit-ticket", "assessment"],
+    isFavorite: false,
+    source: { kind: "manual" },
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  },
+];
+
 export function createDemoAppData(): AppData {
   // Deep clone so callers can freely mutate their own copy of the seed.
   return structuredClone({
@@ -307,5 +353,6 @@ export function createDemoAppData(): AppData {
     lessons: createDemoLessons(),
     classPresentationSettings: DEMO_CLASS_PRESENTATION_SETTINGS,
     classroomExperienceSettings: DEFAULT_CLASSROOM_EXPERIENCE_SETTINGS,
+    libraryResources: DEMO_LIBRARY_RESOURCES,
   });
 }

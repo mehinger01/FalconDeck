@@ -17,9 +17,10 @@ import {
 } from "react";
 import { generateId } from "./id";
 import { createLessonActions, type LessonActions } from "./lessonActions";
+import { createLibraryResourceActions, type LibraryResourceActions } from "./libraryResourceActions";
 import { appDataReducer } from "./reducer";
 
-export interface AppDataActions extends LessonActions {
+export interface AppDataActions extends LessonActions, LibraryResourceActions {
   createSchedule: (name: string) => void;
   duplicateSchedule: (scheduleId: string) => void;
   deleteSchedule: (scheduleId: string) => void;
@@ -152,6 +153,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
         dispatch({ type: "UPDATE_CLASSROOM_EXPERIENCE_SETTINGS", patch }),
 
       ...createLessonActions(data, dispatch),
+      ...createLibraryResourceActions(data, dispatch),
     }),
     [data],
   );

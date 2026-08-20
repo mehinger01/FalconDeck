@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useAppData } from "@/lib/store/AppDataProvider";
 import { getOnboardingStatus } from "@/lib/onboarding/getOnboardingStatus";
@@ -29,6 +30,12 @@ const CHECKLIST = [
     href: "/classes",
     description: "Optional - what students should do when they walk in.",
   },
+  {
+    key: "libraryResource" as const,
+    label: "Add a reusable resource",
+    href: "/resources",
+    description: "Optional - save a link or file once, then attach it to any lesson.",
+  },
 ];
 
 /**
@@ -40,12 +47,32 @@ const CHECKLIST = [
 export function OnboardingScreen() {
   const { data } = useAppData();
   const status = getOnboardingStatus(data);
+  const [driveConfigured, setDriveConfigured] = useState(false);
+  const [driveConnected, setDriveConnected] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/drive/status")
+      .then((response) => response.json())
+      .then((body: { configured: boolean; connected: boolean }) => {
+        if (cancelled) return;
+        setDriveConfigured(body.configured);
+        setDriveConnected(body.connected);
+      })
+      .catch(() => {
+        // Not configured/reachable - simply don't show the optional Drive step.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const completionByKey: Record<(typeof CHECKLIST)[number]["key"], boolean> = {
     classes: status.classesComplete,
     schedule: status.scheduleComplete,
     firstLesson: status.firstLessonComplete,
     arrivalRoutine: status.arrivalRoutineComplete,
+    libraryResource: status.libraryResourceComplete,
   };
 
   return (
@@ -100,7 +127,7 @@ export function OnboardingScreen() {
               aria-hidden="true"
               className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-falcon-brown-700/30 text-xs font-bold text-falcon-brown-700/50"
             >
-              5
+              {CHECKLIST.length + 1}
             </span>
             <div>
               <p className="font-semibold text-falcon-brown-900">Preview your classroom screen</p>
@@ -110,6 +137,32 @@ export function OnboardingScreen() {
             </div>
           </Link>
         </li>
+
+        {driveConfigured && (
+          <li>
+            <Link
+              href="/resources"
+              className="flex items-start gap-3 rounded-lg border border-falcon-brown-700/15 bg-white/60 p-3 transition-colors hover:bg-white"
+            >
+              <span
+                aria-hidden="true"
+                className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
+                  driveConnected
+                    ? "bg-falcon-gold-400 text-falcon-brown-950"
+                    : "border border-falcon-brown-700/30 text-falcon-brown-700/50"
+                }`}
+              >
+                {driveConnected ? "✓" : CHECKLIST.length + 2}
+              </span>
+              <div>
+                <p className="font-semibold text-falcon-brown-900">Connect Google Drive</p>
+                <p className="text-xs text-falcon-brown-700/60">
+                  Optional - import Docs, Slides, and PDFs into your Resource Library.
+                </p>
+              </div>
+            </Link>
+          </li>
+        )}
       </ol>
     </div>
   );

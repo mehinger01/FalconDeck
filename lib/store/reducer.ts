@@ -163,6 +163,24 @@ export function appDataReducer(state: AppData, action: AppDataAction): AppData {
         classroomExperienceSettings: { ...state.classroomExperienceSettings, ...action.patch },
       };
 
+    case "UPSERT_LIBRARY_RESOURCE": {
+      const exists = state.libraryResources.some((resource) => resource.id === action.resource.id);
+      return {
+        ...state,
+        libraryResources: exists
+          ? state.libraryResources.map((resource) =>
+              resource.id === action.resource.id ? action.resource : resource,
+            )
+          : [...state.libraryResources, action.resource],
+      };
+    }
+
+    case "DELETE_LIBRARY_RESOURCE":
+      return {
+        ...state,
+        libraryResources: state.libraryResources.filter((resource) => resource.id !== action.resourceId),
+      };
+
     default:
       return state;
   }

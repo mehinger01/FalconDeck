@@ -47,6 +47,7 @@ export class LocalStorageDataRepository implements DataRepository {
         ...DEFAULT_CLASSROOM_EXPERIENCE_SETTINGS,
         ...stored.classroomExperienceSettings,
       },
+      libraryResources: stored.libraryResources ?? [],
     };
   }
 

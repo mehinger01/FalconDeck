@@ -6,7 +6,8 @@ export interface OnboardingStatus {
   scheduleComplete: boolean;
   firstLessonComplete: boolean;
   arrivalRoutineComplete: boolean;
-  /** Classes + Schedule + First Lesson - the three ingredients Present Mode actually needs. Arrival routines are a nice-to-have, not required. */
+  libraryResourceComplete: boolean;
+  /** Classes + Schedule + First Lesson - the three ingredients Present Mode actually needs. Arrival routines and the Resource Library are nice-to-haves, not required. */
   coreSetupComplete: boolean;
 }
 
@@ -27,11 +28,14 @@ export function getOnboardingStatus(data: AppData): OnboardingStatus {
     (settings) => settings.arrivalInstructions.length > 0,
   );
 
+  const libraryResourceComplete = data.libraryResources.length > 0;
+
   return {
     classesComplete,
     scheduleComplete,
     firstLessonComplete,
     arrivalRoutineComplete,
+    libraryResourceComplete,
     coreSetupComplete: classesComplete && scheduleComplete && firstLessonComplete,
   };
 }

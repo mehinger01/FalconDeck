@@ -7,6 +7,7 @@ const NAV_LINKS = [
   { href: "/present", label: "Present" },
   { href: "/week", label: "Week" },
   { href: "/lessons", label: "Lessons" },
+  { href: "/resources", label: "Resources" },
   { href: "/schedule", label: "Schedule Setup" },
   { href: "/classes", label: "Classes" },
   { href: "/setup", label: "Setup" },

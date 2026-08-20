@@ -91,10 +91,16 @@ export interface LessonActions {
   ) => void;
   toggleAgendaItemCompleted: (date: string, classSectionId: string, itemId: string) => void;
 
+  /**
+   * `libraryResourceId` is optional - present when attaching a snapshot
+   * from the Resource Library (Part 7), absent for a one-off manual
+   * resource. Either way this always inserts an independent copy; nothing
+   * about the lesson resource re-reads the library afterward.
+   */
   addResource: (
     date: string,
     classSectionId: string,
-    resource: { title: string; url: string; type: ResourceType },
+    resource: { title: string; url: string; type: ResourceType; libraryResourceId?: string },
   ) => void;
   updateResource: (
     date: string,

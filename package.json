@@ -12,13 +12,15 @@
     "verify:preview": "tsx scripts/verify-preview.ts",
     "verify:week": "tsx scripts/verify-week.ts",
     "verify:classroom": "tsx scripts/verify-classroom.ts",
-    "verify": "npm run verify:schedule && npm run verify:lessons && npm run verify:preview && npm run verify:week && npm run verify:classroom"
+    "verify:resources": "tsx scripts/verify-resources.ts",
+    "verify": "npm run verify:schedule && npm run verify:lessons && npm run verify:preview && npm run verify:week && npm run verify:classroom && npm run verify:resources"
   },
   "dependencies": {
     "next": "16.3.1",
     "qrcode": "^1.5.4",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "server-only": "^0.0.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

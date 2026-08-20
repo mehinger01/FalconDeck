@@ -1,8 +1,10 @@
 "use client";
 
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAppData } from "@/lib/store/AppDataProvider";
 import { CopyLessonPanel } from "@/components/lessons/CopyLessonPanel";
+import { ResourcePicker } from "@/components/resources/ResourcePicker";
 import { findLessonForSection } from "@/lib/data/lessons";
 import { addDaysToDateKey, formatDateKeyLong } from "@/lib/schedule/localDate";
 import { buildLessonEditUrl, buildPreviewUrl } from "@/lib/week/weekLinks";
@@ -30,6 +32,7 @@ export function WeekCellActionsModal({
 }) {
   const router = useRouter();
   const { data, actions } = useAppData();
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const previousDate = addDaysToDateKey(cell.date, -1);
   const previousLesson = findLessonForSection(data.lessons, previousDate, cell.classSectionId);
@@ -40,6 +43,30 @@ export function WeekCellActionsModal({
 
   function goToPreview() {
     router.push(buildPreviewUrl(cell.date, cell.classSectionId, cell.scheduledBlockId));
+  }
+
+  /** Creates the lesson first if this cell is missing one, then opens the picker for it (Part 8). */
+  function openResourcePicker() {
+    if (!cell.lesson) actions.createLesson(cell.date, cell.classSectionId);
+    setPickerOpen(true);
+  }
+
+  if (pickerOpen) {
+    return (
+      <ResourcePicker
+        onSelect={(resource) => {
+          actions.addResource(cell.date, cell.classSectionId, {
+            title: resource.title,
+            url: resource.url,
+            type: resource.type,
+            libraryResourceId: resource.id,
+          });
+          setPickerOpen(false);
+          onClose();
+        }}
+        onClose={() => setPickerOpen(false)}
+      />
+    );
   }
 
   return (
@@ -86,6 +113,13 @@ export function WeekCellActionsModal({
               >
                 Preview
               </button>
+              <button
+                type="button"
+                onClick={openResourcePicker}
+                className="rounded-md border border-falcon-brown-700/30 px-3 py-1.5 text-sm font-semibold text-falcon-brown-900 hover:bg-falcon-gold-300/30"
+              >
+                Add Resource
+              </button>
             </div>
 
             <CopyLessonPanel lesson={cell.lesson} />
@@ -112,6 +146,13 @@ export function WeekCellActionsModal({
                 className="rounded-md border border-falcon-brown-700/30 px-3 py-1.5 text-sm font-semibold text-falcon-brown-900 hover:bg-falcon-gold-300/30"
               >
                 Create &amp; Edit
+              </button>
+              <button
+                type="button"
+                onClick={openResourcePicker}
+                className="rounded-md border border-falcon-brown-700/30 px-3 py-1.5 text-sm font-semibold text-falcon-brown-900 hover:bg-falcon-gold-300/30"
+              >
+                Add Resource
               </button>
             </div>
 

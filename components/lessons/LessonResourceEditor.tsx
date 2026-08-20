@@ -5,6 +5,7 @@ import { useAppData } from "@/lib/store/AppDataProvider";
 import { RESOURCE_TYPE_LABELS } from "@/lib/data/lessons";
 import { RESOURCE_TYPES } from "@/types/lesson";
 import type { LessonResource, ResourceType } from "@/types/lesson";
+import { ResourcePicker } from "@/components/resources/ResourcePicker";
 
 export function LessonResourceEditor({
   date,
@@ -19,12 +20,20 @@ export function LessonResourceEditor({
   const [title, setTitle] = useState("");
   const [url, setUrl] = useState("");
   const [type, setType] = useState<ResourceType>("link");
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   return (
     <section className="rounded-xl border border-falcon-brown-700/15 bg-white/60 p-4">
-      <h2 className="mb-3 text-sm font-bold uppercase tracking-wide text-falcon-brown-700/70">
-        Resources
-      </h2>
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-sm font-bold uppercase tracking-wide text-falcon-brown-700/70">Resources</h2>
+        <button
+          type="button"
+          onClick={() => setPickerOpen(true)}
+          className="rounded-md border border-falcon-brown-700/30 px-2.5 py-1 text-xs font-semibold text-falcon-brown-800 hover:bg-falcon-gold-300/30"
+        >
+          Add from Library
+        </button>
+      </div>
 
       {resources.length === 0 ? (
         <p className="mb-3 text-sm text-falcon-brown-700/60">No resources yet. Add a link, doc, or slide deck below.</p>
@@ -119,6 +128,21 @@ export function LessonResourceEditor({
           + Add
         </button>
       </form>
+
+      {pickerOpen && (
+        <ResourcePicker
+          onSelect={(resource) => {
+            actions.addResource(date, classSectionId, {
+              title: resource.title,
+              url: resource.url,
+              type: resource.type,
+              libraryResourceId: resource.id,
+            });
+            setPickerOpen(false);
+          }}
+          onClose={() => setPickerOpen(false)}
+        />
+      )}
     </section>
   );
 }

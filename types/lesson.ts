@@ -17,9 +17,13 @@ export const RESOURCE_TYPES = [
   "video",
   "desmos",
   "calculator",
+  "pdf",
+  "image",
+  "spreadsheet",
   "other",
 ] as const;
 
+/** Shared by lesson resources and Resource Library resources - one type system, not two. */
 export type ResourceType = (typeof RESOURCE_TYPES)[number];
 
 export interface AgendaItem {
@@ -36,6 +40,14 @@ export interface LessonResource {
   title: string;
   url: string;
   type: ResourceType;
+  /**
+   * The LibraryResource this was attached from, if any - for traceability
+   * only. A lesson resource is always a standalone copy (title/url/type),
+   * so it keeps working exactly as-is even if the library resource is
+   * later edited or deleted; nothing ever re-reads the library at render
+   * time. See `lib/data/libraryResources.ts`.
+   */
+  libraryResourceId?: string;
 }
 
 export interface Announcement {
