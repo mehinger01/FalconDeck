@@ -27,7 +27,7 @@ export function LessonResourceEditor({
       </h2>
 
       {resources.length === 0 ? (
-        <p className="mb-3 text-sm text-falcon-brown-700/60">No resources yet.</p>
+        <p className="mb-3 text-sm text-falcon-brown-700/60">No resources yet. Add a link, doc, or slide deck below.</p>
       ) : (
         <ul className="mb-3 space-y-2">
           {resources.map((resource) => (

@@ -5,6 +5,7 @@ import { dataRepository } from "@/lib/data/localStorageRepository";
 import type { AppData } from "@/lib/data/types";
 import type { ClassSection, Course } from "@/types/course";
 import type { BellSchedule, ScheduleBlock, ScheduleBlockOverride, Weekday } from "@/types/schedule";
+import type { ClassroomExperienceSettings } from "@/types/classPresentation";
 import {
   createContext,
   useContext,
@@ -41,6 +42,8 @@ export interface AppDataActions extends LessonActions {
   addCourse: (course: Omit<Course, "id">) => void;
   addClassSection: (section: Omit<ClassSection, "id">) => void;
   resetToDemo: () => void;
+  setArrivalInstructions: (classSectionId: string, instructions: string[]) => void;
+  updateClassroomExperienceSettings: (patch: Partial<ClassroomExperienceSettings>) => void;
 }
 
 interface AppDataContextValue {
@@ -142,6 +145,11 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
         dispatch({ type: "ADD_CLASS_SECTION", section: { ...section, id: generateId("section") } }),
 
       resetToDemo: () => dispatch({ type: "RESET_TO_DEMO" }),
+
+      setArrivalInstructions: (classSectionId, instructions) =>
+        dispatch({ type: "SET_ARRIVAL_INSTRUCTIONS", classSectionId, instructions }),
+      updateClassroomExperienceSettings: (patch) =>
+        dispatch({ type: "UPDATE_CLASSROOM_EXPERIENCE_SETTINGS", patch }),
 
       ...createLessonActions(data, dispatch),
     }),

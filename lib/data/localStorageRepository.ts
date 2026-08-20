@@ -1,3 +1,4 @@
+import { DEFAULT_CLASSROOM_EXPERIENCE_SETTINGS } from "@/types/classPresentation";
 import { createDemoAppData } from "./demoData";
 import type { AppData, DataRepository } from "./types";
 
@@ -41,6 +42,11 @@ export class LocalStorageDataRepository implements DataRepository {
       classSections: stored.classSections ?? [],
       schedules: stored.schedules ?? [],
       lessons: stored.lessons ?? [],
+      classPresentationSettings: stored.classPresentationSettings ?? [],
+      classroomExperienceSettings: {
+        ...DEFAULT_CLASSROOM_EXPERIENCE_SETTINGS,
+        ...stored.classroomExperienceSettings,
+      },
     };
   }
 

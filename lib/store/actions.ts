@@ -2,6 +2,7 @@ import type { AppData } from "@/lib/data/types";
 import type { ClassSection, Course } from "@/types/course";
 import type { DailyLesson } from "@/types/lesson";
 import type { BellSchedule, ScheduleBlock, ScheduleBlockOverride, Weekday } from "@/types/schedule";
+import type { ClassroomExperienceSettings } from "@/types/classPresentation";
 
 export type AppDataAction =
   | { type: "HYDRATE"; data: AppData }
@@ -25,4 +26,6 @@ export type AppDataAction =
   | { type: "ADD_COURSE"; course: Course }
   | { type: "ADD_CLASS_SECTION"; section: ClassSection }
   | { type: "UPSERT_LESSON"; lesson: DailyLesson }
-  | { type: "DELETE_LESSON"; lessonId: string };
+  | { type: "DELETE_LESSON"; lessonId: string }
+  | { type: "SET_ARRIVAL_INSTRUCTIONS"; classSectionId: string; instructions: string[] }
+  | { type: "UPDATE_CLASSROOM_EXPERIENCE_SETTINGS"; patch: Partial<ClassroomExperienceSettings> };

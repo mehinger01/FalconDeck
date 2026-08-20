@@ -23,7 +23,7 @@ export function LessonAnnouncementEditor({
       </h2>
 
       {announcements.length === 0 ? (
-        <p className="mb-3 text-sm text-falcon-brown-700/60">No announcements yet.</p>
+        <p className="mb-3 text-sm text-falcon-brown-700/60">No announcements yet. Add one below.</p>
       ) : (
         <ul className="mb-3 space-y-2">
           {announcements.map((note) => (

@@ -1,8 +1,10 @@
 "use client";
 
+import { useEffect } from "react";
 import { useAppData } from "@/lib/store/AppDataProvider";
 import { resolvePreviewClassroomProps } from "@/lib/present/resolvePreviewClassroomProps";
 import { formatDateKeyLong } from "@/lib/schedule/localDate";
+import type { DailyLesson } from "@/types/lesson";
 import type { ResolvedScheduleBlock } from "@/types/schedule";
 import { ClassroomView } from "./ClassroomView";
 import { PresentHeader } from "./PresentHeader";
@@ -26,14 +28,20 @@ export function PreviewPresentScreen({
   date,
   classSectionId,
   block,
+  onCurrentLessonChange,
 }: {
   date: string;
   classSectionId: string | null;
   block: ResolvedScheduleBlock | null;
+  onCurrentLessonChange?: (lesson: DailyLesson | null) => void;
 }) {
   const { data } = useAppData();
   const displayName = useDisplayName(classSectionId);
   const classroomProps = resolvePreviewClassroomProps({ date, classSectionId, block, lessons: data.lessons });
+
+  useEffect(() => {
+    onCurrentLessonChange?.(classroomProps?.lesson ?? null);
+  }, [classroomProps, onCurrentLessonChange]);
 
   return (
     <div className="flex min-h-screen flex-1 flex-col bg-falcon-brown-950">

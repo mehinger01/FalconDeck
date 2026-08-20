@@ -24,7 +24,7 @@ export function LessonAgendaEditor({
       </h2>
 
       {items.length === 0 ? (
-        <p className="mb-3 text-sm text-falcon-brown-700/60">No agenda items yet.</p>
+        <p className="mb-3 text-sm text-falcon-brown-700/60">No agenda items yet. Add one below.</p>
       ) : (
         <ul className="mb-3 space-y-2">
           {items.map((item, index) => (

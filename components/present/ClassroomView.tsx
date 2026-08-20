@@ -16,6 +16,7 @@ export function ClassroomView({
   dateKey,
   lesson,
   noLessonMessage = "No lesson has been prepared for today.",
+  finalFiveMessage = "",
 }: {
   block: ResolvedScheduleBlock;
   displayName: string;
@@ -25,6 +26,8 @@ export function ClassroomView({
   lesson: DailyLesson | null;
   /** Overridable so Preview Mode can name the date it's actually showing, instead of always saying "today". */
   noLessonMessage?: string;
+  /** Optional teacher-configured note shown only alongside the final-5:00 countdown, e.g. "Wrap up today's work." */
+  finalFiveMessage?: string;
 }) {
   const { actions } = useAppData();
 
@@ -39,7 +42,14 @@ export function ClassroomView({
         </h1>
       </div>
 
-      {showCountdown && <CountdownBanner remainingSeconds={remainingSeconds} />}
+      {showCountdown && (
+        <div className="animate-present-fade flex flex-col items-center gap-2">
+          <CountdownBanner remainingSeconds={remainingSeconds} />
+          {finalFiveMessage && (
+            <p className="text-sm font-medium text-falcon-cream-200/70">{finalFiveMessage}</p>
+          )}
+        </div>
+      )}
 
       {lesson ? (
         <LessonPanels

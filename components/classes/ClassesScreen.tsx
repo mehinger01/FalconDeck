@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useAppData, useDefaultSchedule } from "@/lib/store/AppDataProvider";
 import { getLocalDateKey } from "@/lib/schedule/localDate";
 import { DEFAULT_TIME_ZONE } from "@/lib/schedule/time";
+import { findClassPresentationSettings } from "@/lib/data/classPresentation";
+import { ArrivalRoutineEditor } from "./ArrivalRoutineEditor";
 
 export function ClassesScreen() {
   const { data, actions } = useAppData();
@@ -13,6 +15,7 @@ export function ClassesScreen() {
   const [newCourseName, setNewCourseName] = useState("");
   const [newSectionName, setNewSectionName] = useState("");
   const [newSectionCourseId, setNewSectionCourseId] = useState("");
+  const [expandedRoutineSectionId, setExpandedRoutineSectionId] = useState<string | null>(null);
 
   return (
     <div>
@@ -29,20 +32,26 @@ export function ClassesScreen() {
           <h2 className="mb-2 text-sm font-bold uppercase tracking-wide text-falcon-brown-700/70">
             Courses
           </h2>
-          <ul className="space-y-2">
-            {data.courses.map((course) => (
-              <li
-                key={course.id}
-                className="flex items-center gap-2 rounded-lg border border-falcon-brown-700/15 bg-white/60 p-3"
-              >
-                <span
-                  className="h-3 w-3 rounded-full"
-                  style={{ backgroundColor: course.colorHex ?? "#7A7267" }}
-                />
-                <span className="font-semibold text-falcon-brown-900">{course.name}</span>
-              </li>
-            ))}
-          </ul>
+          {data.courses.length === 0 ? (
+            <p className="rounded-lg border border-dashed border-falcon-brown-700/30 p-4 text-sm text-falcon-brown-700/60">
+              No courses yet. Add one below to start building your class list.
+            </p>
+          ) : (
+            <ul className="space-y-2">
+              {data.courses.map((course) => (
+                <li
+                  key={course.id}
+                  className="flex items-center gap-2 rounded-lg border border-falcon-brown-700/15 bg-white/60 p-3"
+                >
+                  <span
+                    className="h-3 w-3 rounded-full"
+                    style={{ backgroundColor: course.colorHex ?? "#7A7267" }}
+                  />
+                  <span className="font-semibold text-falcon-brown-900">{course.name}</span>
+                </li>
+              ))}
+            </ul>
+          )}
 
           <form
             onSubmit={(e) => {
@@ -73,28 +82,53 @@ export function ClassesScreen() {
           <h2 className="mb-2 text-sm font-bold uppercase tracking-wide text-falcon-brown-700/70">
             Class Sections
           </h2>
-          <ul className="space-y-2">
-            {data.classSections.map((section) => {
-              const course = data.courses.find((c) => c.id === section.courseId);
-              return (
-                <li
-                  key={section.id}
-                  className="flex items-center justify-between gap-3 rounded-lg border border-falcon-brown-700/15 bg-white/60 p-3"
-                >
-                  <div>
-                    <p className="font-semibold text-falcon-brown-900">{section.name}</p>
-                    <p className="text-xs text-falcon-brown-700/60">{course?.name ?? "Unknown course"}</p>
-                  </div>
-                  <Link
-                    href={`/lessons?date=${todayKey}&section=${section.id}`}
-                    className="shrink-0 rounded-md border border-falcon-brown-700/30 px-3 py-1.5 text-xs font-semibold text-falcon-brown-800 hover:bg-falcon-gold-300/40"
+          {data.classSections.length === 0 ? (
+            <p className="rounded-lg border border-dashed border-falcon-brown-700/30 p-4 text-sm text-falcon-brown-700/60">
+              No class sections yet. Add one below - sections are what schedule blocks and lessons reference.
+            </p>
+          ) : (
+            <ul className="space-y-2">
+              {data.classSections.map((section) => {
+                const course = data.courses.find((c) => c.id === section.courseId);
+                const hasArrivalRoutine =
+                  (findClassPresentationSettings(data.classPresentationSettings, section.id)?.arrivalInstructions
+                    .length ?? 0) > 0;
+                const routineExpanded = expandedRoutineSectionId === section.id;
+                return (
+                  <li
+                    key={section.id}
+                    className="rounded-lg border border-falcon-brown-700/15 bg-white/60 p-3"
                   >
-                    Today&rsquo;s Lesson
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="font-semibold text-falcon-brown-900">{section.name}</p>
+                        <p className="text-xs text-falcon-brown-700/60">{course?.name ?? "Unknown course"}</p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedRoutineSectionId(routineExpanded ? null : section.id)
+                          }
+                          aria-expanded={routineExpanded}
+                          className="rounded-md border border-falcon-brown-700/30 px-3 py-1.5 text-xs font-semibold text-falcon-brown-800 hover:bg-falcon-gold-300/40"
+                        >
+                          {hasArrivalRoutine ? "Arrival Routine ✓" : "Arrival Routine"}
+                        </button>
+                        <Link
+                          href={`/lessons?date=${todayKey}&section=${section.id}`}
+                          className="rounded-md border border-falcon-brown-700/30 px-3 py-1.5 text-xs font-semibold text-falcon-brown-800 hover:bg-falcon-gold-300/40"
+                        >
+                          Today&rsquo;s Lesson
+                        </Link>
+                      </div>
+                    </div>
+                    {routineExpanded && <ArrivalRoutineEditor classSectionId={section.id} />}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
 
           <form
             onSubmit={(e) => {

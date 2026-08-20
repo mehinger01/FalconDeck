@@ -4,6 +4,8 @@ import { WEEKDAYS } from "@/types/schedule";
 import type { ClassSection, Course } from "@/types/course";
 import type { BellSchedule, Weekday } from "@/types/schedule";
 import type { AgendaItem, DailyLesson } from "@/types/lesson";
+import { DEFAULT_CLASSROOM_EXPERIENCE_SETTINGS } from "@/types/classPresentation";
+import type { ClassPresentationSettings } from "@/types/classPresentation";
 import type { AppData } from "./types";
 
 /**
@@ -280,6 +282,22 @@ function createDemoLessons(): DailyLesson[] {
   return lessons.map((lesson) => ({ ...lesson, createdAt: now, updatedAt: now }));
 }
 
+/**
+ * A couple of clearly-labeled example arrival routines, so the transition
+ * screen and the Classes editor have something to show out of the box.
+ * Sparse on purpose - most sections have none, which is the normal state.
+ */
+const DEMO_CLASS_PRESENTATION_SETTINGS: ClassPresentationSettings[] = [
+  {
+    classSectionId: "section-algebra-1-p1",
+    arrivalInstructions: ["Take out notebook", "Open Chromebook", "Start Bell Work"],
+  },
+  {
+    classSectionId: "section-geometry-p2",
+    arrivalInstructions: ["Notebook out", "Calculator ready"],
+  },
+];
+
 export function createDemoAppData(): AppData {
   // Deep clone so callers can freely mutate their own copy of the seed.
   return structuredClone({
@@ -287,5 +305,7 @@ export function createDemoAppData(): AppData {
     classSections: DEMO_CLASS_SECTIONS,
     schedules: DEMO_SCHEDULES,
     lessons: createDemoLessons(),
+    classPresentationSettings: DEMO_CLASS_PRESENTATION_SETTINGS,
+    classroomExperienceSettings: DEFAULT_CLASSROOM_EXPERIENCE_SETTINGS,
   });
 }

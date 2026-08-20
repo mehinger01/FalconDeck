@@ -142,6 +142,27 @@ export function appDataReducer(state: AppData, action: AppDataAction): AppData {
     case "DELETE_LESSON":
       return { ...state, lessons: state.lessons.filter((lesson) => lesson.id !== action.lessonId) };
 
+    case "SET_ARRIVAL_INSTRUCTIONS": {
+      const exists = state.classPresentationSettings.some(
+        (entry) => entry.classSectionId === action.classSectionId,
+      );
+      const entry = { classSectionId: action.classSectionId, arrivalInstructions: action.instructions };
+      return {
+        ...state,
+        classPresentationSettings: exists
+          ? state.classPresentationSettings.map((s) =>
+              s.classSectionId === action.classSectionId ? entry : s,
+            )
+          : [...state.classPresentationSettings, entry],
+      };
+    }
+
+    case "UPDATE_CLASSROOM_EXPERIENCE_SETTINGS":
+      return {
+        ...state,
+        classroomExperienceSettings: { ...state.classroomExperienceSettings, ...action.patch },
+      };
+
     default:
       return state;
   }

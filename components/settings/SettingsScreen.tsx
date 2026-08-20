@@ -5,6 +5,7 @@ import { useAppData, useDefaultSchedule } from "@/lib/store/AppDataProvider";
 export function SettingsScreen() {
   const { data, actions } = useAppData();
   const defaultSchedule = useDefaultSchedule();
+  const classroomExperience = data.classroomExperienceSettings;
 
   return (
     <div className="max-w-xl">
@@ -39,6 +40,99 @@ export function SettingsScreen() {
             Time zone: {defaultSchedule.timeZone}
           </p>
         )}
+      </section>
+
+      <section className="mt-6 rounded-xl border border-falcon-brown-700/15 bg-white/60 p-4">
+        <h2 className="text-sm font-bold uppercase tracking-wide text-falcon-brown-700/70">
+          Classroom Experience
+        </h2>
+        <p className="mt-1 text-sm text-falcon-brown-700/70">
+          Controls Present Mode&rsquo;s automatic transition and end-of-day screens.
+        </p>
+
+        <div className="mt-3 flex flex-col gap-3">
+          <label className="flex items-start gap-2 text-sm text-falcon-brown-900">
+            <input
+              type="checkbox"
+              checked={classroomExperience.transitionCountdownEnabled}
+              onChange={(e) =>
+                actions.updateClassroomExperienceSettings({ transitionCountdownEnabled: e.target.checked })
+              }
+              className="mt-0.5"
+            />
+            Show a countdown on the between-class transition screen
+          </label>
+
+          <label className="flex items-start gap-2 text-sm text-falcon-brown-900">
+            <input
+              type="checkbox"
+              checked={classroomExperience.transitionArrivalInstructionsEnabled}
+              onChange={(e) =>
+                actions.updateClassroomExperienceSettings({
+                  transitionArrivalInstructionsEnabled: e.target.checked,
+                })
+              }
+              className="mt-0.5"
+            />
+            Show arrival routines on the transition screen
+          </label>
+
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-semibold text-falcon-brown-700/70">
+              Final-five message (shown with the 5:00 countdown; optional)
+            </span>
+            <input
+              value={classroomExperience.finalFiveMessage}
+              onChange={(e) => actions.updateClassroomExperienceSettings({ finalFiveMessage: e.target.value })}
+              placeholder="e.g. Wrap up today's work."
+              className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm text-falcon-brown-900"
+            />
+          </label>
+
+          <label className="flex items-start gap-2 text-sm text-falcon-brown-900">
+            <input
+              type="checkbox"
+              checked={classroomExperience.showEndOfDayScreen}
+              onChange={(e) =>
+                actions.updateClassroomExperienceSettings({ showEndOfDayScreen: e.target.checked })
+              }
+              className="mt-0.5"
+            />
+            Show the end-of-day screen once classes are done
+          </label>
+
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-semibold text-falcon-brown-700/70">End-of-day message</span>
+            <input
+              value={classroomExperience.endOfDayMessage}
+              onChange={(e) => actions.updateClassroomExperienceSettings({ endOfDayMessage: e.target.value })}
+              className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm text-falcon-brown-900"
+            />
+          </label>
+
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-semibold text-falcon-brown-700/70">Default Clean Screen message</span>
+            <input
+              value={classroomExperience.cleanScreenDefaultMessage}
+              onChange={(e) =>
+                actions.updateClassroomExperienceSettings({ cleanScreenDefaultMessage: e.target.value })
+              }
+              className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm text-falcon-brown-900"
+            />
+          </label>
+
+          <label className="flex items-start gap-2 text-sm text-falcon-brown-900">
+            <input
+              type="checkbox"
+              checked={classroomExperience.showClockOnCleanScreen}
+              onChange={(e) =>
+                actions.updateClassroomExperienceSettings({ showClockOnCleanScreen: e.target.checked })
+              }
+              className="mt-0.5"
+            />
+            Show a clock on Clean Screen
+          </label>
+        </div>
       </section>
 
       <section className="mt-6 rounded-xl border border-falcon-brown-700/15 bg-white/60 p-4">
