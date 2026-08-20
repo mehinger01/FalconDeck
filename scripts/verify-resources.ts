@@ -5,9 +5,11 @@
  * verify` runs all six) - this script covers what's new: LibraryResource
  * CRUD, search/filter, lesson attachment (and its independence from the
  * library afterward), MIME mapping, the Drive adapter's pure/testable
- * pieces (session parsing, configuration detection, external-resource
- * conversion, duplicate detection), a static scan proving no OAuth token
- * or other localStorage access leaked outside the repository layer, and a
+ * pieces (encrypted session serialization/parsing and tamper rejection,
+ * access-token refresh decision logic, configuration detection,
+ * external-resource conversion, duplicate detection), a static scan
+ * proving no OAuth token or other localStorage access leaked outside the
+ * repository layer or into an API response body, and a
  * secrets-in-.env.example check - plus regression spot-checks against
  * Phases 1-4.
  *
@@ -47,8 +49,22 @@ import {
   isDriveSessionValid,
   parseDriveSession,
   serializeDriveSession,
+  sessionCanReconnect,
   DRIVE_SESSION_COOKIE,
+  type DriveSession,
 } from "@/lib/resources/googleDrive/session";
+import {
+  getValidDriveAccessToken,
+  isAccessTokenFresh,
+  type TokenExchangeResult,
+} from "@/lib/resources/googleDrive/tokenRefresh";
+// Note: lib/resources/googleDrive/googleTokenExchange.ts and
+// driveSessionServer.ts are also intentionally NOT imported here, for the
+// same reason as config.ts above - they're `server-only`-guarded because
+// they make real network calls with the OAuth client secret. Their pure
+// decision logic lives in tokenRefresh.ts (imported above, no guard) and
+// is exercised here with a fake exchange function instead of live Google
+// credentials.
 import type { ExternalResourceProvider, ExternalResource } from "@/lib/resources/externalResourceProvider";
 import { getPresentationState } from "@/lib/schedule/getPresentationState";
 import { resolvePreviewClassroomProps } from "@/lib/present/resolvePreviewClassroomProps";
@@ -360,11 +376,14 @@ console.log("\n32-33. Drive disconnected / API failure states are safe");
 {
   check("32: no session cookie -> parses as not connected", parseDriveSession(undefined) === null);
   check("32: garbage cookie value -> parses safely as not connected, doesn't throw", parseDriveSession("not-json-at-all") === null);
-  check("32: a session with no accessToken is invalid", isDriveSessionValid(parseDriveSession(JSON.stringify({ expiresAt: Date.now() + 100000 }))) === false);
-  check("32: an expired session is invalid", isDriveSessionValid({ accessToken: "token", expiresAt: Date.now() - 1000 }) === false);
-  check("32: a valid, unexpired session is valid", isDriveSessionValid({ accessToken: "token", expiresAt: Date.now() + 100000 }) === true);
+  check("32: garbage with the right shape (three dot-separated parts) still fails safely", parseDriveSession("abc.def.ghi") === null);
+  check("32: an expired session (object form) is invalid", isDriveSessionValid({ accessToken: "token", expiresAt: Date.now() - 1000 }) === false);
+  check("32: a valid, unexpired session (object form) is valid", isDriveSessionValid({ accessToken: "token", expiresAt: Date.now() + 100000 }) === true);
   const driveConfigured = Boolean(
-    process.env.GOOGLE_DRIVE_CLIENT_ID && process.env.GOOGLE_DRIVE_CLIENT_SECRET && process.env.GOOGLE_DRIVE_REDIRECT_URI,
+    process.env.GOOGLE_DRIVE_CLIENT_ID &&
+      process.env.GOOGLE_DRIVE_CLIENT_SECRET &&
+      process.env.GOOGLE_DRIVE_REDIRECT_URI &&
+      process.env.FALCON_DECK_SESSION_SECRET,
   );
   check(
     "32: without env vars configured in this environment, Drive correctly reports as not configured (same check isGoogleDriveConfigured performs server-side)",
@@ -396,28 +415,184 @@ console.log("\n32-33. Drive disconnected / API failure states are safe");
   check("33: a failing provider rejects cleanly (catchable), never crashes the caller", caught);
 }
 
-console.log("\n34. No OAuth token stored in localStorage");
+console.log("\n34. Encrypted session: round-trips, hides tokens, rejects tampering and wrong/missing secrets");
+{
+  const originalSecret = process.env.FALCON_DECK_SESSION_SECRET;
+  delete process.env.FALCON_DECK_SESSION_SECRET;
+
+  check(
+    "34: with no session secret configured, serializeDriveSession refuses to produce a cookie value (never falls back to plaintext)",
+    serializeDriveSession({ accessToken: "abc", expiresAt: Date.now() + 1000 }) === null,
+  );
+  check("34: with no session secret configured, parseDriveSession safely reports no session", parseDriveSession("anything") === null);
+
+  process.env.FALCON_DECK_SESSION_SECRET = "verify-script-test-secret-do-not-use-in-production";
+
+  const original: DriveSession = { accessToken: "ya29.super-secret-access-token", refreshToken: "1//refresh-secret-value", expiresAt: Date.now() + 3_600_000 };
+  const serialized = serializeDriveSession(original);
+  check("34: a session serializes to a non-null cookie value once a secret is configured", serialized !== null);
+
+  const roundTripped = parseDriveSession(serialized);
+  check(
+    "34: valid encrypted session round-trips exactly (accessToken, refreshToken, expiresAt)",
+    roundTripped?.accessToken === original.accessToken &&
+      roundTripped?.refreshToken === original.refreshToken &&
+      roundTripped?.expiresAt === original.expiresAt,
+  );
+
+  check(
+    "34: the serialized cookie value does not contain the plaintext access token",
+    serialized !== null && !serialized.includes(original.accessToken),
+  );
+  check(
+    "34: the serialized cookie value does not contain the plaintext refresh token",
+    serialized !== null && !serialized.includes(original.refreshToken!),
+  );
+
+  // Flip one character deep in the ciphertext segment - GCM's auth tag must catch this.
+  const tampered = serialized!.slice(0, -5) + (serialized!.at(-5) === "A" ? "B" : "A") + serialized!.slice(-4);
+  check("34: a single-character-tampered session fails to parse/decrypt", parseDriveSession(tampered) === null);
+
+  const truncated = serialized!.slice(0, Math.floor(serialized!.length / 2));
+  check("34: a truncated session fails to parse/decrypt", parseDriveSession(truncated) === null);
+
+  process.env.FALCON_DECK_SESSION_SECRET = "a-completely-different-secret-value";
+  check("34: a session encrypted under one secret fails to decrypt under a different secret", parseDriveSession(serialized) === null);
+
+  if (originalSecret === undefined) {
+    delete process.env.FALCON_DECK_SESSION_SECRET;
+  } else {
+    process.env.FALCON_DECK_SESSION_SECRET = originalSecret;
+  }
+}
+
+console.log("\n35. Access token refresh (pure decision logic, fake token exchange - no live Google credentials needed)");
+{
+  const credentials = { clientId: "client-123", clientSecret: "secret-abc" };
+  const freshSession: DriveSession = { accessToken: "fresh-token", refreshToken: "refresh-token", expiresAt: Date.now() + 3_600_000 };
+  const expiredWithRefresh: DriveSession = { accessToken: "old-token", refreshToken: "refresh-token", expiresAt: Date.now() - 1000 };
+  const expiredNoRefresh: DriveSession = { accessToken: "old-token", expiresAt: Date.now() - 1000 };
+
+  check("35: a session expiring far in the future is considered fresh", isAccessTokenFresh(freshSession));
+  check("35: a session expiring in the next few minutes is not considered fresh", !isAccessTokenFresh({ ...freshSession, expiresAt: Date.now() + 60_000 }));
+
+  const succeedingExchange = async (): Promise<TokenExchangeResult> => ({ ok: true, accessToken: "new-access-token", expiresInSeconds: 3600 });
+  const succeedingExchangeWithNewRefresh = async (): Promise<TokenExchangeResult> => ({
+    ok: true,
+    accessToken: "new-access-token",
+    expiresInSeconds: 3600,
+    refreshToken: "brand-new-refresh-token",
+  });
+  const failingExchange = async (): Promise<TokenExchangeResult> => ({ ok: false });
+  const throwingExchange = async (): Promise<TokenExchangeResult> => {
+    throw new Error("network error");
+  };
+
+  const freshResult = await getValidDriveAccessToken(freshSession, credentials, succeedingExchange);
+  check("35: a fresh access token is returned as-is, with no refresh attempted", freshResult.status === "valid" && !freshResult.refreshed && freshResult.session.accessToken === "fresh-token");
+
+  const refreshedResult = await getValidDriveAccessToken(expiredWithRefresh, credentials, succeedingExchange);
+  check(
+    "35-36: an expired token with a refresh token triggers a refresh, and the refresh updates the access token and expiry",
+    refreshedResult.status === "valid" && refreshedResult.refreshed && refreshedResult.session.accessToken === "new-access-token" && refreshedResult.session.expiresAt > Date.now(),
+  );
+  check(
+    "37: refresh preserves the old refresh token when the exchange doesn't return a new one",
+    refreshedResult.status === "valid" && refreshedResult.session.refreshToken === "refresh-token",
+  );
+
+  const refreshedWithNewToken = await getValidDriveAccessToken(expiredWithRefresh, credentials, succeedingExchangeWithNewRefresh);
+  check(
+    "35: refresh adopts a new refresh token when the exchange does return one",
+    refreshedWithNewToken.status === "valid" && refreshedWithNewToken.session.refreshToken === "brand-new-refresh-token",
+  );
+
+  const failedResult = await getValidDriveAccessToken(expiredWithRefresh, credentials, failingExchange);
+  check("38: a failed refresh (exchange rejects) returns disconnected, never throws or fakes a token", failedResult.status === "disconnected" && failedResult.reason === "refresh-failed");
+
+  const thrownResult = await getValidDriveAccessToken(expiredWithRefresh, credentials, throwingExchange);
+  check("38: a refresh call that throws (network error) is caught and returns disconnected", thrownResult.status === "disconnected" && thrownResult.reason === "refresh-failed");
+
+  const noRefreshTokenResult = await getValidDriveAccessToken(expiredNoRefresh, credentials, succeedingExchange);
+  check(
+    "39: an expired token with no refresh token is disconnected without ever calling the token endpoint",
+    noRefreshTokenResult.status === "disconnected" && noRefreshTokenResult.reason === "no-refresh-token",
+  );
+
+  const noConfigResult = await getValidDriveAccessToken(expiredWithRefresh, null, succeedingExchange);
+  check("38: an expired token with no configured credentials is disconnected safely", noConfigResult.status === "disconnected" && noConfigResult.reason === "config-missing");
+}
+
+console.log("\n36. sessionCanReconnect - the basis for /api/drive/status's `connected` flag");
+{
+  check("36: no session cannot reconnect", sessionCanReconnect(null) === false);
+  check("36: a currently-valid session can reconnect", sessionCanReconnect({ accessToken: "t", expiresAt: Date.now() + 100000 }) === true);
+  check(
+    "36: an expired session with a refresh token can still reconnect (transparent refresh on next use)",
+    sessionCanReconnect({ accessToken: "t", refreshToken: "r", expiresAt: Date.now() - 1000 }) === true,
+  );
+  check(
+    "9: an expired session with NO refresh token cannot silently claim connected",
+    sessionCanReconnect({ accessToken: "t", expiresAt: Date.now() - 1000 }) === false,
+  );
+}
+
+console.log("\n37. No OAuth token in localStorage or any API response payload");
 {
   check(
     "the session cookie constant is a cookie name, not a localStorage key convention in use anywhere",
     DRIVE_SESSION_COOKIE === "falcon_deck_drive_session",
   );
+
+  process.env.FALCON_DECK_SESSION_SECRET = "verify-script-test-secret-do-not-use-in-production";
   check(
     "serializing/parsing a session round-trips without ever touching localStorage (pure functions only)",
     parseDriveSession(serializeDriveSession({ accessToken: "abc", expiresAt: Date.now() + 1000 }))?.accessToken === "abc",
   );
+  delete process.env.FALCON_DECK_SESSION_SECRET;
+
+  // Static scan: no app/api/drive/* route ever embeds a raw access/refresh
+  // token in a NextResponse.json(...) payload. All of this project's Drive
+  // JSON responses are short, single-line calls, so a per-line check is a
+  // faithful (not just approximate) proxy for "the response body never
+  // contains a token field".
+  const driveApiDir = join(process.cwd(), "app", "api", "drive");
+  const offendingLines: string[] = [];
+  function scanForTokenLeaks(dir: string) {
+    for (const entry of readdirSync(dir)) {
+      const fullPath = join(dir, entry);
+      const stat = statSync(fullPath);
+      if (stat.isDirectory()) {
+        scanForTokenLeaks(fullPath);
+      } else if (entry === "route.ts") {
+        const lines = readFileSync(fullPath, "utf8").split("\n");
+        for (const line of lines) {
+          if (line.includes("NextResponse.json(") && (line.includes("accessToken") || line.includes("refreshToken"))) {
+            offendingLines.push(`${fullPath}: ${line.trim()}`);
+          }
+        }
+      }
+    }
+  }
+  scanForTokenLeaks(driveApiDir);
+  check(
+    offendingLines.length === 0
+      ? "no app/api/drive/*/route.ts response embeds an access/refresh token"
+      : `possible token leak in a JSON response: ${offendingLines.join(" | ")}`,
+    offendingLines.length === 0,
+  );
 }
 
-console.log("\n35. No secrets committed (.env.example has empty placeholder values)");
+console.log("\n38. No secrets committed (.env.example has empty placeholder values)");
 {
   const envExamplePath = join(process.cwd(), ".env.example");
   const envExampleContents = readFileSync(envExamplePath, "utf8");
-  const declaredVars = ["GOOGLE_DRIVE_CLIENT_ID", "GOOGLE_DRIVE_CLIENT_SECRET", "GOOGLE_DRIVE_REDIRECT_URI"];
+  const declaredVars = ["GOOGLE_DRIVE_CLIENT_ID", "GOOGLE_DRIVE_CLIENT_SECRET", "GOOGLE_DRIVE_REDIRECT_URI", "FALCON_DECK_SESSION_SECRET"];
   const allBlank = declaredVars.every((name) => new RegExp(`^${name}=\\s*$`, "m").test(envExampleContents));
-  check("every Google Drive env var in .env.example has no value after the '='", allBlank);
+  check("every Drive/session env var in .env.example has no value after the '='", allBlank);
 }
 
-console.log("\n36. No direct localStorage access introduced outside the repository layer");
+console.log("\n39. No direct localStorage access introduced outside the repository layer");
 {
   const projectRoot = process.cwd();
   const scanDirs = ["components", "lib", "app"];
@@ -454,7 +629,7 @@ console.log("\n36. No direct localStorage access introduced outside the reposito
   );
 }
 
-console.log("\n37-41. Regression spot-checks: Week / Lessons / Preview / classroom tools / transitions");
+console.log("\n40-44. Regression spot-checks: Week / Lessons / Preview / classroom tools / transitions");
 {
   const grid = buildWeekPlanningGrid({
     weekStart: MONDAY,
@@ -463,33 +638,33 @@ console.log("\n37-41. Regression spot-checks: Week / Lessons / Preview / classro
     lessons: state.lessons,
     schedule,
   });
-  check("37: Week view still builds a full grid", grid.rows.length === state.classSections.length);
+  check("40: Week view still builds a full grid", grid.rows.length === state.classSections.length);
 
   lessonActions().updateLearningTarget(MONDAY, "section-geometry-p6", "Resources regression check");
   check(
-    "38: lesson editing still works",
+    "41: lesson editing still works",
     findLessonForSection(state.lessons, MONDAY, "section-geometry-p6")?.learningTarget === "Resources regression check",
   );
 
   const previewCheck = resolvePreviewClassroomProps({ date: MONDAY, classSectionId: "section-algebra-1-p1", block: null, lessons: state.lessons });
-  check("39: Preview still resolves and never fakes the countdown", previewCheck !== null && previewCheck.showCountdown === false);
+  check("42: Preview still resolves and never fakes the countdown", previewCheck !== null && previewCheck.showCountdown === false);
 
   let timer = createTimerState(60);
   timer = startTimer(timer);
   let tray = createToolTrayState("Work Time");
   tray = toggleTray(tray);
-  check("40: classroom tools (timer + tray) still work independently", timer.isRunning === true && tray.trayExpanded === true);
+  check("43: classroom tools (timer + tray) still work independently", timer.isRunning === true && tray.trayExpanded === true);
 
   const transition = getPresentationState(schedule, atLocalTime(MONDAY, "09:41"));
   check(
-    "41: automated transitions still identify the correct next class",
+    "44: automated transitions still identify the correct next class",
     transition.mode === "transition" && transition.nextStudentFacingBlock?.kind === "enrichment",
   );
 }
 
 console.log(
-  "\n(42-46: run `npm run verify:schedule`, `verify:lessons`, `verify:preview`, `verify:week`, and " +
-    "`verify:classroom` - or `npm run verify` for everything together. 48-49: `npm run lint` and `npm run build`.)",
+  "\n(Other suites: run `npm run verify:schedule`, `verify:lessons`, `verify:preview`, `verify:week`, and " +
+    "`verify:classroom` - or `npm run verify` for everything together. Also run `npm run lint` and `npm run build`.)",
 );
 
 console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}`);

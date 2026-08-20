@@ -18,7 +18,8 @@ async function fetchFiles(url: string): Promise<ExternalResource[]> {
  * The only Drive-aware client-side code in the whole app (Part 10) -
  * everything here calls Falcon Deck's own first-party `/api/drive/*`
  * routes, never Google's API directly, and never sees an access token
- * (that stays server-side in an httpOnly cookie - Part 11).
+ * (that stays in an encrypted, authenticated HttpOnly session cookie,
+ * decrypted only server-side - Part 11).
  */
 export class GoogleDriveResourceProvider implements ExternalResourceProvider {
   search(query: string): Promise<ExternalResource[]> {

@@ -1,22 +1,30 @@
 import { NextRequest, NextResponse } from "next/server";
-import { DRIVE_SESSION_COOKIE, isDriveSessionValid, parseDriveSession } from "@/lib/resources/googleDrive/session";
+import { resolveDriveAccessToken } from "@/lib/resources/googleDrive/driveSessionServer";
 import { DriveApiError, searchDriveFiles } from "@/lib/resources/googleDrive/driveApiClient";
 
 /** Server-side proxy to Drive's files.list (search) - the access token never reaches the browser. */
 export async function GET(request: NextRequest) {
-  const session = parseDriveSession(request.cookies.get(DRIVE_SESSION_COOKIE)?.value);
-  if (!isDriveSessionValid(session)) {
+  const access = await resolveDriveAccessToken(request);
+  if (access.status === "unauthorized") {
     return NextResponse.json({ error: "Not connected to Google Drive." }, { status: 401 });
   }
 
   const query = request.nextUrl.searchParams.get("q")?.trim();
-  if (!query) return NextResponse.json({ files: [] });
+  if (!query) {
+    const response = NextResponse.json({ files: [] });
+    access.applyToResponse(response);
+    return response;
+  }
 
   try {
-    const files = await searchDriveFiles(session.accessToken, query);
-    return NextResponse.json({ files });
+    const files = await searchDriveFiles(access.accessToken, query);
+    const response = NextResponse.json({ files });
+    access.applyToResponse(response);
+    return response;
   } catch (error) {
     const status = error instanceof DriveApiError ? error.status : 502;
-    return NextResponse.json({ error: "Google Drive search failed. Try again in a moment." }, { status });
+    const response = NextResponse.json({ error: "Google Drive search failed. Try again in a moment." }, { status });
+    access.applyToResponse(response);
+    return response;
   }
 }

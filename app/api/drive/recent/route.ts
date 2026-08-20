@@ -1,19 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
-import { DRIVE_SESSION_COOKIE, isDriveSessionValid, parseDriveSession } from "@/lib/resources/googleDrive/session";
+import { resolveDriveAccessToken } from "@/lib/resources/googleDrive/driveSessionServer";
 import { DriveApiError, listRecentDriveFiles } from "@/lib/resources/googleDrive/driveApiClient";
 
 /** Server-side proxy to Drive's files.list (recent, sorted by modifiedTime). */
 export async function GET(request: NextRequest) {
-  const session = parseDriveSession(request.cookies.get(DRIVE_SESSION_COOKIE)?.value);
-  if (!isDriveSessionValid(session)) {
+  const access = await resolveDriveAccessToken(request);
+  if (access.status === "unauthorized") {
     return NextResponse.json({ error: "Not connected to Google Drive." }, { status: 401 });
   }
 
   try {
-    const files = await listRecentDriveFiles(session.accessToken);
-    return NextResponse.json({ files });
+    const files = await listRecentDriveFiles(access.accessToken);
+    const response = NextResponse.json({ files });
+    access.applyToResponse(response);
+    return response;
   } catch (error) {
     const status = error instanceof DriveApiError ? error.status : 502;
-    return NextResponse.json({ error: "Google Drive request failed. Try again in a moment." }, { status });
+    const response = NextResponse.json({ error: "Google Drive request failed. Try again in a moment." }, { status });
+    access.applyToResponse(response);
+    return response;
   }
 }
