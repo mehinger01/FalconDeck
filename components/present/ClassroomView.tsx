@@ -2,8 +2,8 @@ import { useAppData } from "@/lib/store/AppDataProvider";
 import type { DailyLesson } from "@/types/lesson";
 import type { ResolvedScheduleBlock } from "@/types/schedule";
 import { CountdownBanner } from "./CountdownBanner";
-import { FalconWatermark } from "./FalconWatermark";
 import { LessonPanels } from "./LessonPanels";
+import { PresentWatermark } from "./PresentWatermark";
 
 function kindLabel(block: ResolvedScheduleBlock): string {
   return block.kind === "custom" && block.customKindLabel ? block.customKindLabel : block.kind;
@@ -30,11 +30,12 @@ export function ClassroomView({
   /** Optional teacher-configured note shown only alongside the final-5:00 countdown, e.g. "Wrap up today's work." */
   finalFiveMessage?: string;
 }) {
-  const { actions } = useAppData();
+  const { data, actions } = useAppData();
+  const branding = data.classroomExperienceSettings;
 
   return (
     <div className="relative flex flex-1 flex-col items-center justify-center gap-6 px-10 py-6 text-center sm:px-16">
-      <FalconWatermark />
+      <PresentWatermark customImageSrc={branding.customWatermarkDataUrl} opacity={branding.watermarkOpacity} />
 
       <div className="relative z-10 flex flex-1 flex-col items-center justify-center gap-6">
         <div>

@@ -5,10 +5,13 @@
  * verify` runs all five) - this script covers what's new: the transition/
  * end-of-day data feeding Present Mode's automatic screens, arrival
  * routines, the classroom timer, the tool-tray state machine (and its
- * structural inability to touch lesson/schedule data), QR generation, and
- * onboarding detection - plus brief regression spot-checks and two static
- * source scans (no direct localStorage access; no hard-coded weekday
- * logic, proven behaviorally with a non-Thursday override).
+ * structural inability to touch lesson/schedule data), QR generation,
+ * onboarding detection, and configurable Present Mode watermark branding
+ * (default-Falcon fallback, custom upload override/reset, opacity, upload
+ * validation and resize math, and old-AppData backward compatibility) -
+ * plus brief regression spot-checks and static source scans (no direct
+ * localStorage access; no hard-coded weekday logic, proven behaviorally
+ * with a non-Thursday override).
  *
  * Not a test framework - a script with assertions, run via `tsx`:
  *
@@ -54,6 +57,20 @@ import { createLessonActions } from "@/lib/store/lessonActions";
 import type { AppDataAction } from "@/lib/store/actions";
 import type { AppData } from "@/lib/data/types";
 import type { BellSchedule } from "@/types/schedule";
+import { DEFAULT_CLASSROOM_EXPERIENCE_SETTINGS, DEFAULT_WATERMARK_OPACITY } from "@/types/classPresentation";
+import {
+  WATERMARK_MAX_UPLOAD_BYTES,
+  computeWatermarkTargetSize,
+  dataUrlByteLength,
+  isAcceptedWatermarkMimeType,
+} from "@/lib/present/watermarkImage";
+import { processWatermarkUpload } from "@/lib/present/processWatermarkUpload";
+// Note: components/present/PresentWatermark.tsx is not imported here - it's
+// a React component (needs a DOM renderer, not available under plain
+// tsx/Node). Its default-asset behavior is instead confirmed with a
+// static source-text check below, and its data flow is confirmed through
+// the reducer/DataRepository checks that exercise the same
+// classroomExperienceSettings it reads as props.
 
 let failures = 0;
 function check(label: string, condition: boolean) {
@@ -404,7 +421,9 @@ console.log("\n30. Settings data is well-formed (visual contrast verified by dir
       typeof settings.cleanScreenDefaultMessage === "string" &&
       typeof settings.showClockOnCleanScreen === "boolean" &&
       typeof settings.transitionCountdownEnabled === "boolean" &&
-      typeof settings.transitionArrivalInstructionsEnabled === "boolean",
+      typeof settings.transitionArrivalInstructionsEnabled === "boolean" &&
+      typeof settings.watermarkOpacity === "number" &&
+      (settings.customWatermarkDataUrl === undefined || typeof settings.customWatermarkDataUrl === "string"),
   );
 }
 
@@ -561,9 +580,188 @@ console.log("\n36-37. No hard-coded period assumptions or Thursday/SAT-specific 
   }
 }
 
+console.log("\n38. Present Mode Branding: defaults resolve to the built-in OHHS Falcon");
+{
+  check(
+    "38: the default settings have no custom watermark configured",
+    DEFAULT_CLASSROOM_EXPERIENCE_SETTINGS.customWatermarkDataUrl === undefined,
+  );
+  check(
+    "38: the default watermark opacity is 35%, as specified for the built-in Falcon",
+    DEFAULT_CLASSROOM_EXPERIENCE_SETTINGS.watermarkOpacity === 0.35 &&
+      DEFAULT_WATERMARK_OPACITY === 0.35,
+  );
+
+  // PresentWatermark.tsx is a React component (needs a DOM renderer) - its
+  // "falls back to the built-in Falcon when no custom image is configured"
+  // behavior is instead confirmed by scanning its source for the exact
+  // asset path it's documented to fall back to.
+  const watermarkComponentSource = readFileSync(
+    join(process.cwd(), "components", "present", "PresentWatermark.tsx"),
+    "utf8",
+  );
+  check(
+    "38: PresentWatermark falls back to /branding/ohhs-falcon-head.png when no custom image is set",
+    watermarkComponentSource.includes('"/branding/ohhs-falcon-head.png"'),
+  );
+}
+
+console.log("\n39. Custom watermark overrides the default, and Reset removes it");
+{
+  state = appDataReducer(state, {
+    type: "UPDATE_CLASSROOM_EXPERIENCE_SETTINGS",
+    patch: { customWatermarkDataUrl: "data:image/png;base64,AAAA", watermarkOpacity: 0.5 },
+  });
+  check(
+    "39: a custom watermark data URL overrides the default once set",
+    state.classroomExperienceSettings.customWatermarkDataUrl === "data:image/png;base64,AAAA",
+  );
+  check("39: the configured opacity is stored alongside it", state.classroomExperienceSettings.watermarkOpacity === 0.5);
+
+  // Mirrors SettingsScreen's handleWatermarkReset: clear the custom image
+  // and restore the default opacity in the same patch.
+  state = appDataReducer(state, {
+    type: "UPDATE_CLASSROOM_EXPERIENCE_SETTINGS",
+    patch: { customWatermarkDataUrl: undefined, watermarkOpacity: DEFAULT_WATERMARK_OPACITY },
+  });
+  check(
+    "39: Reset to OHHS Falcon removes the custom watermark",
+    state.classroomExperienceSettings.customWatermarkDataUrl === undefined,
+  );
+  check(
+    "39: Reset also restores the default opacity",
+    state.classroomExperienceSettings.watermarkOpacity === DEFAULT_WATERMARK_OPACITY,
+  );
+}
+
+console.log("\n40. Branding settings persist through DataRepository, including for old AppData missing them");
+{
+  const fakeStore = new Map<string, string>();
+  (globalThis as Record<string, unknown>).window = {
+    localStorage: {
+      getItem: (key: string) => fakeStore.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        fakeStore.set(key, value);
+      },
+      removeItem: (key: string) => {
+        fakeStore.delete(key);
+      },
+    },
+  };
+
+  const repo = new LocalStorageDataRepository();
+  const withCustomWatermark: AppData = {
+    ...createDemoAppData(),
+    classroomExperienceSettings: {
+      ...DEFAULT_CLASSROOM_EXPERIENCE_SETTINGS,
+      customWatermarkDataUrl: "data:image/jpeg;base64,BBBB",
+      watermarkOpacity: 0.2,
+    },
+  };
+  await repo.save(withCustomWatermark);
+  const reloaded = await repo.load();
+  check(
+    "40: a custom watermark and its opacity round-trip through save/load unchanged",
+    reloaded.classroomExperienceSettings.customWatermarkDataUrl === "data:image/jpeg;base64,BBBB" &&
+      reloaded.classroomExperienceSettings.watermarkOpacity === 0.2,
+  );
+
+  // Simulate AppData saved before this feature existed: no branding fields
+  // on classroomExperienceSettings at all.
+  const legacySettings = { ...DEFAULT_CLASSROOM_EXPERIENCE_SETTINGS } as Record<string, unknown>;
+  delete legacySettings.customWatermarkDataUrl;
+  delete legacySettings.watermarkOpacity;
+  const legacyData = { ...createDemoAppData(), classroomExperienceSettings: legacySettings };
+  fakeStore.set("falcon-deck:app-data:v1", JSON.stringify(legacyData));
+  const legacyLoaded = await repo.load();
+  check(
+    "40: old AppData without branding settings loads the default watermark (undefined = built-in Falcon)",
+    legacyLoaded.classroomExperienceSettings.customWatermarkDataUrl === undefined,
+  );
+  check(
+    "40: old AppData without branding settings loads the default opacity",
+    legacyLoaded.classroomExperienceSettings.watermarkOpacity === DEFAULT_WATERMARK_OPACITY,
+  );
+
+  delete (globalThis as Record<string, unknown>).window;
+}
+
+console.log("\n41. Watermark upload validation (mime type, size, and the resize math)");
+{
+  check("41: PNG is an accepted watermark type", isAcceptedWatermarkMimeType("image/png"));
+  check("41: JPEG is an accepted watermark type", isAcceptedWatermarkMimeType("image/jpeg"));
+  check("41: WebP is an accepted watermark type", isAcceptedWatermarkMimeType("image/webp"));
+  check("41: GIF is not an accepted watermark type", !isAcceptedWatermarkMimeType("image/gif"));
+  check(
+    "41: SVG is deliberately not accepted (avoids arbitrary SVG/script content in an uploaded watermark)",
+    !isAcceptedWatermarkMimeType("image/svg+xml"),
+  );
+
+  const landscape = computeWatermarkTargetSize(3840, 2160, 1920, 1080);
+  check("41: an oversized landscape image is scaled down to exactly fit 1920x1080", landscape.width === 1920 && landscape.height === 1080);
+  const portrait = computeWatermarkTargetSize(1000, 4000, 1920, 1080);
+  check(
+    "41: aspect ratio is preserved when the limiting dimension is height",
+    portrait.height === 1080 && portrait.width === 270,
+  );
+  const small = computeWatermarkTargetSize(200, 100, 1920, 1080);
+  check("41: a smaller-than-target image is never upscaled", small.width === 200 && small.height === 100);
+
+  const knownBase64 = Buffer.from("hello world").toString("base64");
+  check(
+    "41: dataUrlByteLength matches the real decoded byte length of a known payload",
+    dataUrlByteLength(`data:text/plain;base64,${knownBase64}`) === Buffer.byteLength("hello world"),
+  );
+
+  function fakeFile(overrides: Partial<{ size: number; type: string }>): File {
+    return { size: 1024, type: "image/png", ...overrides } as unknown as File;
+  }
+
+  const emptyResult = await processWatermarkUpload(fakeFile({ size: 0 }));
+  check("41: an empty file is rejected before any decoding is attempted", emptyResult.ok === false);
+
+  const wrongTypeResult = await processWatermarkUpload(fakeFile({ type: "application/pdf" }));
+  check("6: an unsupported file type is rejected with a concise message", wrongTypeResult.ok === false && typeof wrongTypeResult.error === "string");
+
+  const oversizedResult = await processWatermarkUpload(fakeFile({ size: WATERMARK_MAX_UPLOAD_BYTES + 1 }));
+  check("7: a file over the raw upload cap is rejected before decoding", oversizedResult.ok === false);
+
+  // No canvas/Image decoder exists under plain Node - calling this with an
+  // otherwise-valid file exercises that a decode failure is caught and
+  // turned into a graceful `{ ok: false }` result, never an unhandled
+  // rejection or a crash (real browser decode failures - corrupt image
+  // bytes - are handled by the exact same try/catch in
+  // lib/present/processWatermarkUpload.ts).
+  const decodeAttemptResult = await processWatermarkUpload(fakeFile({}));
+  check(
+    "processWatermarkUpload never throws, even when no image decoder is available - it resolves to a graceful failure",
+    decodeAttemptResult.ok === false,
+  );
+}
+
+console.log("\n42. Present Mode reads branding through classroomExperienceSettings, not a separate path");
+{
+  const classroomViewSource = readFileSync(join(process.cwd(), "components", "present", "ClassroomView.tsx"), "utf8");
+  check(
+    "42: ClassroomView reads the watermark settings from data.classroomExperienceSettings",
+    classroomViewSource.includes("data.classroomExperienceSettings") &&
+      classroomViewSource.includes("customWatermarkDataUrl") &&
+      classroomViewSource.includes("watermarkOpacity"),
+  );
+
+  const watermarkComponentSource = readFileSync(
+    join(process.cwd(), "components", "present", "PresentWatermark.tsx"),
+    "utf8",
+  );
+  check(
+    "42: PresentWatermark itself is presentational - it takes props, it doesn't read AppData or localStorage directly",
+    !watermarkComponentSource.includes("useAppData") && !/\blocalStorage\b/.test(watermarkComponentSource),
+  );
+}
+
 console.log(
-  "\n(38-42: run `npm run verify:schedule`, `verify:lessons`, `verify:preview`, and `verify:week` - or " +
-    "`npm run verify` for everything together. 43-44: `npm run lint` and `npm run build`.)",
+  "\n(43-47: run `npm run verify:schedule`, `verify:lessons`, `verify:preview`, `verify:week`, and " +
+    "`verify:resources` - or `npm run verify` for everything together. 48-49: `npm run lint` and `npm run build`.)",
 );
 
 console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}`);

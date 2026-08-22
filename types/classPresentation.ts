@@ -28,7 +28,19 @@ export interface ClassroomExperienceSettings {
   transitionCountdownEnabled: boolean;
   /** Whether the transition screen shows the next section's arrival routine (if one is configured). */
   transitionArrivalInstructionsEnabled: boolean;
+  /**
+   * A teacher-uploaded Present Mode background watermark, as a `data:`
+   * URL - never a filesystem path. Produced client-side by resizing/
+   * compressing the upload (see lib/present/processWatermarkUpload.ts)
+   * before it's persisted through DataRepository like everything else in
+   * AppData. `undefined` means "use the built-in OHHS Falcon".
+   */
+  customWatermarkDataUrl?: string;
+  /** Opacity (0-1) applied to the Present Mode watermark, built-in or custom. */
+  watermarkOpacity: number;
 }
+
+export const DEFAULT_WATERMARK_OPACITY = 0.35;
 
 export const DEFAULT_CLASSROOM_EXPERIENCE_SETTINGS: ClassroomExperienceSettings = {
   finalFiveMessage: "",
@@ -38,4 +50,6 @@ export const DEFAULT_CLASSROOM_EXPERIENCE_SETTINGS: ClassroomExperienceSettings 
   showClockOnCleanScreen: true,
   transitionCountdownEnabled: true,
   transitionArrivalInstructionsEnabled: true,
+  customWatermarkDataUrl: undefined,
+  watermarkOpacity: DEFAULT_WATERMARK_OPACITY,
 };
