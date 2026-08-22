@@ -39,11 +39,22 @@ export function MasterCalendarScreen() {
           Decides whether students attend today, and which Bell Schedule applies - Present Mode reads
           this automatically every day.
         </p>
+        <p className="mt-1 text-sm text-falcon-brown-700/70">
+          Use Falcon Deck&rsquo;s master calendar template to load school closures, early releases, testing
+          schedules, and other calendar changes.
+        </p>
       </div>
 
       <ScheduleSectionTabs />
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={downloadCsvTemplate}
+          className="rounded-md border border-falcon-brown-700/30 px-3 py-1.5 text-sm font-semibold text-falcon-brown-700 hover:bg-falcon-cream-100"
+        >
+          Download Template
+        </button>
         <MasterCalendarImportPanel />
         <button
           type="button"
@@ -51,13 +62,6 @@ export function MasterCalendarScreen() {
           className="rounded-md border border-falcon-brown-700/30 px-3 py-1.5 text-sm font-semibold text-falcon-brown-700 hover:bg-falcon-cream-100"
         >
           Add Exception
-        </button>
-        <button
-          type="button"
-          onClick={downloadCsvTemplate}
-          className="rounded-md border border-falcon-brown-700/30 px-3 py-1.5 text-sm font-semibold text-falcon-brown-700 hover:bg-falcon-cream-100"
-        >
-          Download CSV Template
         </button>
       </div>
 

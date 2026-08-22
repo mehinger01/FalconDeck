@@ -35,6 +35,14 @@ export interface ParsedCalendarException {
   scheduleProfileKey?: string;
   dismissalTime?: string;
   notes?: string;
+  /**
+   * 1-indexed line number in the source CSV file this row came from -
+   * lets validation messages point at the exact row a teacher would see
+   * if they opened the file in a spreadsheet (header = row 1). Undefined
+   * for JSON-sourced rows, which have no natural "row" concept;
+   * validation falls back to array position for those.
+   */
+  sourceRowNumber?: number;
 }
 
 export interface CalendarImportMeta {
@@ -64,11 +72,40 @@ function isValidDateKey(value: string | undefined): value is string {
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
-/** Shared row-level validation for both JSON- and CSV-sourced exceptions. */
+/** Accepts "11:15 AM"/"11:15AM" (12h) or "11:15"/"23:15" (24h) - matches the template's own dismissal_time example. */
+function isValidDismissalTime(value: string): boolean {
+  const trimmed = value.trim();
+  const twelveHour = trimmed.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (twelveHour) {
+    const hours = Number(twelveHour[1]);
+    const minutes = Number(twelveHour[2]);
+    return hours >= 1 && hours <= 12 && minutes <= 59;
+  }
+  const twentyFourHour = trimmed.match(/^(\d{1,2}):(\d{2})$/);
+  if (twentyFourHour) {
+    const hours = Number(twentyFourHour[1]);
+    const minutes = Number(twentyFourHour[2]);
+    return hours <= 23 && minutes <= 59;
+  }
+  return false;
+}
+
+/**
+ * Shared row-level validation for both JSON- and CSV-sourced exceptions,
+ * plus a whole-batch check for exact duplicate rows within the same
+ * import (same date range and type). Row numbers use each exception's
+ * own `sourceRowNumber` (accurate CSV file line, accounting for blank
+ * lines) when available, falling back to 1-indexed array position
+ * otherwise - existing callers that construct ParsedCalendarException
+ * objects directly (without sourceRowNumber) keep working unchanged.
+ */
 export function validateParsedExceptions(exceptions: ParsedCalendarException[]): CalendarImportRowIssue[] {
   const issues: CalendarImportRowIssue[] = [];
+  const seenRowByKey = new Map<string, number>();
+
   exceptions.forEach((exception, i) => {
-    const rowIndex = i + 1;
+    const rowIndex = exception.sourceRowNumber ?? i + 1;
+
     if (!isValidDateKey(exception.startDate)) {
       issues.push({ rowIndex, message: `Invalid start date "${exception.startDate ?? ""}".` });
     }
@@ -87,7 +124,24 @@ export function validateParsedExceptions(exceptions: ParsedCalendarException[]):
     if (!exception.title || exception.title.trim().length === 0) {
       issues.push({ rowIndex, message: "Missing a title." });
     }
+    if (exception.type === "special-bell" && (!exception.scheduleProfileKey || exception.scheduleProfileKey.trim().length === 0)) {
+      issues.push({ rowIndex, message: "special-bell rows need a schedule_profile value (e.g. REGULAR, or your own profile key)." });
+    }
+    if (exception.dismissalTime && exception.dismissalTime.trim().length > 0 && !isValidDismissalTime(exception.dismissalTime)) {
+      issues.push({ rowIndex, message: "dismissal_time must be a valid time such as 11:15 AM." });
+    }
+
+    if (isValidDateKey(exception.startDate) && isValidDateKey(exception.endDate)) {
+      const key = `${exception.startDate}|${exception.endDate}|${exception.type}`;
+      const firstRow = seenRowByKey.get(key);
+      if (firstRow !== undefined) {
+        issues.push({ rowIndex, message: `Duplicate of row ${firstRow} - same date range and type.` });
+      } else {
+        seenRowByKey.set(key, rowIndex);
+      }
+    }
   });
+
   return issues;
 }
 
@@ -168,18 +222,35 @@ function parseCsvLine(line: string): string[] {
   return cells.map((cell) => cell.trim());
 }
 
+/** Strips a UTF-8 BOM if present - common in CSVs exported from Excel, and would otherwise corrupt the first header cell (e.g. "start_date" silently failing to match). */
+function stripBom(text: string): string {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+}
+
 /**
  * Parses a CSV whose header row can include any of: date, start_date,
  * end_date, type, title, schedule_profile, dismissal_time, notes,
  * student_status, affects_bell_schedule (the last two are accepted but not
  * currently used - `type` is authoritative). A single `date` column stands
- * in for both start_date and end_date on a one-day row.
+ * in for both start_date and end_date on a one-day row. Blank lines
+ * (leading, trailing, or between rows) are skipped, but every data row's
+ * `sourceRowNumber` still reflects its true position in the original file
+ * (header = row 1), so a teacher can find the exact row a validation
+ * message points at by opening the file in a spreadsheet.
  */
 export function parseMasterCalendarCsv(raw: string): CalendarImportParseResult {
-  const lines = raw.split(/\r\n|\r|\n/).filter((line) => line.trim().length > 0);
-  if (lines.length === 0) return { ok: false, issues: [{ rowIndex: 0, message: "That file is empty." }] };
+  const rawLines = stripBom(raw).split(/\r\n|\r|\n/);
 
-  const header = parseCsvLine(lines[0]).map((cell) => cell.toLowerCase());
+  let headerLineIndex = -1;
+  for (let i = 0; i < rawLines.length; i++) {
+    if (rawLines[i].trim().length > 0) {
+      headerLineIndex = i;
+      break;
+    }
+  }
+  if (headerLineIndex === -1) return { ok: false, issues: [{ rowIndex: 0, message: "That file is empty." }] };
+
+  const header = parseCsvLine(rawLines[headerLineIndex]).map((cell) => cell.toLowerCase());
   const columnIndex = (name: string) => header.indexOf(name);
   const dateCol = columnIndex("date");
   const startCol = columnIndex("start_date");
@@ -204,8 +275,20 @@ export function parseMasterCalendarCsv(raw: string): CalendarImportParseResult {
 
   const cell = (row: string[], index: number) => (index >= 0 ? (row[index] ?? "").trim() : "");
 
-  const exceptions: ParsedCalendarException[] = lines.slice(1).map((line) => {
-    const row = parseCsvLine(line);
+  const dataRows: Array<{ lineNumber: number; cells: string[] }> = [];
+  for (let i = headerLineIndex + 1; i < rawLines.length; i++) {
+    if (rawLines[i].trim().length === 0) continue;
+    dataRows.push({ lineNumber: i + 1, cells: parseCsvLine(rawLines[i]) });
+  }
+
+  if (dataRows.length === 0) {
+    return {
+      ok: false,
+      issues: [{ rowIndex: 0, message: "This file only has a header row - fill in at least one date before uploading." }],
+    };
+  }
+
+  const exceptions: ParsedCalendarException[] = dataRows.map(({ lineNumber, cells: row }) => {
     const start = dateCol !== -1 ? cell(row, dateCol) : cell(row, startCol);
     const end = dateCol !== -1 ? cell(row, dateCol) : cell(row, endCol);
     return {
@@ -216,6 +299,7 @@ export function parseMasterCalendarCsv(raw: string): CalendarImportParseResult {
       scheduleProfileKey: cell(row, profileCol) || undefined,
       dismissalTime: cell(row, dismissalCol) || undefined,
       notes: cell(row, notesCol) || undefined,
+      sourceRowNumber: lineNumber,
     };
   });
 
@@ -300,9 +384,19 @@ export interface MasterCalendarImportPreview {
   noSchoolCount: number;
   noStudentsCount: number;
   specialBellCount: number;
+  /** Sum of each valid row's inclusive day-span - a reliable, simple approximation (not de-duplicated if ranges happen to overlap within the same file). */
+  affectedDateCount: number;
   unresolvedProfileKeys: string[];
   conflicts: CalendarImportConflict[];
   exceptions: ParsedCalendarException[];
+}
+
+function countDaysInclusive(startDate: string, endDate: string): number {
+  if (!isValidDateKey(startDate) || !isValidDateKey(endDate)) return 0;
+  const [sy, sm, sd] = startDate.split("-").map(Number);
+  const [ey, em, ed] = endDate.split("-").map(Number);
+  const days = Math.round((Date.UTC(ey, em - 1, ed) - Date.UTC(sy, sm - 1, sd)) / 86400000) + 1;
+  return days > 0 ? days : 0;
 }
 
 export interface CalendarImportConflict {
@@ -338,6 +432,7 @@ export function buildMasterCalendarImportPreview(
     noSchoolCount: exceptions.filter((e) => e.type === "no-school").length,
     noStudentsCount: exceptions.filter((e) => e.type === "no-students").length,
     specialBellCount: exceptions.filter((e) => e.type === "special-bell").length,
+    affectedDateCount: exceptions.reduce((sum, e) => sum + countDaysInclusive(e.startDate, e.endDate), 0),
     unresolvedProfileKeys: profiles.unresolvedProfileKeys,
     conflicts: detectCalendarConflicts(exceptions, existingCalendar),
     exceptions,

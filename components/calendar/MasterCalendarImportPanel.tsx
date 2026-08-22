@@ -1,78 +1,116 @@
 "use client";
 
-import { useState, type ChangeEvent } from "react";
+import { useEffect, useState, type ChangeEvent } from "react";
 import { useAppData } from "@/lib/store/AppDataProvider";
 import {
   buildMasterCalendarImportPreview,
   commitMasterCalendarImport,
   parseMasterCalendarCsv,
-  parseMasterCalendarJson,
+  validateParsedExceptions,
   type CalendarConflictResolution,
   type CalendarImportMeta,
+  type CalendarImportRowIssue,
   type MasterCalendarImportPreview,
   type ParsedCalendarException,
 } from "@/lib/calendar/masterCalendarImport";
+import { formatCalendarExceptionDateRange } from "@/lib/calendar/formatCalendarDate";
 import { generateId } from "@/lib/store/id";
+import type { SchoolDayExceptionType } from "@/types/calendar";
 
-type ImportStep =
-  | { step: "closed" }
-  | { step: "input"; text: string; issues: string[] }
-  | { step: "preview"; meta: CalendarImportMeta | null; exceptions: ParsedCalendarException[]; preview: MasterCalendarImportPreview; conflictResolution: CalendarConflictResolution };
+type ImportPanelState =
+  | { step: "idle" }
+  | { step: "parse-error"; issues: string[] }
+  | {
+      step: "review";
+      meta: CalendarImportMeta | null;
+      exceptions: ParsedCalendarException[];
+      validationIssues: string[];
+      preview: MasterCalendarImportPreview;
+      conflictResolution: CalendarConflictResolution;
+    }
+  | { step: "success"; count: number };
+
+const TYPE_LABELS: Record<SchoolDayExceptionType, string> = {
+  "no-school": "No School",
+  "no-students": "No Students",
+  "special-bell": "Special Schedule",
+};
+
+const DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+function formatIssue(issue: CalendarImportRowIssue): string {
+  return issue.rowIndex > 0 ? `Row ${issue.rowIndex}: ${issue.message}` : issue.message;
+}
 
 /**
- * File/paste -> parse -> validate -> preview (Resolve Schedule Profiles +
- * conflict detection happen inside buildMasterCalendarImportPreview) ->
- * confirm. Nothing here mutates AppData until "Confirm Import" - see
- * lib/calendar/masterCalendarImport.ts for the pure parse/preview/commit
- * pipeline this just drives.
+ * Upload Completed Template -> parse -> validate -> Review Calendar ->
+ * Apply Calendar. Nothing here mutates AppData until "Apply Calendar" is
+ * clicked - see lib/calendar/masterCalendarImport.ts for the pure
+ * parse/validate/preview/commit pipeline this drives.
+ *
+ * File-upload only, matching the printed CSV template contract exactly -
+ * no manual paste, no separate JSON path in this teacher-facing workflow
+ * (the falcon-deck.master-calendar.v1 JSON schema still exists and is
+ * still exercised by parseMasterCalendarJson elsewhere, e.g. Demo Mode's
+ * seed data, but isn't part of this UI).
+ *
+ * Renders as a fragment so the trigger button sits inline in
+ * MasterCalendarScreen's existing button row, while the review/error
+ * card (given `w-full`) naturally wraps onto its own line beneath it in
+ * that same flex-wrap row - no parent restructuring needed.
  */
 export function MasterCalendarImportPanel() {
   const { data, actions } = useAppData();
-  const [state, setState] = useState<ImportStep>({ step: "closed" });
+  const [state, setState] = useState<ImportPanelState>({ step: "idle" });
 
-  if (state.step === "closed") {
-    return (
-      <button
-        type="button"
-        onClick={() => setState({ step: "input", text: "", issues: [] })}
-        className="rounded-md bg-falcon-brown-900 px-3 py-1.5 text-sm font-semibold text-white hover:bg-falcon-brown-800"
-      >
-        Import Master Calendar
-      </button>
-    );
-  }
+  useEffect(() => {
+    if (state.step !== "success") return;
+    const timer = setTimeout(() => setState({ step: "idle" }), 6000);
+    return () => clearTimeout(timer);
+  }, [state]);
 
   async function handleFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
-    event.target.value = "";
+    event.target.value = ""; // lets the same filename be re-selected later (e.g. after fixing it externally)
     if (!file) return;
-    const text = await file.text();
-    setState({ step: "input", text, issues: [] });
-  }
 
-  function handleParse() {
-    if (state.step !== "input") return;
-    const trimmed = state.text.trim();
-    const looksLikeJson = trimmed.startsWith("{");
-    const result = looksLikeJson ? parseMasterCalendarJson(state.text) : parseMasterCalendarCsv(state.text);
-
-    if (!result.ok) {
-      setState({ step: "input", text: state.text, issues: result.issues.map((i) => `Row ${i.rowIndex}: ${i.message}`) });
+    if (file.size === 0) {
+      setState({ step: "parse-error", issues: ["That file is empty. Choose your completed Master Calendar template."] });
+      return;
+    }
+    if (!file.name.toLowerCase().endsWith(".csv")) {
+      setState({ step: "parse-error", issues: ["Please upload a .csv file - the completed Master Calendar template."] });
       return;
     }
 
+    const text = await file.text();
+    const result = parseMasterCalendarCsv(text);
+    if (!result.ok) {
+      setState({ step: "parse-error", issues: result.issues.map(formatIssue) });
+      return;
+    }
+
+    const validationIssues = validateParsedExceptions(result.exceptions);
     const preview = buildMasterCalendarImportPreview(result.meta, result.exceptions, data.schedules, data.schoolCalendar);
     setState({
-      step: "preview",
+      step: "review",
       meta: result.meta,
       exceptions: result.exceptions,
+      validationIssues: validationIssues.map(formatIssue),
       preview,
       conflictResolution: "skip",
     });
   }
 
-  function handleConfirm() {
-    if (state.step !== "preview") return;
+  function handleApply() {
+    if (state.step !== "review" || state.validationIssues.length > 0) return;
+
+    const conflictingIndices = new Set(state.preview.conflicts.map((c) => c.newExceptionIndex));
+    const addedCount =
+      state.conflictResolution === "replace"
+        ? state.exceptions.length
+        : state.exceptions.length - conflictingIndices.size;
+
     const result = commitMasterCalendarImport({
       meta: state.meta,
       exceptions: state.exceptions,
@@ -83,107 +121,118 @@ export function MasterCalendarImportPanel() {
       generateCalendarId: () => generateId("calendar"),
     });
     actions.importMasterCalendar(result);
-    setState({ step: "closed" });
+    setState({ step: "success", count: addedCount });
   }
 
-  return (
-    <div className="rounded-xl border border-falcon-brown-700/20 bg-white/70 p-4">
-      <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-sm font-bold uppercase tracking-wide text-falcon-brown-700/70">
-          Import Master Calendar
-        </h3>
-        <button
-          type="button"
-          onClick={() => setState({ step: "closed" })}
-          className="text-xs font-semibold text-falcon-brown-700/60 hover:underline"
-        >
-          Cancel
-        </button>
-      </div>
+  const existingExceptionCount = data.schoolCalendar?.exceptions.length ?? 0;
 
-      {state.step === "input" && (
-        <div className="flex flex-col gap-3">
-          <p className="text-xs text-falcon-brown-700/60">
-            Falcon Deck JSON (<code>falcon-deck.master-calendar.v1</code>) or CSV. Choosing a file does not
-            change anything until you confirm the import at the end.
-          </p>
-          <input type="file" accept=".json,.csv,application/json,text/csv" onChange={handleFile} className="text-sm" />
-          <textarea
-            value={state.text}
-            onChange={(e) => setState({ step: "input", text: e.target.value, issues: [] })}
-            rows={6}
-            placeholder="Paste JSON or CSV content here"
-            className="rounded-md border border-falcon-brown-700/30 bg-white p-2 font-mono text-xs text-falcon-brown-900"
-          />
-          {state.issues.length > 0 && (
-            <div className="rounded-md border border-red-700/40 bg-red-50 p-2 text-xs text-red-800">
-              <ul className="list-disc pl-4">
-                {state.issues.map((issue, i) => (
+  return (
+    <>
+      <label className="cursor-pointer rounded-md bg-falcon-brown-900 px-3 py-1.5 text-sm font-semibold text-white hover:bg-falcon-brown-800">
+        Upload Completed Template
+        <input type="file" accept=".csv,text/csv" onChange={handleFile} className="hidden" />
+      </label>
+
+      {state.step === "success" && (
+        <p className="text-sm font-semibold text-green-800">
+          ✓ Master calendar updated — {state.count} exception{state.count === 1 ? "" : "s"} added.
+        </p>
+      )}
+
+      {state.step === "parse-error" && (
+        <div className="mt-3 w-full rounded-lg border border-red-700/40 bg-red-50 p-3 text-sm text-red-900">
+          <p className="mb-2 font-semibold">Falcon Deck couldn&rsquo;t read that file:</p>
+          <ul className="list-disc space-y-1 pl-5">
+            {state.issues.map((issue, i) => (
+              <li key={i}>{issue}</li>
+            ))}
+          </ul>
+          <button
+            type="button"
+            onClick={() => setState({ step: "idle" })}
+            className="mt-3 rounded-md border border-red-700/40 px-3 py-1.5 text-xs font-semibold text-red-800 hover:bg-red-100"
+          >
+            Try a different file
+          </button>
+        </div>
+      )}
+
+      {state.step === "review" && (
+        <div className="mt-3 w-full rounded-xl border border-falcon-brown-700/20 bg-white/70 p-4">
+          <h3 className="text-lg font-bold text-falcon-brown-900">
+            {state.preview.meta?.schoolYear ? `${state.preview.meta.schoolYear} Master Calendar` : "Review Calendar"}
+          </h3>
+
+          <ul className="mt-2 space-y-0.5 text-sm text-falcon-brown-800">
+            <li>
+              {state.preview.totalExceptions} exception{state.preview.totalExceptions === 1 ? "" : "s"} found
+            </li>
+            <li>
+              {state.preview.noSchoolCount} no-school date{state.preview.noSchoolCount === 1 ? "" : "s"}
+            </li>
+            <li>
+              {state.preview.noStudentsCount} no-student date{state.preview.noStudentsCount === 1 ? "" : "s"}
+            </li>
+            <li>
+              {state.preview.specialBellCount} early-release / special schedule
+              {state.preview.specialBellCount === 1 ? "" : "s"}
+            </li>
+            {state.preview.affectedDateCount > 0 && (
+              <li>
+                {state.preview.affectedDateCount} school date{state.preview.affectedDateCount === 1 ? "" : "s"} affected
+              </li>
+            )}
+            <li
+              className={
+                state.validationIssues.length > 0 ? "font-semibold text-red-800" : "font-semibold text-green-800"
+              }
+            >
+              {state.validationIssues.length > 0
+                ? `${state.validationIssues.length} error${state.validationIssues.length === 1 ? "" : "s"} found`
+                : "No errors found"}
+            </li>
+          </ul>
+
+          {state.validationIssues.length > 0 && (
+            <div className="mt-3 rounded-md border border-red-700/40 bg-red-50 p-3 text-sm text-red-900">
+              <p className="mb-1 font-semibold">Fix these before applying the calendar:</p>
+              <ul className="list-disc space-y-1 pl-5">
+                {state.validationIssues.map((issue, i) => (
                   <li key={i}>{issue}</li>
                 ))}
               </ul>
             </div>
           )}
-          <button
-            type="button"
-            onClick={handleParse}
-            disabled={state.text.trim().length === 0}
-            className="self-start rounded-md bg-falcon-brown-900 px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
-          >
-            Parse &amp; Preview
-          </button>
-        </div>
-      )}
-
-      {state.step === "preview" && (
-        <div className="flex flex-col gap-3">
-          {state.meta && (
-            <div className="grid grid-cols-2 gap-2 rounded-md border border-falcon-brown-700/15 bg-falcon-cream-100/40 p-3 text-sm sm:grid-cols-3">
-              <div>
-                <p className="text-xs text-falcon-brown-700/60">School Year</p>
-                <p className="font-semibold text-falcon-brown-900">{state.meta.schoolYear || "—"}</p>
-              </div>
-              <div>
-                <p className="text-xs text-falcon-brown-700/60">Student Date Range</p>
-                <p className="font-semibold text-falcon-brown-900">
-                  {state.meta.firstStudentDay || "—"} – {state.meta.lastStudentDay || "—"}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs text-falcon-brown-700/60">Default Schedule Profile</p>
-                <p className="font-semibold text-falcon-brown-900">{state.meta.defaultScheduleProfileKey || "—"}</p>
-              </div>
-            </div>
-          )}
-
-          <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
-            <Stat label="Exceptions" value={state.preview.totalExceptions} />
-            <Stat label="No School" value={state.preview.noSchoolCount} />
-            <Stat label="No Students" value={state.preview.noStudentsCount} />
-            <Stat label="Special Bell" value={state.preview.specialBellCount} />
-          </div>
 
           {state.preview.unresolvedProfileKeys.length > 0 && (
-            <div className="rounded-md border border-amber-600/40 bg-amber-50 p-2 text-xs text-amber-900">
-              {state.preview.unresolvedProfileKeys.length} schedule profile(s) need configuration:{" "}
-              {state.preview.unresolvedProfileKeys.join(", ")} - placeholder &ldquo;Needs Configuration&rdquo;
-              schedules will be created for these.
+            <div className="mt-3 rounded-md border border-amber-600/40 bg-amber-50 p-2 text-xs text-amber-900">
+              {state.preview.unresolvedProfileKeys.length} schedule profile
+              {state.preview.unresolvedProfileKeys.length === 1 ? "" : "s"} need configuration:{" "}
+              {state.preview.unresolvedProfileKeys.join(", ")} - a placeholder will be created so you can add
+              their bell times later in Bell Schedules.
             </div>
           )}
 
+          <p className="mt-3 text-xs text-falcon-brown-700/60">
+            {existingExceptionCount > 0
+              ? `Adding to your existing calendar - your ${existingExceptionCount} current exception${existingExceptionCount === 1 ? "" : "s"} will be kept.`
+              : "This will become your Master Calendar."}
+          </p>
+
           {state.preview.conflicts.length > 0 && (
-            <div className="rounded-md border border-red-700/40 bg-red-50 p-3 text-xs text-red-900">
+            <div className="mt-3 rounded-md border border-red-700/40 bg-red-50 p-3 text-xs text-red-900">
               <p className="mb-2 font-semibold">
-                Conflicts found: {state.preview.conflicts.length} imported date(s) overlap existing exceptions.
+                {state.preview.conflicts.length} date{state.preview.conflicts.length === 1 ? "" : "s"} in this file
+                overlap{state.preview.conflicts.length === 1 ? "s" : ""} an exception you already have.
               </p>
-              <div className="flex gap-3">
+              <div className="flex flex-col gap-1.5 sm:flex-row sm:gap-4">
                 <label className="flex items-center gap-1.5">
                   <input
                     type="radio"
                     checked={state.conflictResolution === "skip"}
                     onChange={() => setState({ ...state, conflictResolution: "skip" })}
                   />
-                  Skip conflicting rows (keep existing)
+                  Keep my existing entries for those dates
                 </label>
                 <label className="flex items-center gap-1.5">
                   <input
@@ -191,45 +240,60 @@ export function MasterCalendarImportPanel() {
                     checked={state.conflictResolution === "replace"}
                     onChange={() => setState({ ...state, conflictResolution: "replace" })}
                   />
-                  Replace existing with imported
+                  Replace them with the uploaded entries
                 </label>
               </div>
             </div>
           )}
 
-          <ul className="max-h-64 space-y-1 overflow-y-auto text-sm">
-            {state.exceptions.map((exception, i) => (
-              <li
-                key={i}
-                className="flex justify-between rounded-md border border-falcon-brown-700/15 bg-white/60 px-3 py-1.5"
-              >
-                <span className="font-medium text-falcon-brown-900">{exception.title || "(untitled)"}</span>
-                <span className="text-falcon-brown-700/70">
-                  {exception.startDate}
-                  {exception.endDate !== exception.startDate ? ` – ${exception.endDate}` : ""} · {exception.type}
-                </span>
-              </li>
-            ))}
-          </ul>
+          <div className="mt-3 overflow-x-auto rounded-lg border border-falcon-brown-700/15">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-falcon-cream-100/60 text-xs uppercase tracking-wide text-falcon-brown-700/70">
+                <tr>
+                  <th className="px-3 py-2">Date / Range</th>
+                  <th className="px-3 py-2">Type</th>
+                  <th className="px-3 py-2">Schedule</th>
+                  <th className="px-3 py-2">Dismissal</th>
+                  <th className="px-3 py-2">Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {state.exceptions.map((exception, i) => (
+                  <tr key={i} className="border-t border-falcon-brown-700/10">
+                    <td className="px-3 py-2 font-medium text-falcon-brown-900">
+                      {DATE_KEY_PATTERN.test(exception.startDate) && DATE_KEY_PATTERN.test(exception.endDate)
+                        ? formatCalendarExceptionDateRange(exception.startDate, exception.endDate)
+                        : `${exception.startDate || "?"} – ${exception.endDate || "?"}`}
+                    </td>
+                    <td className="px-3 py-2 text-falcon-brown-700">{TYPE_LABELS[exception.type] ?? exception.type}</td>
+                    <td className="px-3 py-2 text-falcon-brown-700">{exception.scheduleProfileKey ?? "—"}</td>
+                    <td className="px-3 py-2 text-falcon-brown-700">{exception.dismissalTime ?? "—"}</td>
+                    <td className="px-3 py-2 text-falcon-brown-700/70">{exception.notes || exception.title || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
 
-          <button
-            type="button"
-            onClick={handleConfirm}
-            className="self-start rounded-md bg-falcon-gold-500 px-3 py-1.5 text-sm font-semibold text-falcon-brown-950"
-          >
-            Confirm Import
-          </button>
+          <div className="mt-4 flex gap-2">
+            <button
+              type="button"
+              onClick={handleApply}
+              disabled={state.validationIssues.length > 0}
+              className="rounded-md bg-falcon-gold-500 px-4 py-2 text-sm font-bold text-falcon-brown-950 hover:bg-falcon-gold-400 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-falcon-gold-500"
+            >
+              Apply Calendar
+            </button>
+            <button
+              type="button"
+              onClick={() => setState({ step: "idle" })}
+              className="rounded-md border border-falcon-brown-700/30 px-4 py-2 text-sm font-semibold text-falcon-brown-700 hover:bg-falcon-cream-100"
+            >
+              Cancel
+            </button>
+          </div>
         </div>
       )}
-    </div>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded-md border border-falcon-brown-700/15 bg-white/60 p-2">
-      <p className="text-xs text-falcon-brown-700/60">{label}</p>
-      <p className="text-lg font-bold text-falcon-brown-900">{value}</p>
-    </div>
+    </>
   );
 }

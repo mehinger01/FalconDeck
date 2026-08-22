@@ -58,7 +58,13 @@ export function resolveSchoolDate({
     return resolveRegular(dateKey, "regular", defaultSchedule, teacherPreferences);
   }
 
-  if (dateKey < calendar.firstStudentDay || dateKey > calendar.lastStudentDay) {
+  // An empty bound means "not known yet" (e.g. a calendar built purely
+  // from a CSV import, which carries no school-year metadata), not "every
+  // date is out of range" - only reject when a real bound exists and the
+  // date actually falls outside it.
+  const beforeFirstDay = calendar.firstStudentDay.length > 0 && dateKey < calendar.firstStudentDay;
+  const afterLastDay = calendar.lastStudentDay.length > 0 && dateKey > calendar.lastStudentDay;
+  if (beforeFirstDay || afterLastDay) {
     return { dateKey, status: "outside-school-year", bellSchedule: null };
   }
 

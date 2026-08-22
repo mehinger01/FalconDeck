@@ -532,6 +532,247 @@ console.log("\n85-94. Present Mode / Week integration (static source checks - se
   );
 }
 
+console.log("\nU1-U15. Master Calendar upload workflow (Upload Completed Template -> Review Calendar -> Apply Calendar)");
+{
+  const template = buildMasterCalendarCsvTemplate();
+  const templateResult = parseMasterCalendarCsv(template);
+  check("U1: the downloadable template itself parses as a valid filled template", templateResult.ok === true);
+  if (templateResult.ok) {
+    check("U1: the template produces zero validation issues", validateParsedExceptions(templateResult.exceptions).length === 0);
+  }
+
+  const multiDayCsv =
+    "start_date,end_date,type,title,schedule_profile,dismissal_time,notes\n" +
+    "2026-11-25,2026-11-27,no-school,Thanksgiving Break,,,";
+  const multiDayResult = parseMasterCalendarCsv(multiDayCsv);
+  check("U2: a valid multi-day date range parses", multiDayResult.ok === true);
+  if (multiDayResult.ok) {
+    check("U2: endDate differs from startDate for the range row", multiDayResult.exceptions[0].endDate === "2026-11-27" && multiDayResult.exceptions[0].startDate === "2026-11-25");
+    const preview = buildMasterCalendarImportPreview(multiDayResult.meta, multiDayResult.exceptions, [ohhs], null);
+    check("U2: the preview counts all 3 affected school dates for the range", preview.affectedDateCount === 3);
+  }
+
+  const blankOptionalCsv =
+    "start_date,end_date,type,title,schedule_profile,dismissal_time,notes\n" + "2026-09-07,2026-09-07,no-school,Labor Day,,,";
+  const blankOptionalResult = parseMasterCalendarCsv(blankOptionalCsv);
+  check("U3: blank optional fields (schedule_profile/dismissal_time/notes) parse without error", blankOptionalResult.ok === true);
+  if (blankOptionalResult.ok) {
+    check("U3: blank optional fields produce zero validation issues", validateParsedExceptions(blankOptionalResult.exceptions).length === 0);
+  }
+
+  const malformedDateCsv =
+    "start_date,end_date,type,title,schedule_profile,dismissal_time,notes\n" + "2026-13-40,2026-13-40,no-school,Bad Date,,,";
+  const malformedDateResult = parseMasterCalendarCsv(malformedDateCsv);
+  check(
+    "U4: a malformed date is rejected with the correct row number (row 2 - first data row after the header)",
+    malformedDateResult.ok === true &&
+      malformedDateResult.ok &&
+      validateParsedExceptions(malformedDateResult.exceptions).some((i) => i.rowIndex === 2 && i.message.includes("Invalid start date")),
+  );
+
+  const endBeforeStartCsv =
+    "start_date,end_date,type,title,schedule_profile,dismissal_time,notes\n" + "2026-09-10,2026-09-05,no-school,Backwards,,,";
+  const endBeforeStartResult = parseMasterCalendarCsv(endBeforeStartCsv);
+  check(
+    "U5: end date before start date is rejected",
+    endBeforeStartResult.ok === true && endBeforeStartResult.ok && validateParsedExceptions(endBeforeStartResult.exceptions).some((i) => i.message.includes("before start date")),
+  );
+
+  const invalidTypeCsv =
+    "start_date,end_date,type,title,schedule_profile,dismissal_time,notes\n" + "2026-09-10,2026-09-10,holiday,Bad Type,,,";
+  const invalidTypeResult = parseMasterCalendarCsv(invalidTypeCsv);
+  check(
+    "U6: an invalid event type is rejected",
+    invalidTypeResult.ok === true && invalidTypeResult.ok && validateParsedExceptions(invalidTypeResult.exceptions).some((i) => i.message.includes("Unknown type")),
+  );
+
+  const missingProfileCsv =
+    "start_date,end_date,type,title,schedule_profile,dismissal_time,notes\n" +
+    "2026-09-30,2026-09-30,special-bell,Early Release,,11:24 AM,";
+  const missingProfileResult = parseMasterCalendarCsv(missingProfileCsv);
+  check(
+    "U7: a special-bell row with no schedule_profile is rejected as an invalid schedule-profile value",
+    missingProfileResult.ok === true && missingProfileResult.ok && validateParsedExceptions(missingProfileResult.exceptions).some((i) => i.message.includes("schedule_profile")),
+  );
+
+  const badDismissalCsv =
+    "start_date,end_date,type,title,schedule_profile,dismissal_time,notes\n" +
+    "2026-09-30,2026-09-30,special-bell,Early Release,REGULAR,tomorrow morning,";
+  const badDismissalResult = parseMasterCalendarCsv(badDismissalCsv);
+  check(
+    'U8: an invalid dismissal time is rejected with a plain-language, example-bearing message',
+    badDismissalResult.ok === true &&
+      badDismissalResult.ok &&
+      validateParsedExceptions(badDismissalResult.exceptions).some((i) => i.message === "dismissal_time must be a valid time such as 11:15 AM."),
+  );
+  const goodDismissalCsv = badDismissalCsv.replace("tomorrow morning", "11:24 AM");
+  const goodDismissalResult = parseMasterCalendarCsv(goodDismissalCsv);
+  check(
+    "U8: a validly-formatted dismissal time (11:24 AM) passes",
+    goodDismissalResult.ok === true && goodDismissalResult.ok && !validateParsedExceptions(goodDismissalResult.exceptions).some((i) => i.message.includes("dismissal_time")),
+  );
+
+  const duplicateCsv =
+    "start_date,end_date,type,title,schedule_profile,dismissal_time,notes\n" +
+    "2026-09-07,2026-09-07,no-school,Labor Day,,,\n" +
+    "2026-09-07,2026-09-07,no-school,Labor Day (duplicate row),,,";
+  const duplicateResult = parseMasterCalendarCsv(duplicateCsv);
+  check(
+    "U9: a duplicate row (same date range and type) is flagged, pointing back at the first occurrence",
+    duplicateResult.ok === true &&
+      duplicateResult.ok &&
+      validateParsedExceptions(duplicateResult.exceptions).some((i) => i.rowIndex === 3 && i.message.includes("Duplicate of row 2")),
+  );
+
+  const headerOnlyCsv = "start_date,end_date,type,title,schedule_profile,dismissal_time,notes";
+  const headerOnlyResult = parseMasterCalendarCsv(headerOnlyCsv);
+  check("U10: a file with only a header row is rejected with a clear, non-technical message", headerOnlyResult.ok === false);
+
+  // Mirrors a real teacher's AppData: OHHS Regular Day has already been
+  // added to their Bell Schedules (e.g. via "+ Use OHHS Regular Day")
+  // before they ever import a calendar that references it by profile key.
+  const stateBeforeUpload: AppData = { ...createDemoAppData(), schedules: [ohhs, ...createDemoAppData().schedules] };
+  const snapshotBeforeUpload = JSON.stringify(stateBeforeUpload);
+  if (templateResult.ok) {
+    validateParsedExceptions(templateResult.exceptions);
+    buildMasterCalendarImportPreview(templateResult.meta, templateResult.exceptions, stateBeforeUpload.schedules, stateBeforeUpload.schoolCalendar);
+  }
+  check(
+    "U11: parsing, validating, and previewing an uploaded file never mutates application state before confirmation",
+    JSON.stringify(stateBeforeUpload) === snapshotBeforeUpload,
+  );
+
+  if (templateResult.ok) {
+    const commitResult = commitMasterCalendarImport({
+      meta: templateResult.meta,
+      exceptions: templateResult.exceptions,
+      existingCalendar: null,
+      bellSchedules: [ohhs],
+      conflictResolution: "skip",
+      generateExceptionId: (() => {
+        let n = 0;
+        return () => `upload-workflow-${n++}`;
+      })(),
+      generateCalendarId: () => "upload-workflow-calendar",
+    });
+
+    let confirmedState = appDataReducer(stateBeforeUpload, {
+      type: "IMPORT_MASTER_CALENDAR",
+      calendar: commitResult.calendar,
+      newBellSchedules: commitResult.newBellSchedules,
+    });
+
+    const fakeStore = new Map<string, string>();
+    (globalThis as Record<string, unknown>).window = {
+      localStorage: {
+        getItem: (key: string) => fakeStore.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          fakeStore.set(key, value);
+        },
+        removeItem: (key: string) => {
+          fakeStore.delete(key);
+        },
+      },
+    };
+    const repo = new LocalStorageDataRepository();
+    await repo.save(confirmedState);
+    const reloaded = await repo.load();
+    check(
+      "U12: applying the calendar persists the new exceptions through the existing repository/localStorage mechanism",
+      reloaded.schoolCalendar !== null && reloaded.schoolCalendar.exceptions.length === commitResult.calendar.exceptions.length,
+    );
+    delete (globalThis as Record<string, unknown>).window;
+
+    const importedNoSchoolResolution = resolveSchoolDate({
+      dateKey: "2026-09-07",
+      calendar: confirmedState.schoolCalendar,
+      bellSchedules: confirmedState.schedules,
+      teacherPreferences: DEFAULT_TEACHER_SCHEDULE_PREFERENCES,
+    });
+    check("U13: the imported no-school date (Labor Day) is honored by resolveSchoolDate", importedNoSchoolResolution.status === "no-school");
+
+    const importedSpecialResolution = resolveSchoolDate({
+      dateKey: "2026-09-30",
+      calendar: confirmedState.schoolCalendar,
+      bellSchedules: confirmedState.schedules,
+      teacherPreferences: DEFAULT_TEACHER_SCHEDULE_PREFERENCES,
+    });
+    check(
+      "U14: the imported early-release/special-bell date resolves through the real chain (EARLY_RELEASE profile requires configuration - never guessed)",
+      importedSpecialResolution.status === "unconfigured-schedule" && importedSpecialResolution.exception?.sourceScheduleProfile === "EARLY_RELEASE",
+    );
+
+    const regularProfileCsv =
+      "start_date,end_date,type,title,schedule_profile,dismissal_time,notes\n" +
+      "2026-10-14,2026-10-14,special-bell,Regular-mapped Special Day,REGULAR,,";
+    const regularProfileResult = parseMasterCalendarCsv(regularProfileCsv);
+    if (regularProfileResult.ok) {
+      const regularProfileCommit = commitMasterCalendarImport({
+        meta: null,
+        exceptions: regularProfileResult.exceptions,
+        existingCalendar: confirmedState.schoolCalendar,
+        bellSchedules: confirmedState.schedules,
+        conflictResolution: "skip",
+        generateExceptionId: () => "regular-profile-exc",
+        generateCalendarId: () => "unused",
+      });
+      const withRegularProfile = appDataReducer(confirmedState, {
+        type: "IMPORT_MASTER_CALENDAR",
+        calendar: regularProfileCommit.calendar,
+        newBellSchedules: regularProfileCommit.newBellSchedules,
+      });
+      const regularMappedResolution = resolveSchoolDate({
+        dateKey: "2026-10-14",
+        calendar: withRegularProfile.schoolCalendar,
+        bellSchedules: withRegularProfile.schedules,
+        teacherPreferences: DEFAULT_TEACHER_SCHEDULE_PREFERENCES,
+      });
+      check(
+        "U14: a special-bell row mapped to a fully-configured profile (REGULAR -> OHHS_REGULAR) resolves a real, usable schedule",
+        regularMappedResolution.status === "special-schedule" && regularMappedResolution.resolvedTeacherSchedule?.id === OHHS_REGULAR_ID,
+      );
+      confirmedState = withRegularProfile;
+    }
+
+    let stateWithManualException = appDataReducer(confirmedState, {
+      type: "ADD_CALENDAR_EXCEPTION",
+      exception: { id: "manual-verify-exception", startDate: "2027-03-15", endDate: "2027-03-15", type: "no-students", title: "Manually Added PD Day" },
+    });
+    check(
+      "U15: a manually-created exception exists before a second, unrelated import",
+      stateWithManualException.schoolCalendar?.exceptions.some((e) => e.id === "manual-verify-exception") === true,
+    );
+
+    const secondImportCsv =
+      "start_date,end_date,type,title,schedule_profile,dismissal_time,notes\n" + "2027-05-31,2027-05-31,no-school,Memorial Day,,,";
+    const secondImportResult = parseMasterCalendarCsv(secondImportCsv);
+    if (secondImportResult.ok) {
+      const secondCommit = commitMasterCalendarImport({
+        meta: null,
+        exceptions: secondImportResult.exceptions,
+        existingCalendar: stateWithManualException.schoolCalendar,
+        bellSchedules: stateWithManualException.schedules,
+        conflictResolution: "skip",
+        generateExceptionId: () => "second-import-exc",
+        generateCalendarId: () => "unused-2",
+      });
+      stateWithManualException = appDataReducer(stateWithManualException, {
+        type: "IMPORT_MASTER_CALENDAR",
+        calendar: secondCommit.calendar,
+        newBellSchedules: secondCommit.newBellSchedules,
+      });
+      check(
+        "U15: an unrelated, non-overlapping import never deletes the manually-created exception",
+        stateWithManualException.schoolCalendar?.exceptions.some((e) => e.id === "manual-verify-exception") === true,
+      );
+      check(
+        "U15: the new imported exception was still added alongside the preserved manual one",
+        stateWithManualException.schoolCalendar?.exceptions.some((e) => e.title === "Memorial Day") === true,
+      );
+    }
+  }
+}
+
 console.log(
   "\n(Other suites: run `npm run verify:schedule`, `verify:lessons`, `verify:preview`, `verify:week`, " +
     "`verify:classroom`, `verify:resources`, and `verify:demo` - or `npm run verify` for everything together. " +
