@@ -12,8 +12,15 @@ export const WATERMARK_ACCEPTED_MIME_TYPES = ["image/png", "image/jpeg", "image/
 /** Sanity cap on the raw upload before even attempting to decode it - not the persisted size budget. */
 export const WATERMARK_MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 
-/** What actually gets persisted through DataRepository must stay well under typical browser storage limits. */
-export const WATERMARK_MAX_DATA_URL_BYTES = 1.5 * 1024 * 1024;
+/**
+ * What actually gets persisted through DataRepository, alongside the rest
+ * of AppData, in the same origin's localStorage (typically ~5-10MB total
+ * quota). 900KB leaves comfortable headroom for everything else Falcon
+ * Deck stores (courses, schedules, lessons, resources) - a previous
+ * ~1.5MB budget left too little margin and could push a save over quota
+ * depending on how much other data already existed.
+ */
+export const WATERMARK_MAX_DATA_URL_BYTES = 900 * 1024;
 
 export const WATERMARK_MAX_WIDTH = 1920;
 export const WATERMARK_MAX_HEIGHT = 1080;

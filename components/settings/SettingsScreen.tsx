@@ -1,45 +1,12 @@
 "use client";
 
-import { useState, type ChangeEvent } from "react";
 import { useAppData, useDefaultSchedule } from "@/lib/store/AppDataProvider";
-import { PresentWatermark } from "@/components/present/PresentWatermark";
-import { processWatermarkUpload } from "@/lib/present/processWatermarkUpload";
-import { DEFAULT_WATERMARK_OPACITY } from "@/types/classPresentation";
-
-type WatermarkUploadState =
-  | { status: "idle" }
-  | { status: "processing" }
-  | { status: "error"; message: string }
-  | { status: "success" };
+import { PresentModeBrandingSection } from "@/components/settings/PresentModeBrandingSection";
 
 export function SettingsScreen() {
   const { data, actions } = useAppData();
   const defaultSchedule = useDefaultSchedule();
   const classroomExperience = data.classroomExperienceSettings;
-  const [watermarkUpload, setWatermarkUpload] = useState<WatermarkUploadState>({ status: "idle" });
-
-  async function handleWatermarkUpload(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    event.target.value = ""; // lets the same file be re-selected later (e.g. after fixing an error)
-    if (!file) return;
-
-    setWatermarkUpload({ status: "processing" });
-    const result = await processWatermarkUpload(file);
-    if (!result.ok) {
-      setWatermarkUpload({ status: "error", message: result.error });
-      return;
-    }
-    actions.updateClassroomExperienceSettings({ customWatermarkDataUrl: result.dataUrl });
-    setWatermarkUpload({ status: "success" });
-  }
-
-  function handleWatermarkReset() {
-    actions.updateClassroomExperienceSettings({
-      customWatermarkDataUrl: undefined,
-      watermarkOpacity: DEFAULT_WATERMARK_OPACITY,
-    });
-    setWatermarkUpload({ status: "idle" });
-  }
 
   return (
     <div className="max-w-xl">
@@ -169,82 +136,7 @@ export function SettingsScreen() {
         </div>
       </section>
 
-      <section className="mt-6 rounded-xl border border-falcon-brown-700/15 bg-white/60 p-4">
-        <h2 className="text-sm font-bold uppercase tracking-wide text-falcon-brown-700/70">
-          Present Mode Branding
-        </h2>
-        <p className="mt-1 text-sm text-falcon-brown-700/70">
-          The watermark shown behind the four lesson panels in Present Mode.
-        </p>
-
-        <div className="mt-3 flex flex-col gap-4">
-          <div>
-            <span className="text-xs font-semibold text-falcon-brown-700/70">Preview</span>
-            <div className="relative mt-1 h-40 w-full max-w-sm overflow-hidden rounded-lg bg-falcon-brown-950">
-              <PresentWatermark
-                customImageSrc={classroomExperience.customWatermarkDataUrl}
-                opacity={classroomExperience.watermarkOpacity}
-              />
-              <div className="relative z-10 grid h-full grid-cols-2 gap-2 p-3">
-                <div className="rounded-md border border-falcon-gold-500/30 bg-falcon-cream-100/5" />
-                <div className="rounded-md border border-falcon-gold-500/30 bg-falcon-cream-100/5" />
-                <div className="rounded-md border border-falcon-gold-500/30 bg-falcon-cream-100/5" />
-                <div className="rounded-md border border-falcon-gold-500/30 bg-falcon-cream-100/5" />
-              </div>
-            </div>
-          </div>
-
-          <div>
-            <span className="text-xs font-semibold text-falcon-brown-700/70">Watermark image</span>
-            <div className="mt-1 flex flex-wrap items-center gap-2">
-              <label className="cursor-pointer rounded-md border border-falcon-brown-700/30 bg-white px-3 py-1.5 text-sm font-semibold text-falcon-brown-900 hover:bg-falcon-cream-100">
-                Upload custom watermark
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp"
-                  onChange={handleWatermarkUpload}
-                  className="hidden"
-                />
-              </label>
-              {classroomExperience.customWatermarkDataUrl && (
-                <button
-                  type="button"
-                  onClick={handleWatermarkReset}
-                  className="rounded-md border border-falcon-brown-700/30 px-3 py-1.5 text-sm font-semibold text-falcon-brown-700 hover:bg-falcon-cream-100"
-                >
-                  Reset to OHHS Falcon
-                </button>
-              )}
-            </div>
-            {watermarkUpload.status === "processing" && (
-              <p className="mt-1 text-xs text-falcon-brown-700/60">Processing image…</p>
-            )}
-            {watermarkUpload.status === "error" && (
-              <p className="mt-1 text-xs text-red-800">{watermarkUpload.message}</p>
-            )}
-            {watermarkUpload.status === "success" && (
-              <p className="mt-1 text-xs text-falcon-brown-700/60">Custom watermark uploaded.</p>
-            )}
-            <p className="mt-1 text-xs text-falcon-brown-700/50">PNG, JPG, or WebP. Large images are resized automatically.</p>
-          </div>
-
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-semibold text-falcon-brown-700/70">
-              Watermark opacity - {Math.round(classroomExperience.watermarkOpacity * 100)}%
-            </span>
-            <input
-              type="range"
-              min={5}
-              max={60}
-              step={1}
-              value={Math.round(classroomExperience.watermarkOpacity * 100)}
-              onChange={(e) =>
-                actions.updateClassroomExperienceSettings({ watermarkOpacity: Number(e.target.value) / 100 })
-              }
-            />
-          </label>
-        </div>
-      </section>
+      <PresentModeBrandingSection />
 
       <section className="mt-6 rounded-xl border border-falcon-brown-700/15 bg-white/60 p-4">
         <h2 className="text-sm font-bold uppercase tracking-wide text-falcon-brown-700/70">

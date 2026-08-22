@@ -24,7 +24,14 @@ function updateSchedule(
 export function appDataReducer(state: AppData, action: AppDataAction): AppData {
   switch (action.type) {
     case "HYDRATE":
-      return action.data;
+      // Returning the *same* state reference when nothing actually changed
+      // lets React bail out of re-rendering entirely (its built-in
+      // Object.is check on reducer output) - which in turn skips
+      // AppDataProvider's save-on-change effect. That's what stops a
+      // cross-tab sync loop (tab B saves -> tab A's storage event rehydrates
+      // -> tab A's echo-save -> tab B's storage event rehydrates -> ...)
+      // from continuing past the point where the two tabs actually agree.
+      return JSON.stringify(state) === JSON.stringify(action.data) ? state : action.data;
 
     case "RESET_TO_DEMO":
       return createDemoAppData();

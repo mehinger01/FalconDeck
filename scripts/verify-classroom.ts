@@ -6,12 +6,15 @@
  * end-of-day data feeding Present Mode's automatic screens, arrival
  * routines, the classroom timer, the tool-tray state machine (and its
  * structural inability to touch lesson/schedule data), QR generation,
- * onboarding detection, and configurable Present Mode watermark branding
- * (default-Falcon fallback, custom upload override/reset, opacity, upload
- * validation and resize math, and old-AppData backward compatibility) -
- * plus brief regression spot-checks and static source scans (no direct
- * localStorage access; no hard-coded weekday logic, proven behaviorally
- * with a non-Thursday override).
+ * onboarding detection, and configurable Present Mode watermark branding:
+ * default-Falcon fallback, the explicit draft/save/cancel/reset workflow
+ * (upload and Reset only ever touch local draft state; only Save Branding
+ * persists), observable persistence failures (no silent localStorage
+ * write failures), cross-tab sync via storage events with its own
+ * loop-prevention, opacity, upload validation and resize math, and
+ * old-AppData backward compatibility - plus brief regression spot-checks
+ * and static source scans (no direct localStorage access; no hard-coded
+ * weekday logic, proven behaviorally with a non-Thursday override).
  *
  * Not a test framework - a script with assertions, run via `tsx`:
  *
@@ -59,6 +62,7 @@ import type { AppData } from "@/lib/data/types";
 import type { BellSchedule } from "@/types/schedule";
 import { DEFAULT_CLASSROOM_EXPERIENCE_SETTINGS, DEFAULT_WATERMARK_OPACITY } from "@/types/classPresentation";
 import {
+  WATERMARK_MAX_DATA_URL_BYTES,
   WATERMARK_MAX_UPLOAD_BYTES,
   computeWatermarkTargetSize,
   dataUrlByteLength,
@@ -737,6 +741,11 @@ console.log("\n41. Watermark upload validation (mime type, size, and the resize 
     "processWatermarkUpload never throws, even when no image decoder is available - it resolves to a graceful failure",
     decodeAttemptResult.ok === false,
   );
+
+  check(
+    "the persisted-image budget is in the 750KB-1MB range specified for headroom alongside the rest of AppData",
+    WATERMARK_MAX_DATA_URL_BYTES >= 750 * 1024 && WATERMARK_MAX_DATA_URL_BYTES <= 1024 * 1024,
+  );
 }
 
 console.log("\n42. Present Mode reads branding through classroomExperienceSettings, not a separate path");
@@ -759,9 +768,217 @@ console.log("\n42. Present Mode reads branding through classroomExperienceSettin
   );
 }
 
+console.log("\n43. Explicit draft/save/cancel/reset workflow (Present Mode Branding)");
+{
+  const source = readFileSync(
+    join(process.cwd(), "components", "settings", "PresentModeBrandingSection.tsx"),
+    "utf8",
+  );
+
+  // Isolates one handler's body via its declaration and the start of
+  // whatever comes next (the next handler, or the component's own JSX) -
+  // not a full parser, but precise enough for this file's flat structure.
+  function extractHandler(name: string): string {
+    const marker = `function ${name}(`;
+    const start = source.indexOf(marker);
+    if (start === -1) return "";
+    const rest = source.slice(start);
+    const nextFn = rest.indexOf("\n  function ", marker.length);
+    const nextReturn = rest.indexOf("\n  return (", marker.length);
+    const candidates = [nextFn, nextReturn].filter((i) => i !== -1);
+    const end = candidates.length > 0 ? Math.min(...candidates) : rest.length;
+    return rest.slice(0, end);
+  }
+
+  const uploadHandler = extractHandler("handleUpload");
+  const resetHandler = extractHandler("handleReset");
+  const cancelHandler = extractHandler("handleCancel");
+  const saveHandler = extractHandler("handleSave");
+
+  check(
+    "43: found all four branding handlers to inspect",
+    [uploadHandler, resetHandler, cancelHandler, saveHandler].every((h) => h.length > 0),
+  );
+
+  check(
+    "3: uploading a new image updates the draft only - it never calls updateClassroomExperienceSettings",
+    uploadHandler.includes("setDraft(") && !uploadHandler.includes("actions.updateClassroomExperienceSettings"),
+  );
+  check(
+    "8: Reset changes the draft to the built-in Falcon (undefined image, default opacity) rather than dispatching",
+    resetHandler.includes(
+      "setDraft({ customWatermarkDataUrl: undefined, watermarkOpacity: DEFAULT_WATERMARK_OPACITY })",
+    ),
+  );
+  check(
+    "9: Reset does not persist anything - it never calls updateClassroomExperienceSettings",
+    !resetHandler.includes("actions.updateClassroomExperienceSettings"),
+  );
+  check(
+    "6-7: Cancel restores the draft from the saved AppData value (both image and opacity, since they're one draft object)",
+    cancelHandler.includes("setDraft(saved)"),
+  );
+  check(
+    "4-5: Save Branding commits the draft's customWatermarkDataUrl and watermarkOpacity in one updateClassroomExperienceSettings call",
+    saveHandler.includes("actions.updateClassroomExperienceSettings({") &&
+      saveHandler.includes("customWatermarkDataUrl: draft.customWatermarkDataUrl") &&
+      saveHandler.includes("watermarkOpacity: draft.watermarkOpacity"),
+  );
+
+  // Only handleSave should ever call the persisting action - confirms
+  // upload/opacity-drag/reset truly can't accidentally commit anything.
+  const totalDispatchSites = (source.match(/actions\.updateClassroomExperienceSettings/g) ?? []).length;
+  check(
+    "the whole component calls updateClassroomExperienceSettings exactly once - only from Save Branding",
+    totalDispatchSites === 1,
+  );
+}
+
+console.log("\n44. Persistence failures are observable, not silently swallowed (Part 6)");
+{
+  const fakeStoreOk = new Map<string, string>();
+  (globalThis as Record<string, unknown>).window = {
+    localStorage: {
+      getItem: (key: string) => fakeStoreOk.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        fakeStoreOk.set(key, value);
+      },
+      removeItem: (key: string) => {
+        fakeStoreOk.delete(key);
+      },
+    },
+  };
+  const okResult = await new LocalStorageDataRepository().save(createDemoAppData());
+  check("15: a successful save reports ok: true", okResult.ok === true);
+  delete (globalThis as Record<string, unknown>).window;
+
+  (globalThis as Record<string, unknown>).window = {
+    localStorage: {
+      getItem: () => null,
+      setItem: () => {
+        throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
+      },
+      removeItem: () => {},
+    },
+  };
+  const failResult = await new LocalStorageDataRepository().save(createDemoAppData());
+  check(
+    "15: a quota-exceeded failure reports ok: false with a concise, storage-specific reason/message - never a thrown or unhandled error",
+    failResult.ok === false && failResult.reason === "quota-exceeded" && typeof failResult.message === "string",
+  );
+  delete (globalThis as Record<string, unknown>).window;
+
+  const noWindowResult = await new LocalStorageDataRepository().save(createDemoAppData());
+  check(
+    "save() never throws even with no window/localStorage available - it resolves ok: false instead",
+    noWindowResult.ok === false,
+  );
+
+  const brandingSource = readFileSync(
+    join(process.cwd(), "components", "settings", "PresentModeBrandingSection.tsx"),
+    "utf8",
+  );
+  check(
+    '15: Settings only shows "Branding saved" from inside the persistence.status === "saved" branch, never immediately after dispatching',
+    brandingSource.includes('persistence.status === "saved"') &&
+      brandingSource.includes('setSaveFeedback({ status: "saved" })'),
+  );
+  check(
+    "16: the watermark-specific error message is shown when the failed save included a custom image",
+    brandingSource.includes("Falcon Deck couldn't save this watermark. Try a smaller image."),
+  );
+}
+
+console.log("\n45. Cross-tab synchronization (Part 5), at the repository/reducer level");
+{
+  const listeners: Array<(event: { key: string | null }) => void> = [];
+  (globalThis as Record<string, unknown>).window = {
+    addEventListener: (type: string, listener: (event: { key: string | null }) => void) => {
+      if (type === "storage") listeners.push(listener);
+    },
+    removeEventListener: (type: string, listener: (event: { key: string | null }) => void) => {
+      if (type !== "storage") return;
+      const index = listeners.indexOf(listener);
+      if (index !== -1) listeners.splice(index, 1);
+    },
+  };
+
+  const repo = new LocalStorageDataRepository();
+  let changeCount = 0;
+  const unsubscribe = repo.subscribeToExternalChanges(() => {
+    changeCount += 1;
+  });
+
+  function fireStorageEvent(key: string | null) {
+    for (const listener of listeners) listener({ key });
+  }
+
+  fireStorageEvent("falcon-deck:app-data:v1");
+  check("19: an external change to Falcon Deck's own storage key notifies the callback", changeCount === 1);
+
+  fireStorageEvent("some-other-app:unrelated-key");
+  check("19: a storage event for an unrelated key is ignored", changeCount === 1);
+
+  fireStorageEvent(null);
+  check("19: a null key (localStorage.clear() elsewhere) is treated as a change too", changeCount === 2);
+
+  unsubscribe();
+  fireStorageEvent("falcon-deck:app-data:v1");
+  check("19: unsubscribing stops further notifications", changeCount === 2);
+
+  delete (globalThis as Record<string, unknown>).window;
+
+  // The reducer's own loop-prevention: hydrating with data identical to
+  // the current state must return the SAME reference, not a new one -
+  // that's what lets React bail out of re-rendering (and re-saving),
+  // which is what actually stops a cross-tab echo from continuing forever.
+  const before = createDemoAppData();
+  const identicalCopy = JSON.parse(JSON.stringify(before)) as AppData;
+  const afterIdenticalHydrate = appDataReducer(before, { type: "HYDRATE", data: identicalCopy });
+  check(
+    "19: hydrating with data identical to the current state returns the same reference (a no-op) - this is what breaks a cross-tab sync loop",
+    afterIdenticalHydrate === before,
+  );
+
+  const genuinelyDifferent: AppData = {
+    ...before,
+    classroomExperienceSettings: { ...before.classroomExperienceSettings, watermarkOpacity: 0.5 },
+  };
+  const afterRealHydrate = appDataReducer(before, { type: "HYDRATE", data: genuinelyDifferent });
+  check(
+    "19: hydrating with genuinely different data still updates state normally",
+    afterRealHydrate === genuinelyDifferent && afterRealHydrate.classroomExperienceSettings.watermarkOpacity === 0.5,
+  );
+}
+
+console.log("\n46. Watermarks render in original color; Live and Preview both resolve saved branding through the same component");
+{
+  const watermarkSource = readFileSync(join(process.cwd(), "components", "present", "PresentWatermark.tsx"), "utf8");
+  // Check every actual className value, not the whole file - the doc
+  // comment legitimately mentions "grayscale" in prose when explaining
+  // it's no longer applied.
+  const classNameValues = [...watermarkSource.matchAll(/className="([^"]*)"/g)].map((m) => m[1]);
+  check(
+    "13-14: PresentWatermark's className no longer forces grayscale on either the built-in or a custom image",
+    classNameValues.length > 0 && classNameValues.every((value) => !value.includes("grayscale")),
+  );
+  check(
+    "10: PresentWatermark fills its container edge-to-edge (object-cover, absolute inset) rather than a small centered box",
+    watermarkSource.includes("object-cover") && watermarkSource.includes("inset-0"),
+  );
+
+  const liveSource = readFileSync(join(process.cwd(), "components", "present", "LivePresentScreen.tsx"), "utf8");
+  const previewSource = readFileSync(join(process.cwd(), "components", "present", "PreviewPresentScreen.tsx"), "utf8");
+  check("11: Live Mode renders through ClassroomView, so it resolves the same saved branding", liveSource.includes("<ClassroomView"));
+  check(
+    "12: Preview Mode renders through the exact same ClassroomView, so it resolves the same saved branding",
+    previewSource.includes("<ClassroomView"),
+  );
+}
+
 console.log(
-  "\n(43-47: run `npm run verify:schedule`, `verify:lessons`, `verify:preview`, `verify:week`, and " +
-    "`verify:resources` - or `npm run verify` for everything together. 48-49: `npm run lint` and `npm run build`.)",
+  "\n(Other suites: run `npm run verify:schedule`, `verify:lessons`, `verify:preview`, `verify:week`, and " +
+    "`verify:resources` - or `npm run verify` for everything together. Also run `npm run lint` and `npm run build`.)",
 );
 
 console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}`);

@@ -4,18 +4,20 @@ import Image from "next/image";
 const DEFAULT_WATERMARK_SRC = "/branding/ohhs-falcon-head.png";
 
 /**
- * Decorative Present Mode watermark, centered behind the four lesson
+ * Decorative Present Mode watermark/background, behind the four lesson
  * panels - school branding (or a teacher's own upload from Settings ->
  * Present Mode Branding), never a foreground graphic. Purely decorative
- * (aria-hidden, empty alt, no pointer events). Sized as a fraction of its
- * positioned ancestor rather than the viewport, so the exact same
- * component works both full-screen in Present Mode and shrunk down inside
- * Settings' small preview card.
+ * (aria-hidden, empty alt, no pointer events). Fills its positioned
+ * ancestor edge-to-edge (`absolute inset-0` + `object-cover`), so the
+ * exact same component works both full-screen in Present Mode and shrunk
+ * down inside Settings' small preview card - the official Falcon artwork
+ * is a widescreen background composition, not a small centered logo.
  *
  * Renders the built-in OHHS Falcon by default, or `customImageSrc` (a
- * `data:` URL) in its place. Unlike the built-in Falcon, a custom upload
- * is shown at full color, not forced to grayscale - it's the user's own
- * supplied image, used as-is.
+ * `data:` URL) in its place - always at its own original color. Neither
+ * the built-in Falcon nor a custom upload is forced to grayscale; the
+ * supplied Falcon artwork is already brown/gold and designed for Falcon
+ * Deck's dark background.
  *
  * Falcon Deck may not ship a real logo file in every environment - see
  * /public/branding/ohhs-falcon-head.png. Rather than show a broken-image
@@ -46,22 +48,17 @@ export function PresentWatermark({
   if (failedSrc === src) return null;
 
   return (
-    <div
-      aria-hidden="true"
-      className="pointer-events-none absolute inset-0 flex select-none items-center justify-center overflow-hidden"
-    >
-      <div className="relative h-3/4 w-3/4 max-h-[34rem] max-w-[34rem]">
-        <Image
-          src={src}
-          alt=""
-          fill
-          sizes="34rem"
-          unoptimized={isCustom}
-          className={isCustom ? "object-contain" : "object-contain grayscale"}
-          style={{ opacity }}
-          onError={() => setFailedSrc(src)}
-        />
-      </div>
+    <div aria-hidden="true" className="pointer-events-none absolute inset-0 select-none overflow-hidden">
+      <Image
+        src={src}
+        alt=""
+        fill
+        sizes="100vw"
+        unoptimized={isCustom}
+        className="object-cover"
+        style={{ opacity }}
+        onError={() => setFailedSrc(src)}
+      />
     </div>
   );
 }

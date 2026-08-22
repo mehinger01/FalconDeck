@@ -14,6 +14,11 @@ export interface AppData {
   libraryResources: LibraryResource[];
 }
 
+/** A reason code callers can use to tailor messaging (e.g. "try a smaller image" only makes sense for quota-exceeded). */
+export type SaveFailureReason = "quota-exceeded" | "unavailable" | "serialization-failed" | "unknown";
+
+export type SaveResult = { ok: true } | { ok: false; reason: SaveFailureReason; message: string };
+
 /**
  * Abstraction over where Falcon Deck's data lives. Phase 1 ships only
  * `LocalStorageDataRepository` (browser localStorage, seeded with demo data,
@@ -24,5 +29,14 @@ export interface AppData {
  */
 export interface DataRepository {
   load(): Promise<AppData>;
-  save(data: AppData): Promise<void>;
+  /** Resolves with the outcome rather than throwing or silently swallowing failures - callers that only care about "did it work" can ignore the result, same as when this returned `Promise<void>`. */
+  save(data: AppData): Promise<SaveResult>;
+  /**
+   * Notifies `onChange` when AppData changes from *outside* this tab/window
+   * (e.g. another Falcon Deck tab saving) - never fires for this tab's own
+   * writes, so callers don't need to guard against self-triggered loops.
+   * Returns an unsubscribe function. A repository with no cross-tab
+   * mechanism can return a no-op unsubscribe and simply never call back.
+   */
+  subscribeToExternalChanges(onChange: () => void): () => void;
 }

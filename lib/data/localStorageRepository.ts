@@ -1,6 +1,6 @@
 import { DEFAULT_CLASSROOM_EXPERIENCE_SETTINGS } from "@/types/classPresentation";
 import { createDemoAppData } from "./demoData";
-import type { AppData, DataRepository } from "./types";
+import type { AppData, DataRepository, SaveResult } from "./types";
 
 const STORAGE_KEY = "falcon-deck:app-data:v1";
 
@@ -14,12 +14,32 @@ function readStoredData(): Partial<AppData> | null {
   }
 }
 
-function writeStoredData(data: AppData): void {
-  if (typeof window === "undefined") return;
+/** Firefox/Safari report quota exceeded as DOMException name "QuotaExceededError"; older Safari uses code 22, older Firefox code 1014. */
+function isQuotaExceededError(error: unknown): boolean {
+  if (!(error instanceof DOMException)) return false;
+  return error.name === "QuotaExceededError" || error.code === 22 || error.code === 1014;
+}
+
+function writeStoredData(data: AppData): SaveResult {
+  if (typeof window === "undefined") {
+    return { ok: false, reason: "unavailable", message: "Storage is unavailable in this environment." };
+  }
+
+  let serialized: string;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    serialized = JSON.stringify(data);
   } catch {
-    // Storage may be unavailable (private browsing, quota exceeded) - not fatal.
+    return { ok: false, reason: "serialization-failed", message: "Couldn't prepare this data to be saved." };
+  }
+
+  try {
+    window.localStorage.setItem(STORAGE_KEY, serialized);
+    return { ok: true };
+  } catch (error) {
+    if (isQuotaExceededError(error)) {
+      return { ok: false, reason: "quota-exceeded", message: "Local storage is full." };
+    }
+    return { ok: false, reason: "unknown", message: "Storage may be unavailable (e.g. private browsing)." };
   }
 }
 
@@ -51,8 +71,25 @@ export class LocalStorageDataRepository implements DataRepository {
     };
   }
 
-  async save(data: AppData): Promise<void> {
-    writeStoredData(data);
+  async save(data: AppData): Promise<SaveResult> {
+    return writeStoredData(data);
+  }
+
+  subscribeToExternalChanges(onChange: () => void): () => void {
+    if (typeof window === "undefined") return () => {};
+
+    // The browser's `storage` event fires only in *other* tabs/windows of
+    // this origin, never in the document that made the write - that's what
+    // keeps this from looping back on itself.
+    function handleStorageEvent(event: StorageEvent) {
+      // event.key is null when localStorage.clear() was called elsewhere -
+      // treat that as "something changed" too, not just our own key.
+      if (event.key !== null && event.key !== STORAGE_KEY) return;
+      onChange();
+    }
+
+    window.addEventListener("storage", handleStorageEvent);
+    return () => window.removeEventListener("storage", handleStorageEvent);
   }
 }
 

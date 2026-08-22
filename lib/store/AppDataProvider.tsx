@@ -2,7 +2,7 @@
 
 import { createDemoAppData } from "@/lib/data/demoData";
 import { dataRepository } from "@/lib/data/localStorageRepository";
-import type { AppData } from "@/lib/data/types";
+import type { AppData, SaveResult } from "@/lib/data/types";
 import type { ClassSection, Course } from "@/types/course";
 import type { BellSchedule, ScheduleBlock, ScheduleBlockOverride, Weekday } from "@/types/schedule";
 import type { ClassroomExperienceSettings } from "@/types/classPresentation";
@@ -13,6 +13,7 @@ import {
   useMemo,
   useReducer,
   useRef,
+  useState,
   type ReactNode,
 } from "react";
 import { generateId } from "./id";
@@ -47,9 +48,30 @@ export interface AppDataActions extends LessonActions, LibraryResourceActions {
   updateClassroomExperienceSettings: (patch: Partial<ClassroomExperienceSettings>) => void;
 }
 
+/**
+ * Outcome of the most recent attempt to persist `data`. Not tied to any
+ * one field/action - it's a single global "is the current in-memory state
+ * actually saved" signal, which is what any caller (e.g. Settings' Save
+ * Branding flow) needs to show accurate save/error feedback without each
+ * feature reimplementing its own persistence tracking.
+ */
+export interface PersistenceState {
+  status: "idle" | "saving" | "saved" | "error";
+  error: string | null;
+  /**
+   * Increments once per save attempt, whether it succeeds or fails. Lets a
+   * caller (e.g. Settings' Save Branding flow) detect "a NEW save just
+   * happened" even when two consecutive attempts share the same outcome -
+   * comparing `status` alone can't tell "nothing has happened yet" apart
+   * from "it happened again with the same result."
+   */
+  attempt: number;
+}
+
 interface AppDataContextValue {
   data: AppData;
   actions: AppDataActions;
+  persistence: PersistenceState;
 }
 
 const AppDataContext = createContext<AppDataContextValue | null>(null);
@@ -59,6 +81,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   // any saved data is applied after mount (client-only, see effect below).
   const [data, dispatch] = useReducer(appDataReducer, undefined, createDemoAppData);
   const hydrated = useRef(false);
+  const [persistence, setPersistence] = useState<PersistenceState>({ status: "idle", error: null, attempt: 0 });
 
   useEffect(() => {
     let cancelled = false;
@@ -72,9 +95,39 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // Rehydrates from another Falcon Deck tab's save (e.g. Settings saving a
+  // new watermark while Present Mode is open elsewhere). The reducer's own
+  // HYDRATE deep-equality check (see reducer.ts) prevents this from ever
+  // looping back and forth indefinitely between tabs.
+  useEffect(() => {
+    let cancelled = false;
+    const unsubscribe = dataRepository.subscribeToExternalChanges(() => {
+      dataRepository.load().then((loaded) => {
+        if (cancelled) return;
+        dispatch({ type: "HYDRATE", data: loaded });
+      });
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
+
   useEffect(() => {
     if (!hydrated.current) return; // avoid clobbering storage before hydration runs
-    dataRepository.save(data);
+    let cancelled = false;
+    setPersistence((prev) => ({ status: "saving", error: prev.error, attempt: prev.attempt + 1 }));
+    dataRepository.save(data).then((result: SaveResult) => {
+      if (cancelled) return;
+      setPersistence((prev) =>
+        result.ok
+          ? { status: "saved", error: null, attempt: prev.attempt }
+          : { status: "error", error: result.message, attempt: prev.attempt },
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [data]);
 
   const actions = useMemo<AppDataActions>(
@@ -158,7 +211,10 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     [data],
   );
 
-  const value = useMemo<AppDataContextValue>(() => ({ data, actions }), [data, actions]);
+  const value = useMemo<AppDataContextValue>(
+    () => ({ data, actions, persistence }),
+    [data, actions, persistence],
+  );
 
   return <AppDataContext.Provider value={value}>{children}</AppDataContext.Provider>;
 }
