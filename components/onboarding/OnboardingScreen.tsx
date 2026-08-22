@@ -19,6 +19,18 @@ const CHECKLIST = [
     description: "Add blocks to your default schedule so Present Mode knows the school day.",
   },
   {
+    key: "lunchWave" as const,
+    label: "Choose your lunch wave",
+    href: "/schedule",
+    description: "Optional - if your school splits a period into A/B/C lunch waves.",
+  },
+  {
+    key: "masterCalendar" as const,
+    label: "Import your Master Calendar",
+    href: "/schedule/calendar",
+    description: "Optional - lets Falcon Deck automatically know no-school days and special schedules all year.",
+  },
+  {
     key: "firstLesson" as const,
     label: "Create your first lesson",
     href: "/lessons",
@@ -70,6 +82,8 @@ export function OnboardingScreen() {
   const completionByKey: Record<(typeof CHECKLIST)[number]["key"], boolean> = {
     classes: status.classesComplete,
     schedule: status.scheduleComplete,
+    lunchWave: status.lunchWaveComplete,
+    masterCalendar: status.masterCalendarComplete,
     firstLesson: status.firstLessonComplete,
     arrivalRoutine: status.arrivalRoutineComplete,
     libraryResource: status.libraryResourceComplete,
@@ -82,12 +96,28 @@ export function OnboardingScreen() {
         <p className="mt-1 text-sm text-falcon-brown-700/70">
           A few steps to get your classroom display ready to run the whole day on its own.
         </p>
+        <Link
+          href="/demo"
+          className="mt-2 inline-block text-sm font-semibold text-falcon-brown-700 underline decoration-falcon-gold-500 decoration-2 underline-offset-2 hover:text-falcon-brown-900"
+        >
+          Not ready to set up yet? Explore a fully configured Demo →
+        </Link>
       </div>
 
       {status.coreSetupComplete && (
         <div className="mb-4 rounded-lg border border-falcon-gold-500/50 bg-falcon-gold-300/15 p-3 text-sm font-semibold text-falcon-brown-900">
           You&rsquo;re ready to present.
         </div>
+      )}
+
+      {status.unresolvedScheduleCount > 0 && (
+        <Link
+          href="/schedule"
+          className="mb-4 block rounded-lg border border-amber-600/40 bg-amber-50 p-3 text-sm font-semibold text-amber-900 hover:bg-amber-100"
+        >
+          {status.unresolvedScheduleCount} special schedule{status.unresolvedScheduleCount === 1 ? "" : "s"} need
+          configuration →
+        </Link>
       )}
 
       <ol className="space-y-2">

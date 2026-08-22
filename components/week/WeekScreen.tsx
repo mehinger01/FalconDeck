@@ -7,6 +7,8 @@ import { getLocalDateKey } from "@/lib/schedule/localDate";
 import { DEFAULT_TIME_ZONE } from "@/lib/schedule/time";
 import { buildWeekPlanningGrid } from "@/lib/week/buildWeekPlanningGrid";
 import { getWeekStart } from "@/lib/week/getWeekStart";
+import { resolveSchoolDate } from "@/lib/calendar/resolveSchoolDate";
+import type { SchoolDateResolution } from "@/types/calendar";
 import { CopyWeekForwardPanel } from "./CopyWeekForwardPanel";
 import { WeekCellActionsModal } from "./WeekCellActionsModal";
 import { WeekGrid } from "./WeekGrid";
@@ -42,6 +44,18 @@ export function WeekScreen() {
     lessons: data.lessons,
     schedule,
   });
+
+  const dayStatuses = new Map<string, SchoolDateResolution>(
+    grid.weekDates.map((date) => [
+      date,
+      resolveSchoolDate({
+        dateKey: date,
+        calendar: data.schoolCalendar,
+        bellSchedules: data.schedules,
+        teacherPreferences: data.teacherSchedulePreferences,
+      }),
+    ]),
+  );
 
   const [selectedCellKey, setSelectedCellKey] = useState<{
     date: string;
@@ -81,6 +95,7 @@ export function WeekScreen() {
           <WeekGrid
             grid={grid}
             todayDateKey={todayDateKey}
+            dayStatuses={dayStatuses}
             onOpenCell={(date, classSectionId) => setSelectedCellKey({ date, classSectionId })}
           />
         </>

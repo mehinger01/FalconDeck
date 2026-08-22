@@ -2,10 +2,12 @@
 
 import { createDemoAppData } from "@/lib/data/demoData";
 import { dataRepository } from "@/lib/data/localStorageRepository";
-import type { AppData, SaveResult } from "@/lib/data/types";
+import type { AppData, DataRepository, SaveResult } from "@/lib/data/types";
 import type { ClassSection, Course } from "@/types/course";
 import type { BellSchedule, ScheduleBlock, ScheduleBlockOverride, Weekday } from "@/types/schedule";
 import type { ClassroomExperienceSettings } from "@/types/classPresentation";
+import type { TeacherSchedulePreferences } from "@/types/teacherSchedule";
+import type { SchoolCalendarException, SchoolYearCalendar } from "@/types/calendar";
 import {
   createContext,
   useContext,
@@ -23,6 +25,8 @@ import { appDataReducer } from "./reducer";
 
 export interface AppDataActions extends LessonActions, LibraryResourceActions {
   createSchedule: (name: string) => void;
+  /** Adds a fully-formed BellSchedule as-is (its id is preserved verbatim) - used for the built-in OHHS Regular Day preset and for committing a successfully-parsed Bell Schedule import. */
+  addBuiltInSchedule: (schedule: BellSchedule) => void;
   duplicateSchedule: (scheduleId: string) => void;
   deleteSchedule: (scheduleId: string) => void;
   renameSchedule: (scheduleId: string, name: string) => void;
@@ -46,6 +50,11 @@ export interface AppDataActions extends LessonActions, LibraryResourceActions {
   resetToDemo: () => void;
   setArrivalInstructions: (classSectionId: string, instructions: string[]) => void;
   updateClassroomExperienceSettings: (patch: Partial<ClassroomExperienceSettings>) => void;
+  updateTeacherSchedulePreferences: (patch: Partial<TeacherSchedulePreferences>) => void;
+  importMasterCalendar: (result: { calendar: SchoolYearCalendar; newBellSchedules: BellSchedule[] }) => void;
+  addCalendarException: (exception: SchoolCalendarException) => void;
+  updateCalendarException: (exceptionId: string, patch: Partial<Omit<SchoolCalendarException, "id">>) => void;
+  deleteCalendarException: (exceptionId: string) => void;
 }
 
 /**
@@ -76,16 +85,35 @@ interface AppDataContextValue {
 
 const AppDataContext = createContext<AppDataContextValue | null>(null);
 
-export function AppDataProvider({ children }: { children: ReactNode }) {
-  // Lazy-init with demo data so server and first client render match exactly;
-  // any saved data is applied after mount (client-only, see effect below).
-  const [data, dispatch] = useReducer(appDataReducer, undefined, createDemoAppData);
+/**
+ * `repository`/`seedData` default to the real, localStorage-backed
+ * singleton - every existing call site (`<AppDataProvider>{children}</AppDataProvider>`
+ * at the root layout) is unaffected. Demo Mode is the one other caller:
+ * `DemoAppDataProvider` renders this same component with an in-memory
+ * `DemoDataRepository` and a rich demo seed instead, giving it a fully
+ * separate `AppDataContext` for its subtree - `useAppData()` always
+ * resolves to the nearest provider, so no component needs to know which
+ * one it's under.
+ */
+export function AppDataProvider({
+  children,
+  repository = dataRepository,
+  seedData = createDemoAppData,
+}: {
+  children: ReactNode;
+  repository?: DataRepository;
+  seedData?: () => AppData;
+}) {
+  // Lazy-init with seed data so server and first client render match
+  // exactly; any saved data is applied after mount (client-only, see
+  // effect below).
+  const [data, dispatch] = useReducer(appDataReducer, undefined, seedData);
   const hydrated = useRef(false);
   const [persistence, setPersistence] = useState<PersistenceState>({ status: "idle", error: null, attempt: 0 });
 
   useEffect(() => {
     let cancelled = false;
-    dataRepository.load().then((loaded) => {
+    repository.load().then((loaded) => {
       if (cancelled) return;
       dispatch({ type: "HYDRATE", data: loaded });
       hydrated.current = true;
@@ -93,6 +121,9 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
+    // Intentionally keyed on mount only, like the original - a provider is
+    // never expected to swap its repository/seedData after first render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Rehydrates from another Falcon Deck tab's save (e.g. Settings saving a
@@ -101,8 +132,8 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   // looping back and forth indefinitely between tabs.
   useEffect(() => {
     let cancelled = false;
-    const unsubscribe = dataRepository.subscribeToExternalChanges(() => {
-      dataRepository.load().then((loaded) => {
+    const unsubscribe = repository.subscribeToExternalChanges(() => {
+      repository.load().then((loaded) => {
         if (cancelled) return;
         dispatch({ type: "HYDRATE", data: loaded });
       });
@@ -111,13 +142,14 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       cancelled = true;
       unsubscribe();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     if (!hydrated.current) return; // avoid clobbering storage before hydration runs
     let cancelled = false;
     setPersistence((prev) => ({ status: "saving", error: prev.error, attempt: prev.attempt + 1 }));
-    dataRepository.save(data).then((result: SaveResult) => {
+    repository.save(data).then((result: SaveResult) => {
       if (cancelled) return;
       setPersistence((prev) =>
         result.ok
@@ -128,7 +160,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [data]);
+  }, [data, repository]);
 
   const actions = useMemo<AppDataActions>(
     () => ({
@@ -143,6 +175,8 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
             blocks: [],
           } satisfies BellSchedule,
         }),
+
+      addBuiltInSchedule: (schedule) => dispatch({ type: "ADD_SCHEDULE", schedule }),
 
       duplicateSchedule: (scheduleId) =>
         dispatch({
@@ -204,6 +238,15 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
         dispatch({ type: "SET_ARRIVAL_INSTRUCTIONS", classSectionId, instructions }),
       updateClassroomExperienceSettings: (patch) =>
         dispatch({ type: "UPDATE_CLASSROOM_EXPERIENCE_SETTINGS", patch }),
+
+      updateTeacherSchedulePreferences: (patch) =>
+        dispatch({ type: "UPDATE_TEACHER_SCHEDULE_PREFERENCES", patch }),
+      importMasterCalendar: ({ calendar, newBellSchedules }) =>
+        dispatch({ type: "IMPORT_MASTER_CALENDAR", calendar, newBellSchedules }),
+      addCalendarException: (exception) => dispatch({ type: "ADD_CALENDAR_EXCEPTION", exception }),
+      updateCalendarException: (exceptionId, patch) =>
+        dispatch({ type: "UPDATE_CALENDAR_EXCEPTION", exceptionId, patch }),
+      deleteCalendarException: (exceptionId) => dispatch({ type: "DELETE_CALENDAR_EXCEPTION", exceptionId }),
 
       ...createLessonActions(data, dispatch),
       ...createLibraryResourceActions(data, dispatch),

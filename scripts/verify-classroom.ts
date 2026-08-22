@@ -481,6 +481,8 @@ console.log("\n32-35. Onboarding detection");
     classPresentationSettings: [],
     classroomExperienceSettings: state.classroomExperienceSettings,
     libraryResources: [],
+    teacherSchedulePreferences: state.teacherSchedulePreferences,
+    schoolCalendar: null,
   };
   const emptyStatus = getOnboardingStatus(empty);
   check("32: no classes -> classesComplete is false", emptyStatus.classesComplete === false);

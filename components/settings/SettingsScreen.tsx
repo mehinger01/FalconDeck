@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useAppData, useDefaultSchedule } from "@/lib/store/AppDataProvider";
 import { PresentModeBrandingSection } from "@/components/settings/PresentModeBrandingSection";
 
@@ -138,14 +139,27 @@ export function SettingsScreen() {
 
       <PresentModeBrandingSection />
 
+      <section className="mt-6 rounded-xl border border-falcon-gold-500/40 bg-falcon-gold-300/10 p-4">
+        <h2 className="text-sm font-bold uppercase tracking-wide text-falcon-brown-700/70">Demo Mode</h2>
+        <p className="mt-1 text-sm text-falcon-brown-700/70">
+          Explore Falcon Deck with a complete sample classroom - real OHHS bell times, a full Master
+          Calendar, and populated lessons. Your real setup will not be changed.
+        </p>
+        <Link
+          href="/demo"
+          className="mt-3 inline-block rounded-md bg-falcon-brown-900 px-4 py-2 text-sm font-bold uppercase tracking-wide text-white hover:bg-falcon-brown-800"
+        >
+          Launch Demo Mode
+        </Link>
+      </section>
+
       <section className="mt-6 rounded-xl border border-falcon-brown-700/15 bg-white/60 p-4">
         <h2 className="text-sm font-bold uppercase tracking-wide text-falcon-brown-700/70">
-          Demo Data
+          Reset Local Data
         </h2>
         <p className="mt-1 text-sm text-falcon-brown-700/70">
-          Everything in Falcon Deck right now is placeholder demo data, stored only in this
-          browser. Resetting discards any local edits and restores the original demo schedules,
-          courses, and sections.
+          Not Demo Mode above - this replaces your real, saved Falcon Deck data (courses, sections,
+          schedules) with the original starter data. Resetting discards any local edits.
         </p>
         <button
           type="button"

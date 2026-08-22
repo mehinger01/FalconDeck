@@ -4,6 +4,8 @@ import type { DailyLesson } from "@/types/lesson";
 import type { BellSchedule, ScheduleBlock, ScheduleBlockOverride, Weekday } from "@/types/schedule";
 import type { ClassroomExperienceSettings } from "@/types/classPresentation";
 import type { LibraryResource } from "@/types/resource";
+import type { TeacherSchedulePreferences } from "@/types/teacherSchedule";
+import type { SchoolCalendarException, SchoolYearCalendar } from "@/types/calendar";
 
 export type AppDataAction =
   | { type: "HYDRATE"; data: AppData }
@@ -31,4 +33,9 @@ export type AppDataAction =
   | { type: "SET_ARRIVAL_INSTRUCTIONS"; classSectionId: string; instructions: string[] }
   | { type: "UPDATE_CLASSROOM_EXPERIENCE_SETTINGS"; patch: Partial<ClassroomExperienceSettings> }
   | { type: "UPSERT_LIBRARY_RESOURCE"; resource: LibraryResource }
-  | { type: "DELETE_LIBRARY_RESOURCE"; resourceId: string };
+  | { type: "DELETE_LIBRARY_RESOURCE"; resourceId: string }
+  | { type: "UPDATE_TEACHER_SCHEDULE_PREFERENCES"; patch: Partial<TeacherSchedulePreferences> }
+  | { type: "IMPORT_MASTER_CALENDAR"; calendar: SchoolYearCalendar; newBellSchedules: BellSchedule[] }
+  | { type: "ADD_CALENDAR_EXCEPTION"; exception: SchoolCalendarException }
+  | { type: "UPDATE_CALENDAR_EXCEPTION"; exceptionId: string; patch: Partial<Omit<SchoolCalendarException, "id">> }
+  | { type: "DELETE_CALENDAR_EXCEPTION"; exceptionId: string };

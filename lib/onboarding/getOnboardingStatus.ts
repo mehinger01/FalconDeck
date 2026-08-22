@@ -7,7 +7,13 @@ export interface OnboardingStatus {
   firstLessonComplete: boolean;
   arrivalRoutineComplete: boolean;
   libraryResourceComplete: boolean;
-  /** Classes + Schedule + First Lesson - the three ingredients Present Mode actually needs. Arrival routines and the Resource Library are nice-to-haves, not required. */
+  /** Optional - a teacher without a shared lunch structure shouldn't be blocked by this. */
+  lunchWaveComplete: boolean;
+  /** Optional - Present Mode works fine on just a default BellSchedule; the calendar is what makes it automatic across the whole year. */
+  masterCalendarComplete: boolean;
+  /** Bell schedules referenced by the Master Calendar (or duplicated presets) that still have no block times - see BellSchedule.needsConfiguration. */
+  unresolvedScheduleCount: number;
+  /** Classes + Schedule + First Lesson - the three ingredients Present Mode actually needs. Everything else here is a nice-to-have, not required. */
   coreSetupComplete: boolean;
 }
 
@@ -30,12 +36,19 @@ export function getOnboardingStatus(data: AppData): OnboardingStatus {
 
   const libraryResourceComplete = data.libraryResources.length > 0;
 
+  const lunchWaveComplete = data.teacherSchedulePreferences.lunchWave !== "none";
+  const masterCalendarComplete = data.schoolCalendar !== null;
+  const unresolvedScheduleCount = data.schedules.filter((schedule) => schedule.needsConfiguration).length;
+
   return {
     classesComplete,
     scheduleComplete,
     firstLessonComplete,
     arrivalRoutineComplete,
     libraryResourceComplete,
+    lunchWaveComplete,
+    masterCalendarComplete,
+    unresolvedScheduleCount,
     coreSetupComplete: classesComplete && scheduleComplete && firstLessonComplete,
   };
 }

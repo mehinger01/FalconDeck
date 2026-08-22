@@ -1,4 +1,5 @@
 import { DEFAULT_CLASSROOM_EXPERIENCE_SETTINGS } from "@/types/classPresentation";
+import { DEFAULT_TEACHER_SCHEDULE_PREFERENCES } from "@/types/teacherSchedule";
 import { createDemoAppData } from "./demoData";
 import type { AppData, DataRepository, SaveResult } from "./types";
 
@@ -68,6 +69,11 @@ export class LocalStorageDataRepository implements DataRepository {
         ...stored.classroomExperienceSettings,
       },
       libraryResources: stored.libraryResources ?? [],
+      teacherSchedulePreferences: {
+        ...DEFAULT_TEACHER_SCHEDULE_PREFERENCES,
+        ...stored.teacherSchedulePreferences,
+      },
+      schoolCalendar: stored.schoolCalendar ?? null,
     };
   }
 

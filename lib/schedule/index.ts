@@ -8,3 +8,4 @@ export * from "./getRemainingTime";
 export * from "./getScheduleState";
 export * from "./getPresentationState";
 export * from "./validateSchedule";
+export * from "./resolveTeacherSchedule";

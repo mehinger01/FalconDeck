@@ -57,6 +57,22 @@ export function timeStringToSeconds(time: string): number {
   return (hours || 0) * 3600 + (minutes || 0) * 60;
 }
 
+/** Inverse of `timeStringToSeconds` - formats seconds since midnight as "HH:mm" (24h), rounded down to the minute. */
+export function secondsToTimeString(totalSeconds: number): string {
+  const clamped = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(clamped / 3600) % 24;
+  const minutes = Math.floor((clamped % 3600) / 60);
+  return `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}`;
+}
+
+/** Formats a "HH:mm" (24h) time string as "h:mm AM/PM" for display, e.g. "11:18" -> "11:18 AM". */
+export function formatTimeString(time: string): string {
+  const [hours = 0, minutes = 0] = time.split(":").map(Number);
+  const period = hours >= 12 ? "PM" : "AM";
+  const hour12 = hours % 12 === 0 ? 12 : hours % 12;
+  return `${hour12}:${minutes.toString().padStart(2, "0")} ${period}`;
+}
+
 /** Formats a non-negative second count as "M:SS" for countdown displays. */
 export function secondsToClock(totalSeconds: number): string {
   const clamped = Math.max(0, Math.round(totalSeconds));

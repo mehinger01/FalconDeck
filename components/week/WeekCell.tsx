@@ -8,9 +8,13 @@ const STATUS_CLASSES: Record<WeekCellData["status"], string> = {
   prepared: "border-falcon-brown-700/20 bg-white text-falcon-brown-900",
 };
 
-function CellSummary({ cell }: { cell: WeekCellData }) {
+function CellSummary({ cell, isNoSchoolDay }: { cell: WeekCellData; isNoSchoolDay: boolean }) {
   if (cell.status === "missing") {
-    return <span className="text-xs font-semibold">+ Add Lesson</span>;
+    return isNoSchoolDay ? (
+      <span className="text-xs text-falcon-brown-700/40">No school</span>
+    ) : (
+      <span className="text-xs font-semibold">+ Add Lesson</span>
+    );
   }
 
   if (cell.status === "draft") {
@@ -49,10 +53,13 @@ function CellSummary({ cell }: { cell: WeekCellData }) {
 export function WeekCell({
   cell,
   isToday,
+  isNoSchoolDay = false,
   onOpen,
 }: {
   cell: WeekCellData;
   isToday: boolean;
+  /** From the Master Calendar - visually muted, no primary Create Lesson CTA, but any existing lesson is still shown and never deleted/hidden. */
+  isNoSchoolDay?: boolean;
   onOpen: () => void;
 }) {
   return (
@@ -63,9 +70,9 @@ export function WeekCell({
         STATUS_CLASSES[cell.status]
       } ${isToday ? "ring-2 ring-falcon-gold-400/70 ring-offset-1 ring-offset-falcon-cream-200" : ""} ${
         cell.scheduledBlockId === null ? "opacity-70" : ""
-      }`}
+      } ${isNoSchoolDay ? "opacity-60" : ""}`}
     >
-      <CellSummary cell={cell} />
+      <CellSummary cell={cell} isNoSchoolDay={isNoSchoolDay} />
     </button>
   );
 }

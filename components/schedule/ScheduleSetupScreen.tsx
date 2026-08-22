@@ -3,8 +3,12 @@
 import { useState } from "react";
 import { useAppData } from "@/lib/store/AppDataProvider";
 import { validateSchedule } from "@/lib/schedule/validateSchedule";
+import { BellScheduleImportPanel } from "./BellScheduleImportPanel";
 import { BlockList } from "./BlockList";
+import { BuiltInScheduleSummary } from "./BuiltInScheduleSummary";
+import { MyScheduleSection } from "./MyScheduleSection";
 import { ScheduleList } from "./ScheduleList";
+import { ScheduleSectionTabs } from "./ScheduleSectionTabs";
 import { ValidationBanner } from "./ValidationBanner";
 
 export function ScheduleSetupScreen() {
@@ -14,15 +18,26 @@ export function ScheduleSetupScreen() {
 
   const selectedSchedule =
     data.schedules.find((s) => s.id === selectedScheduleId) ?? data.schedules[0] ?? null;
+  const isEditable = selectedSchedule ? selectedSchedule.source !== "built-in" : false;
 
   return (
     <div>
       <div className="mb-6">
         <h1 className="text-3xl font-bold text-falcon-brown-900">Schedule Setup</h1>
         <p className="mt-1 text-sm text-falcon-brown-700/70">
-          Build bell schedules from scratch — any number of blocks, any lengths, any order.
-          Placeholder demo data is seeded below; edit or replace it freely.
+          Bell schedules define when each block happens. The Master Calendar (separate tab) decides
+          which schedule applies on which date.
         </p>
+      </div>
+
+      <ScheduleSectionTabs />
+
+      <div className="mb-6">
+        <MyScheduleSection />
+      </div>
+
+      <div className="mb-4 flex justify-end">
+        <BellScheduleImportPanel />
       </div>
 
       <div className="flex flex-col gap-6 sm:flex-row">
@@ -35,29 +50,35 @@ export function ScheduleSetupScreen() {
           {selectedSchedule ? (
             <>
               <div className="mb-4 flex flex-wrap items-center gap-3">
-                <label className="flex items-center gap-2">
-                  <span className="text-xs font-semibold text-falcon-brown-700/70">Name</span>
-                  <input
-                    value={selectedSchedule.name}
-                    onChange={(e) =>
-                      actions.renameSchedule(selectedSchedule.id, e.target.value)
-                    }
-                    className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm font-semibold text-falcon-brown-900"
-                  />
-                </label>
+                {isEditable ? (
+                  <label className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-falcon-brown-700/70">Name</span>
+                    <input
+                      value={selectedSchedule.name}
+                      onChange={(e) => actions.renameSchedule(selectedSchedule.id, e.target.value)}
+                      className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm font-semibold text-falcon-brown-900"
+                    />
+                  </label>
+                ) : (
+                  <h2 className="text-lg font-bold text-falcon-brown-900">{selectedSchedule.name}</h2>
+                )}
                 {selectedSchedule.description && (
-                  <p className="text-xs italic text-falcon-brown-700/60">
-                    {selectedSchedule.description}
-                  </p>
+                  <p className="text-xs italic text-falcon-brown-700/60">{selectedSchedule.description}</p>
                 )}
               </div>
 
-              <ValidationBanner issues={validateSchedule(selectedSchedule)} />
-              <BlockList schedule={selectedSchedule} />
+              {isEditable ? (
+                <>
+                  <ValidationBanner issues={validateSchedule(selectedSchedule)} />
+                  <BlockList schedule={selectedSchedule} />
+                </>
+              ) : (
+                <BuiltInScheduleSummary schedule={selectedSchedule} />
+              )}
             </>
           ) : (
             <p className="text-sm text-falcon-brown-700/60">
-              No schedules yet — create one to get started.
+              No schedules yet — create one, import one, or add OHHS Regular Day to get started.
             </p>
           )}
         </div>

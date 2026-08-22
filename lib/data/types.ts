@@ -3,6 +3,8 @@ import type { ClassSection, Course } from "@/types/course";
 import type { DailyLesson } from "@/types/lesson";
 import type { ClassPresentationSettings, ClassroomExperienceSettings } from "@/types/classPresentation";
 import type { LibraryResource } from "@/types/resource";
+import type { TeacherSchedulePreferences } from "@/types/teacherSchedule";
+import type { SchoolYearCalendar } from "@/types/calendar";
 
 export interface AppData {
   courses: Course[];
@@ -12,6 +14,9 @@ export interface AppData {
   classPresentationSettings: ClassPresentationSettings[];
   classroomExperienceSettings: ClassroomExperienceSettings;
   libraryResources: LibraryResource[];
+  teacherSchedulePreferences: TeacherSchedulePreferences;
+  /** `null` = no Master Calendar imported yet - fully supported; Live Present Mode falls back to whichever BellSchedule is marked default. */
+  schoolCalendar: SchoolYearCalendar | null;
 }
 
 /** A reason code callers can use to tailor messaging (e.g. "try a smaller image" only makes sense for quota-exceeded). */

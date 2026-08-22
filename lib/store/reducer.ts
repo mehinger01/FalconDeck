@@ -47,6 +47,11 @@ export function appDataReducer(state: AppData, action: AppDataAction): AppData {
         id: action.newId,
         name: action.newName,
         isDefault: false,
+        // A duplicate of a built-in/needs-configuration schedule is a
+        // teacher's own editable copy from this point on - "avoid
+        // destructive editing" only ever applies to the original.
+        source: "custom",
+        needsConfiguration: false,
       };
       return { ...state, schedules: [...state.schedules, duplicate] };
     }
@@ -187,6 +192,59 @@ export function appDataReducer(state: AppData, action: AppDataAction): AppData {
         ...state,
         libraryResources: state.libraryResources.filter((resource) => resource.id !== action.resourceId),
       };
+
+    case "UPDATE_TEACHER_SCHEDULE_PREFERENCES":
+      return {
+        ...state,
+        teacherSchedulePreferences: { ...state.teacherSchedulePreferences, ...action.patch },
+      };
+
+    // Carries the already-computed final calendar + any newly-required
+    // "Needs Configuration" placeholder schedules - see
+    // lib/calendar/masterCalendarImport.ts's commitMasterCalendarImport,
+    // which is what actually merges/conflict-resolves before this action
+    // is ever dispatched. The reducer just applies the result.
+    case "IMPORT_MASTER_CALENDAR":
+      return {
+        ...state,
+        schoolCalendar: action.calendar,
+        schedules: [...state.schedules, ...action.newBellSchedules],
+      };
+
+    case "ADD_CALENDAR_EXCEPTION": {
+      if (!state.schoolCalendar) return state;
+      return {
+        ...state,
+        schoolCalendar: {
+          ...state.schoolCalendar,
+          exceptions: [...state.schoolCalendar.exceptions, action.exception],
+        },
+      };
+    }
+
+    case "UPDATE_CALENDAR_EXCEPTION": {
+      if (!state.schoolCalendar) return state;
+      return {
+        ...state,
+        schoolCalendar: {
+          ...state.schoolCalendar,
+          exceptions: state.schoolCalendar.exceptions.map((exception) =>
+            exception.id === action.exceptionId ? { ...exception, ...action.patch } : exception,
+          ),
+        },
+      };
+    }
+
+    case "DELETE_CALENDAR_EXCEPTION": {
+      if (!state.schoolCalendar) return state;
+      return {
+        ...state,
+        schoolCalendar: {
+          ...state.schoolCalendar,
+          exceptions: state.schoolCalendar.exceptions.filter((exception) => exception.id !== action.exceptionId),
+        },
+      };
+    }
 
     default:
       return state;

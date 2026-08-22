@@ -13,7 +13,9 @@
     "verify:week": "tsx scripts/verify-week.ts",
     "verify:classroom": "tsx scripts/verify-classroom.ts",
     "verify:resources": "tsx scripts/verify-resources.ts",
-    "verify": "npm run verify:schedule && npm run verify:lessons && npm run verify:preview && npm run verify:week && npm run verify:classroom && npm run verify:resources"
+    "verify:calendar": "tsx scripts/verify-calendar.ts",
+    "verify:demo": "tsx scripts/verify-demo.ts",
+    "verify": "npm run verify:schedule && npm run verify:lessons && npm run verify:preview && npm run verify:week && npm run verify:classroom && npm run verify:resources && npm run verify:calendar && npm run verify:demo"
   },
   "dependencies": {
     "next": "16.3.1",

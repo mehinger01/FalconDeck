@@ -7,6 +7,7 @@ import type { AgendaItem, DailyLesson } from "@/types/lesson";
 import { DEFAULT_CLASSROOM_EXPERIENCE_SETTINGS } from "@/types/classPresentation";
 import type { ClassPresentationSettings } from "@/types/classPresentation";
 import type { LibraryResource } from "@/types/resource";
+import { DEFAULT_TEACHER_SCHEDULE_PREFERENCES } from "@/types/teacherSchedule";
 import type { AppData } from "./types";
 
 /**
@@ -354,5 +355,7 @@ export function createDemoAppData(): AppData {
     classPresentationSettings: DEMO_CLASS_PRESENTATION_SETTINGS,
     classroomExperienceSettings: DEFAULT_CLASSROOM_EXPERIENCE_SETTINGS,
     libraryResources: DEMO_LIBRARY_RESOURCES,
+    teacherSchedulePreferences: DEFAULT_TEACHER_SCHEDULE_PREFERENCES,
+    schoolCalendar: null,
   });
 }
