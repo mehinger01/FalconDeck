@@ -44,7 +44,7 @@ const slides = [
     eyebrow: "Before you go",
     title: "Come say hello.",
     subtitle: "I’d love to meet you and hear what helps your student learn best.",
-    body: "Thank you for being here tonight. Strong classrooms are built through partnership, communication, and a shared belief that students can grow.",
+    body: "Thank you for being here today. Strong classrooms are built through partnership, communication, and a shared belief that students can grow.",
     kind: "closing",
   },
 ] as const;
@@ -57,9 +57,9 @@ export default function OpenHousePage() {
   const current = slides[index];
   const total = slides.length;
 
-  const go = (nextIndex: number) => {
-    setIndex((nextIndex + total) % total);
-    setProgressKey((key) => key + 1);
+  const go = (next: number) => {
+    setIndex((next + total) % total);
+    setProgressKey((k) => k + 1);
   };
 
   const next = () => go(index + 1);
@@ -69,7 +69,7 @@ export default function OpenHousePage() {
     if (paused) return;
     const id = window.setInterval(() => {
       setIndex((currentIndex) => (currentIndex + 1) % total);
-      setProgressKey((key) => key + 1);
+      setProgressKey((k) => k + 1);
     }, ROTATE_MS);
     return () => window.clearInterval(id);
   }, [paused, total, progressKey]);
@@ -97,7 +97,7 @@ export default function OpenHousePage() {
       case "closing":
         return "border-falcon-gold-300/70 bg-falcon-brown-800/70";
       default:
-        return "border-falcon-gold-500/50 bg-falcon-brown-900/60";
+        return "border-falcon-gold-500/50 bg-falcon-brown-900/62";
     }
   }, [current.kind]);
 
@@ -106,22 +106,24 @@ export default function OpenHousePage() {
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(201,162,39,0.18),transparent_34%),radial-gradient(circle_at_85%_15%,rgba(255,255,255,0.06),transparent_28%),linear-gradient(135deg,#21140b_0%,#2f1d10_55%,#21140b_100%)]" />
       <div className="absolute inset-0 opacity-[0.035] [background-image:linear-gradient(rgba(255,255,255,.7)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,.7)_1px,transparent_1px)] [background-size:42px_42px]" />
 
-      <section className="relative z-10 grid min-h-screen grid-cols-1 lg:grid-cols-[0.92fr_1.08fr]">
-        <div className="relative flex min-h-[44vh] items-end overflow-hidden lg:min-h-screen">
-          <img
-            src="/open-house/mike-ehinger.jpg"
-            alt="Illustrated portrait of Mr. Ehinger with interests including chess, mountains, AI, guitar, woodworking, tools, and a car"
-            className="absolute inset-0 h-full w-full object-cover object-center lg:object-contain lg:object-bottom"
-          />
-          <div className="absolute inset-0 bg-gradient-to-t from-falcon-brown-950 via-falcon-brown-950/5 to-transparent lg:bg-gradient-to-r lg:from-transparent lg:via-transparent lg:to-falcon-brown-950/70" />
-          <div className="relative z-10 m-5 rounded-2xl border border-white/15 bg-falcon-brown-950/70 px-4 py-3 backdrop-blur-md lg:m-8">
+      <section className="relative z-10 grid min-h-screen grid-cols-1 lg:grid-cols-[0.86fr_1.14fr]">
+        <div className="relative flex min-h-[42vh] items-center justify-center overflow-hidden px-6 pb-2 pt-8 sm:px-10 lg:min-h-screen lg:px-10 lg:py-10 xl:px-14">
+          <div className="relative flex w-full max-w-[780px] items-end justify-center">
+            <img
+              src="/open-house/mike-ehinger.jpg"
+              alt="Illustrated portrait of Mr. Ehinger with interests including chess, mountains, AI, guitar, woodworking, tools, and a car"
+              className="h-auto w-full max-w-[760px] object-contain drop-shadow-[0_24px_70px_rgba(0,0,0,0.45)]"
+            />
+          </div>
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-28 bg-gradient-to-t from-falcon-brown-950 via-falcon-brown-950/55 to-transparent lg:h-36" />
+          <div className="absolute bottom-4 left-4 z-10 rounded-2xl border border-white/15 bg-falcon-brown-950/78 px-4 py-3 backdrop-blur-md lg:bottom-8 lg:left-8">
             <div className="text-xs font-bold uppercase tracking-[0.22em] text-falcon-gold-300">Falcon Deck • Open House</div>
             <div className="mt-1 text-xl font-semibold">Mr. Ehinger</div>
             <div className="text-sm text-falcon-cream-300">Algebra 1 & Geometry</div>
           </div>
         </div>
 
-        <div className="flex min-h-[56vh] flex-col justify-between px-6 py-7 sm:px-10 lg:min-h-screen lg:px-14 lg:py-10 xl:px-20">
+        <div className="flex min-h-[58vh] flex-col justify-between px-6 py-7 sm:px-10 lg:min-h-screen lg:px-14 lg:py-10 xl:px-20">
           <header className="flex items-center justify-between gap-4">
             <div className="text-sm font-bold uppercase tracking-[0.24em] text-falcon-gold-400">Ogemaw Heights High School</div>
             <div className="rounded-full border border-falcon-gold-400/35 bg-falcon-gold-400/10 px-3 py-1 text-xs font-semibold text-falcon-gold-300">
