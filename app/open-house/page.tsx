@@ -99,7 +99,7 @@ export default function OpenHousePage() {
         <div className="relative flex min-h-[42vh] items-center justify-center overflow-hidden px-6 pb-2 pt-8 sm:px-10 lg:min-h-screen lg:px-10 lg:py-10 xl:px-14">
           <div className="relative flex w-full max-w-[780px] items-end justify-center">
             <img
-              src="/open-house/portrait?v=4"
+              src="/open-house/mike-ehinger-hq.jpg.png"
               alt="Illustrated portrait of Mr. Ehinger with interests including chess, mountains, AI, guitar, woodworking, tools, and a car"
               className="h-auto w-full max-w-[760px] object-contain drop-shadow-[0_24px_70px_rgba(0,0,0,0.45)]"
             />
