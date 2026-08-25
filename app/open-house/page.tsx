@@ -53,6 +53,7 @@ export default function OpenHousePage() {
   const [index, setIndex] = useState(0);
   const [paused, setPaused] = useState(false);
   const [progressKey, setProgressKey] = useState(0);
+  const [offlineReady, setOfflineReady] = useState(false);
   const current = slides[index];
   const total = slides.length;
 
@@ -60,6 +61,26 @@ export default function OpenHousePage() {
     setIndex((next + total) % total);
     setProgressKey((key) => key + 1);
   };
+
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+
+    let cancelled = false;
+
+    navigator.serviceWorker
+      .register("/open-house-sw.js", { scope: "/" })
+      .then(() => navigator.serviceWorker.ready)
+      .then(() => {
+        if (!cancelled) setOfflineReady(true);
+      })
+      .catch(() => {
+        if (!cancelled) setOfflineReady(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (paused) return;
@@ -115,7 +136,14 @@ export default function OpenHousePage() {
         <div className="flex min-h-[58vh] flex-col justify-between px-6 py-7 sm:px-10 lg:min-h-screen lg:px-14 lg:py-10 xl:px-20">
           <header className="flex items-center justify-between gap-4">
             <div className="text-sm font-bold uppercase tracking-[0.24em] text-falcon-gold-400">Ogemaw Heights High School</div>
-            <div className="rounded-full border border-falcon-gold-400/35 bg-falcon-gold-400/10 px-3 py-1 text-xs font-semibold text-falcon-gold-300">{index + 1} / {total}</div>
+            <div className="flex items-center gap-2">
+              {offlineReady && (
+                <div className="rounded-full border border-emerald-300/30 bg-emerald-300/10 px-3 py-1 text-xs font-semibold text-emerald-200">
+                  Offline ready
+                </div>
+              )}
+              <div className="rounded-full border border-falcon-gold-400/35 bg-falcon-gold-400/10 px-3 py-1 text-xs font-semibold text-falcon-gold-300">{index + 1} / {total}</div>
+            </div>
           </header>
 
           <div key={index} className={`my-8 animate-present-fade rounded-[2rem] border p-6 shadow-2xl backdrop-blur-sm sm:p-8 lg:p-10 ${accent}`}>
