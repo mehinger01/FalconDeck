@@ -53,73 +53,41 @@ export default function OpenHousePage() {
   const [index, setIndex] = useState(0);
   const [paused, setPaused] = useState(false);
   const [progressKey, setProgressKey] = useState(0);
-  const [portraitSrc, setPortraitSrc] = useState("/open-house/mike-ehinger.jpg");
-
   const current = slides[index];
   const total = slides.length;
 
   const go = (next: number) => {
     setIndex((next + total) % total);
-    setProgressKey((k) => k + 1);
+    setProgressKey((key) => key + 1);
   };
-
-  const next = () => go(index + 1);
-  const previous = () => go(index - 1);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/open-house/mike-ehinger-hq.b64", { cache: "no-store" })
-      .then((response) => {
-        if (!response.ok) throw new Error(`Portrait request failed: ${response.status}`);
-        return response.text();
-      })
-      .then((base64) => {
-        if (!cancelled && base64.trim()) {
-          setPortraitSrc(`data:image/jpeg;base64,${base64.trim()}`);
-        }
-      })
-      .catch(() => {
-        // Keep the bundled JPG fallback if the HQ payload cannot be loaded.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     if (paused) return;
     const id = window.setInterval(() => {
-      setIndex((currentIndex) => (currentIndex + 1) % total);
-      setProgressKey((k) => k + 1);
+      setIndex((value) => (value + 1) % total);
+      setProgressKey((key) => key + 1);
     }, ROTATE_MS);
     return () => window.clearInterval(id);
   }, [paused, total, progressKey]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "ArrowRight") next();
-      if (event.key === "ArrowLeft") previous();
+      if (event.key === "ArrowRight") go(index + 1);
+      if (event.key === "ArrowLeft") go(index - 1);
       if (event.key === " ") {
         event.preventDefault();
         setPaused((value) => !value);
       }
-      if (event.key.toLowerCase() === "f") {
-        document.documentElement.requestFullscreen?.();
-      }
+      if (event.key.toLowerCase() === "f") document.documentElement.requestFullscreen?.();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  });
+  }, [index, total]);
 
   const accent = useMemo(() => {
-    switch (current.kind) {
-      case "quote":
-        return "border-falcon-gold-400/70 bg-falcon-brown-900/70";
-      case "closing":
-        return "border-falcon-gold-300/70 bg-falcon-brown-800/70";
-      default:
-        return "border-falcon-gold-500/50 bg-falcon-brown-900/62";
-    }
+    if (current.kind === "quote") return "border-falcon-gold-400/70 bg-falcon-brown-900/70";
+    if (current.kind === "closing") return "border-falcon-gold-300/70 bg-falcon-brown-800/70";
+    return "border-falcon-gold-500/50 bg-falcon-brown-900/62";
   }, [current.kind]);
 
   return (
@@ -131,7 +99,7 @@ export default function OpenHousePage() {
         <div className="relative flex min-h-[42vh] items-center justify-center overflow-hidden px-6 pb-2 pt-8 sm:px-10 lg:min-h-screen lg:px-10 lg:py-10 xl:px-14">
           <div className="relative flex w-full max-w-[780px] items-end justify-center">
             <img
-              src={portraitSrc}
+              src="/open-house/portrait?v=4"
               alt="Illustrated portrait of Mr. Ehinger with interests including chess, mountains, AI, guitar, woodworking, tools, and a car"
               className="h-auto w-full max-w-[760px] object-contain drop-shadow-[0_24px_70px_rgba(0,0,0,0.45)]"
             />
@@ -147,65 +115,39 @@ export default function OpenHousePage() {
         <div className="flex min-h-[58vh] flex-col justify-between px-6 py-7 sm:px-10 lg:min-h-screen lg:px-14 lg:py-10 xl:px-20">
           <header className="flex items-center justify-between gap-4">
             <div className="text-sm font-bold uppercase tracking-[0.24em] text-falcon-gold-400">Ogemaw Heights High School</div>
-            <div className="rounded-full border border-falcon-gold-400/35 bg-falcon-gold-400/10 px-3 py-1 text-xs font-semibold text-falcon-gold-300">
-              {index + 1} / {total}
-            </div>
+            <div className="rounded-full border border-falcon-gold-400/35 bg-falcon-gold-400/10 px-3 py-1 text-xs font-semibold text-falcon-gold-300">{index + 1} / {total}</div>
           </header>
 
           <div key={index} className={`my-8 animate-present-fade rounded-[2rem] border p-6 shadow-2xl backdrop-blur-sm sm:p-8 lg:p-10 ${accent}`}>
             <p className="text-sm font-bold uppercase tracking-[0.22em] text-falcon-gold-300">{current.eyebrow}</p>
-            <h1 className="mt-4 max-w-4xl text-4xl font-black leading-[1.02] tracking-tight sm:text-5xl lg:text-6xl xl:text-7xl">
-              {current.title}
-            </h1>
-            <p className="mt-5 max-w-3xl text-lg font-semibold leading-relaxed text-falcon-gold-300 sm:text-xl lg:text-2xl">
-              {current.subtitle}
-            </p>
-            <p className="mt-5 max-w-3xl text-base leading-relaxed text-falcon-cream-200 sm:text-lg lg:text-xl">
-              {current.body}
-            </p>
+            <h1 className="mt-4 max-w-4xl text-4xl font-black leading-[1.02] tracking-tight sm:text-5xl lg:text-6xl xl:text-7xl">{current.title}</h1>
+            <p className="mt-5 max-w-3xl text-lg font-semibold leading-relaxed text-falcon-gold-300 sm:text-xl lg:text-2xl">{current.subtitle}</p>
+            <p className="mt-5 max-w-3xl text-base leading-relaxed text-falcon-cream-200 sm:text-lg lg:text-xl">{current.body}</p>
 
             {current.kind === "pillars" && (
               <div className="mt-7 grid grid-cols-2 gap-3 text-sm font-semibold sm:grid-cols-4 sm:text-base">
-                {["Warm-up", "Teach", "Practice", "Check"].map((item) => (
-                  <div key={item} className="rounded-xl border border-falcon-gold-400/25 bg-white/5 px-4 py-3 text-center">
-                    {item}
-                  </div>
-                ))}
+                {["Warm-up", "Teach", "Practice", "Check"].map((item) => <div key={item} className="rounded-xl border border-falcon-gold-400/25 bg-white/5 px-4 py-3 text-center">{item}</div>)}
               </div>
             )}
 
             {current.kind === "family" && (
               <div className="mt-7 grid gap-3 text-sm font-semibold sm:grid-cols-3 sm:text-base">
-                {["What did you learn?", "What comes next?", "What help do you need?"].map((item) => (
-                  <div key={item} className="rounded-xl border border-falcon-gold-400/25 bg-white/5 px-4 py-3 text-center">
-                    {item}
-                  </div>
-                ))}
+                {["What did you learn?", "What comes next?", "What help do you need?"].map((item) => <div key={item} className="rounded-xl border border-falcon-gold-400/25 bg-white/5 px-4 py-3 text-center">{item}</div>)}
               </div>
             )}
           </div>
 
           <footer>
             <div className="mb-4 h-1 overflow-hidden rounded-full bg-white/10">
-              {!paused && (
-                <div
-                  key={progressKey}
-                  className="h-full origin-left bg-falcon-gold-400"
-                  style={{ animation: `openHouseProgress ${ROTATE_MS}ms linear forwards` }}
-                />
-              )}
+              {!paused && <div key={progressKey} className="h-full origin-left bg-falcon-gold-400" style={{ animation: `openHouseProgress ${ROTATE_MS}ms linear forwards` }} />}
             </div>
             <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-falcon-cream-300">
               <div className="font-medium">Learn • Practice • Improve • Repeat</div>
               <div className="flex items-center gap-2">
-                <button onClick={previous} className="rounded-lg border border-white/15 bg-white/5 px-3 py-2 hover:bg-white/10" aria-label="Previous slide">←</button>
-                <button onClick={() => setPaused((value) => !value)} className="rounded-lg border border-falcon-gold-400/30 bg-falcon-gold-400/10 px-4 py-2 font-semibold text-falcon-gold-300 hover:bg-falcon-gold-400/15">
-                  {paused ? "Resume" : "Pause"}
-                </button>
-                <button onClick={next} className="rounded-lg border border-white/15 bg-white/5 px-3 py-2 hover:bg-white/10" aria-label="Next slide">→</button>
-                <button onClick={() => document.documentElement.requestFullscreen?.()} className="hidden rounded-lg border border-white/15 bg-white/5 px-3 py-2 hover:bg-white/10 sm:block">
-                  Full screen
-                </button>
+                <button onClick={() => go(index - 1)} className="rounded-lg border border-white/15 bg-white/5 px-3 py-2 hover:bg-white/10" aria-label="Previous slide">←</button>
+                <button onClick={() => setPaused((value) => !value)} className="rounded-lg border border-falcon-gold-400/30 bg-falcon-gold-400/10 px-4 py-2 font-semibold text-falcon-gold-300 hover:bg-falcon-gold-400/15">{paused ? "Resume" : "Pause"}</button>
+                <button onClick={() => go(index + 1)} className="rounded-lg border border-white/15 bg-white/5 px-3 py-2 hover:bg-white/10" aria-label="Next slide">→</button>
+                <button onClick={() => document.documentElement.requestFullscreen?.()} className="hidden rounded-lg border border-white/15 bg-white/5 px-3 py-2 hover:bg-white/10 sm:block">Full screen</button>
               </div>
             </div>
           </footer>
