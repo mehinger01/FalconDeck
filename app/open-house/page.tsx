@@ -57,9 +57,9 @@ export default function OpenHousePage() {
   const current = slides[index];
   const total = slides.length;
 
-  const go = (next: number) => {
-    setIndex((next + total) % total);
-    setProgressKey((k) => k + 1);
+  const go = (nextIndex: number) => {
+    setIndex((nextIndex + total) % total);
+    setProgressKey((key) => key + 1);
   };
 
   const next = () => go(index + 1);
@@ -69,7 +69,7 @@ export default function OpenHousePage() {
     if (paused) return;
     const id = window.setInterval(() => {
       setIndex((currentIndex) => (currentIndex + 1) % total);
-      setProgressKey((k) => k + 1);
+      setProgressKey((key) => key + 1);
     }, ROTATE_MS);
     return () => window.clearInterval(id);
   }, [paused, total, progressKey]);
@@ -97,7 +97,7 @@ export default function OpenHousePage() {
       case "closing":
         return "border-falcon-gold-300/70 bg-falcon-brown-800/70";
       default:
-        return "border-falcon-gold-500/50 bg-falcon-brown-900/62";
+        return "border-falcon-gold-500/50 bg-falcon-brown-900/60";
     }
   }, [current.kind]);
 
@@ -109,12 +109,12 @@ export default function OpenHousePage() {
       <section className="relative z-10 grid min-h-screen grid-cols-1 lg:grid-cols-[0.92fr_1.08fr]">
         <div className="relative flex min-h-[44vh] items-end overflow-hidden lg:min-h-screen">
           <img
-            src="/open-house/mike-ehinger.png"
+            src="/open-house/mike-ehinger.jpg"
             alt="Illustrated portrait of Mr. Ehinger with interests including chess, mountains, AI, guitar, woodworking, tools, and a car"
             className="absolute inset-0 h-full w-full object-cover object-center lg:object-contain lg:object-bottom"
           />
           <div className="absolute inset-0 bg-gradient-to-t from-falcon-brown-950 via-falcon-brown-950/5 to-transparent lg:bg-gradient-to-r lg:from-transparent lg:via-transparent lg:to-falcon-brown-950/70" />
-          <div className="relative z-10 m-5 rounded-2xl border border-white/15 bg-falcon-brown-950/72 px-4 py-3 backdrop-blur-md lg:m-8">
+          <div className="relative z-10 m-5 rounded-2xl border border-white/15 bg-falcon-brown-950/70 px-4 py-3 backdrop-blur-md lg:m-8">
             <div className="text-xs font-bold uppercase tracking-[0.22em] text-falcon-gold-300">Falcon Deck • Open House</div>
             <div className="mt-1 text-xl font-semibold">Mr. Ehinger</div>
             <div className="text-sm text-falcon-cream-300">Algebra 1 & Geometry</div>
