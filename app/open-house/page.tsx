@@ -53,6 +53,7 @@ export default function OpenHousePage() {
   const [index, setIndex] = useState(0);
   const [paused, setPaused] = useState(false);
   const [progressKey, setProgressKey] = useState(0);
+  const [portraitSrc, setPortraitSrc] = useState("/open-house/mike-ehinger.jpg");
 
   const current = slides[index];
   const total = slides.length;
@@ -64,6 +65,26 @@ export default function OpenHousePage() {
 
   const next = () => go(index + 1);
   const previous = () => go(index - 1);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/open-house/mike-ehinger-hq.b64", { cache: "no-store" })
+      .then((response) => {
+        if (!response.ok) throw new Error(`Portrait request failed: ${response.status}`);
+        return response.text();
+      })
+      .then((base64) => {
+        if (!cancelled && base64.trim()) {
+          setPortraitSrc(`data:image/jpeg;base64,${base64.trim()}`);
+        }
+      })
+      .catch(() => {
+        // Keep the bundled JPG fallback if the HQ payload cannot be loaded.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (paused) return;
@@ -110,7 +131,7 @@ export default function OpenHousePage() {
         <div className="relative flex min-h-[42vh] items-center justify-center overflow-hidden px-6 pb-2 pt-8 sm:px-10 lg:min-h-screen lg:px-10 lg:py-10 xl:px-14">
           <div className="relative flex w-full max-w-[780px] items-end justify-center">
             <img
-              src="/open-house/mike-ehinger.jpg"
+              src={portraitSrc}
               alt="Illustrated portrait of Mr. Ehinger with interests including chess, mountains, AI, guitar, woodworking, tools, and a car"
               className="h-auto w-full max-w-[760px] object-contain drop-shadow-[0_24px_70px_rgba(0,0,0,0.45)]"
             />
