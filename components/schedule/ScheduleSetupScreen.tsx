@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { usePathname } from "next/navigation";
 import { useAppData } from "@/lib/store/AppDataProvider";
-import { dataRepository } from "@/lib/data/localStorageRepository";
+import { dataRepository, saveDefaultScheduleSelection } from "@/lib/data/localStorageRepository";
 import { validateSchedule } from "@/lib/schedule/validateSchedule";
 import { BellScheduleImportPanel } from "./BellScheduleImportPanel";
 import { BlockList } from "./BlockList";
@@ -29,15 +29,46 @@ export function ScheduleSetupScreen() {
 
   async function saveScheduleNow() {
     if (isDemo) return;
-    setManualSaveState({ status: "saving", message: "Saving schedule…" });
-    const result = await dataRepository.save(data);
-    if (result.ok) {
-      setManualSaveState({ status: "saved", message: "Schedule saved." });
+
+    const currentDefault = data.schedules.find((schedule) => schedule.isDefault);
+    if (!currentDefault) {
+      setManualSaveState({ status: "error", message: "Choose a default schedule before saving." });
       return;
     }
+
+    setManualSaveState({ status: "saving", message: "Saving schedule…" });
+
+    const appDataResult = await dataRepository.save(data);
+    if (!appDataResult.ok) {
+      setManualSaveState({
+        status: "error",
+        message: appDataResult.message || "Schedule could not be saved.",
+      });
+      return;
+    }
+
+    const defaultResult = saveDefaultScheduleSelection(currentDefault.id);
+    if (!defaultResult.ok) {
+      setManualSaveState({
+        status: "error",
+        message: defaultResult.message || "Default schedule choice could not be saved.",
+      });
+      return;
+    }
+
+    const verification = await dataRepository.load();
+    const verifiedDefault = verification.schedules.find((schedule) => schedule.isDefault);
+    if (verifiedDefault?.id !== currentDefault.id) {
+      setManualSaveState({
+        status: "error",
+        message: "Falcon Deck could not verify the saved default schedule. Please try again.",
+      });
+      return;
+    }
+
     setManualSaveState({
-      status: "error",
-      message: result.message || "Schedule could not be saved.",
+      status: "saved",
+      message: `${currentDefault.name} saved as your default.`,
     });
   }
 
@@ -110,7 +141,7 @@ export function ScheduleSetupScreen() {
         )}
         {manualSaveState.status === "saved" && (
           <p className="mt-2 rounded-lg border border-green-700/20 bg-green-50 p-3 text-sm text-green-900">
-            Your current default schedule, lunch choice, and schedule setup were written to this browser.
+            Your chosen default schedule was written separately and verified by reloading it from browser storage.
           </p>
         )}
       </div>
