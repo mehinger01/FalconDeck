@@ -74,10 +74,10 @@ export function DemoPresentSimulator() {
         date: atDemoTime(regularDate, Math.floor((start + end) / 2)),
       });
       next.push({
-        id: "final-five",
-        label: "Final 5 Minutes",
-        description: `Jump to about four minutes before ${firstTeaching.label} ends`,
-        date: atDemoTime(regularDate, end - 4 * 60),
+        id: "final-thirty",
+        label: "Final 30 Seconds",
+        description: `Jump to 30 seconds before ${firstTeaching.label} ends`,
+        date: atDemoTime(regularDate, end - 30),
       });
     }
 
