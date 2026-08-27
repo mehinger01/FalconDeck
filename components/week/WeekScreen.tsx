@@ -19,8 +19,9 @@ import { WeekHeader } from "./WeekHeader";
  * projected fresh from `courses`/`classSections`/`lessons` on every render.
  *
  * "Active" means referenced by at least one non-passing block in the current
- * default schedule. This keeps placeholder/demo/old sections out of the live
- * teacher workflow without destructively deleting historical data.
+ * default schedule. Rows are ordered by the earliest assigned block start time
+ * so the planning surface mirrors the teacher's actual school day rather than
+ * creation/storage order.
  */
 export function WeekScreen() {
   const searchParams = useSearchParams();
@@ -34,16 +35,39 @@ export function WeekScreen() {
   const weekStart = getWeekStart(searchParams.get("date") ?? todayDateKey);
   const courseFilter = searchParams.get("course") ?? "";
 
-  const activeSectionIds = useMemo(() => {
-    if (!schedule) return new Set<string>();
-    return new Set(
-      schedule.blocks
-        .filter((block) => block.kind !== "passing" && block.classSectionId)
-        .map((block) => block.classSectionId as string),
-    );
+  const sectionStartTimes = useMemo(() => {
+    const result = new Map<string, string>();
+    if (!schedule) return result;
+
+    for (const block of schedule.blocks) {
+      if (block.kind === "passing" || !block.classSectionId) continue;
+      const current = result.get(block.classSectionId);
+      if (!current || block.startTime < current) {
+        result.set(block.classSectionId, block.startTime);
+      }
+    }
+
+    return result;
   }, [schedule]);
 
-  const activeSections = data.classSections.filter((section) => activeSectionIds.has(section.id));
+  const activeSectionIds = useMemo(
+    () => new Set(sectionStartTimes.keys()),
+    [sectionStartTimes],
+  );
+
+  const activeSections = useMemo(
+    () =>
+      data.classSections
+        .filter((section) => activeSectionIds.has(section.id))
+        .sort((a, b) => {
+          const aStart = sectionStartTimes.get(a.id) ?? "99:99";
+          const bStart = sectionStartTimes.get(b.id) ?? "99:99";
+          const timeCompare = aStart.localeCompare(bStart);
+          return timeCompare !== 0 ? timeCompare : a.name.localeCompare(b.name);
+        }),
+    [data.classSections, activeSectionIds, sectionStartTimes],
+  );
+
   const filteredSections = courseFilter
     ? activeSections.filter((section) => section.courseId === courseFilter)
     : activeSections;
