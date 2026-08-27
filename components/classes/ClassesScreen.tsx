@@ -17,7 +17,7 @@ export function ClassesScreen() {
   const [newSectionCourseId, setNewSectionCourseId] = useState("");
   const [expandedRoutineSectionId, setExpandedRoutineSectionId] = useState<string | null>(null);
 
-  const activeSectionIds = useMemo(() => {
+  const scheduledSectionIds = useMemo(() => {
     if (!defaultSchedule) return new Set<string>();
     return new Set(
       defaultSchedule.blocks
@@ -26,13 +26,13 @@ export function ClassesScreen() {
     );
   }, [defaultSchedule]);
 
-  const activeSections = data.classSections.filter((section) => activeSectionIds.has(section.id));
-  const inactiveSections = data.classSections.filter((section) => !activeSectionIds.has(section.id));
-  const activeCourseIds = new Set(activeSections.map((section) => section.courseId));
-  const activeCourses = data.courses.filter((course) => activeCourseIds.has(course.id));
-  const inactiveCourses = data.courses.filter((course) => !activeCourseIds.has(course.id));
+  const scheduledSections = data.classSections.filter((section) => scheduledSectionIds.has(section.id));
+  const unscheduledSections = data.classSections.filter((section) => !scheduledSectionIds.has(section.id));
+  const scheduledCourseIds = new Set(scheduledSections.map((section) => section.courseId));
+  const currentCourses = data.courses.filter((course) => scheduledCourseIds.has(course.id));
+  const otherCourses = data.courses.filter((course) => !scheduledCourseIds.has(course.id));
 
-  function renderSection(section: (typeof data.classSections)[number]) {
+  function renderSection(section: (typeof data.classSections)[number], showScheduleStatus = false) {
     const course = data.courses.find((c) => c.id === section.courseId);
     const hasArrivalRoutine =
       (findClassPresentationSettings(data.classPresentationSettings, section.id)?.arrivalInstructions.length ?? 0) > 0;
@@ -42,10 +42,25 @@ export function ClassesScreen() {
       <li key={section.id} className="rounded-lg border border-falcon-brown-700/15 bg-white/60 p-3">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <p className="font-semibold text-falcon-brown-900">{section.name}</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="font-semibold text-falcon-brown-900">{section.name}</p>
+              {showScheduleStatus && (
+                <span className="rounded-full border border-amber-700/20 bg-amber-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-900">
+                  Not on current schedule
+                </span>
+              )}
+            </div>
             <p className="text-xs text-falcon-brown-700/60">{course?.name ?? "Unknown course"}</p>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+            {showScheduleStatus && (
+              <Link
+                href="/schedule"
+                className="rounded-md border border-amber-700/30 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100"
+              >
+                Assign Schedule
+              </Link>
+            )}
             <button
               type="button"
               onClick={() => setExpandedRoutineSectionId(routineExpanded ? null : section.id)}
@@ -72,42 +87,45 @@ export function ClassesScreen() {
       <div className="mb-6">
         <h1 className="text-3xl font-bold text-falcon-brown-900">Classes</h1>
         <p className="mt-1 text-sm text-falcon-brown-700/70">
-          Your active classes come from the sections assigned to your default schedule. Old or unused setup stays out of the way below.
+          Classes are never archived automatically. Schedule Setup only determines when each section runs.
         </p>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
         <section>
-          <h2 className="mb-2 text-sm font-bold uppercase tracking-wide text-falcon-brown-700/70">Current Courses</h2>
-          {activeCourses.length === 0 ? (
+          <h2 className="mb-2 text-sm font-bold uppercase tracking-wide text-falcon-brown-700/70">Courses</h2>
+          {data.courses.length === 0 ? (
             <p className="rounded-lg border border-dashed border-falcon-brown-700/30 p-4 text-sm text-falcon-brown-700/60">
-              No active courses yet. Assign class sections to your default schedule in Schedule Setup.
+              No courses yet. Add one below to start building your class list.
             </p>
           ) : (
-            <ul className="space-y-2">
-              {activeCourses.map((course) => (
-                <li key={course.id} className="flex items-center gap-2 rounded-lg border border-falcon-brown-700/15 bg-white/60 p-3">
-                  <span className="h-3 w-3 rounded-full" style={{ backgroundColor: course.colorHex ?? "#7A7267" }} />
-                  <span className="font-semibold text-falcon-brown-900">{course.name}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-
-          {inactiveCourses.length > 0 && (
-            <details className="mt-3 rounded-lg border border-falcon-brown-700/15 bg-white/35 p-3">
-              <summary className="cursor-pointer text-sm font-semibold text-falcon-brown-700">
-                Inactive / old courses ({inactiveCourses.length})
-              </summary>
-              <ul className="mt-3 space-y-2">
-                {inactiveCourses.map((course) => (
-                  <li key={course.id} className="flex items-center gap-2 rounded-md border border-falcon-brown-700/10 bg-white/50 p-2 text-sm text-falcon-brown-700/75">
-                    <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: course.colorHex ?? "#7A7267" }} />
-                    {course.name}
-                  </li>
-                ))}
-              </ul>
-            </details>
+            <>
+              {currentCourses.length > 0 && (
+                <ul className="space-y-2">
+                  {currentCourses.map((course) => (
+                    <li key={course.id} className="flex items-center gap-2 rounded-lg border border-falcon-brown-700/15 bg-white/60 p-3">
+                      <span className="h-3 w-3 rounded-full" style={{ backgroundColor: course.colorHex ?? "#7A7267" }} />
+                      <span className="font-semibold text-falcon-brown-900">{course.name}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {otherCourses.length > 0 && (
+                <details className="mt-3 rounded-lg border border-falcon-brown-700/15 bg-white/35 p-3">
+                  <summary className="cursor-pointer text-sm font-semibold text-falcon-brown-700">
+                    Other courses ({otherCourses.length})
+                  </summary>
+                  <ul className="mt-3 space-y-2">
+                    {otherCourses.map((course) => (
+                      <li key={course.id} className="flex items-center gap-2 rounded-md border border-falcon-brown-700/10 bg-white/50 p-2 text-sm text-falcon-brown-700/75">
+                        <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: course.colorHex ?? "#7A7267" }} />
+                        {course.name}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </>
           )}
 
           <form
@@ -133,22 +151,30 @@ export function ClassesScreen() {
         </section>
 
         <section>
-          <h2 className="mb-2 text-sm font-bold uppercase tracking-wide text-falcon-brown-700/70">Current Class Sections</h2>
-          {activeSections.length === 0 ? (
-            <p className="rounded-lg border border-dashed border-falcon-brown-700/30 p-4 text-sm text-falcon-brown-700/60">
-              No active sections yet. Map sections to your default schedule in Schedule Setup.
-            </p>
-          ) : (
-            <ul className="space-y-2">{activeSections.map(renderSection)}</ul>
+          <h2 className="mb-2 text-sm font-bold uppercase tracking-wide text-falcon-brown-700/70">Class Sections</h2>
+
+          {scheduledSections.length > 0 && (
+            <ul className="space-y-2">{scheduledSections.map((section) => renderSection(section))}</ul>
           )}
 
-          {inactiveSections.length > 0 && (
-            <details className="mt-3 rounded-lg border border-falcon-brown-700/15 bg-white/35 p-3">
-              <summary className="cursor-pointer text-sm font-semibold text-falcon-brown-700">
-                Inactive / old sections ({inactiveSections.length})
-              </summary>
-              <ul className="mt-3 space-y-2">{inactiveSections.map(renderSection)}</ul>
-            </details>
+          {unscheduledSections.length > 0 && (
+            <div className="mt-3 rounded-lg border border-amber-700/15 bg-amber-50/40 p-3">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-sm font-bold text-falcon-brown-900">Needs schedule assignment</p>
+                  <p className="text-xs text-falcon-brown-700/65">
+                    These sections still exist normally; they are simply not referenced by your current default schedule.
+                  </p>
+                </div>
+                <Link
+                  href="/schedule"
+                  className="rounded-md border border-falcon-brown-700/30 bg-white px-3 py-1.5 text-xs font-semibold text-falcon-brown-800 hover:bg-falcon-gold-300/30"
+                >
+                  Open Schedule Setup
+                </Link>
+              </div>
+              <ul className="space-y-2">{unscheduledSections.map((section) => renderSection(section, true))}</ul>
+            </div>
           )}
 
           <form
