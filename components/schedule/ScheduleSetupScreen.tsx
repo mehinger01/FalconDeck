@@ -1,7 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import { usePathname } from "next/navigation";
 import { useAppData } from "@/lib/store/AppDataProvider";
+import { dataRepository } from "@/lib/data/localStorageRepository";
 import { validateSchedule } from "@/lib/schedule/validateSchedule";
 import { BellScheduleImportPanel } from "./BellScheduleImportPanel";
 import { BlockList } from "./BlockList";
@@ -13,12 +15,31 @@ import { ValidationBanner } from "./ValidationBanner";
 
 export function ScheduleSetupScreen() {
   const { data, actions, persistence } = useAppData();
+  const pathname = usePathname();
+  const isDemo = pathname.startsWith("/demo");
   const defaultId = data.schedules.find((s) => s.isDefault)?.id ?? data.schedules[0]?.id ?? null;
   const [selectedScheduleId, setSelectedScheduleId] = useState<string | null>(defaultId);
+  const [manualSaveState, setManualSaveState] = useState<
+    { status: "idle" | "saving" | "saved" | "error"; message: string }
+  >({ status: "idle", message: "" });
 
   const selectedSchedule =
     data.schedules.find((s) => s.id === selectedScheduleId) ?? data.schedules[0] ?? null;
   const isEditable = selectedSchedule ? selectedSchedule.source !== "built-in" : false;
+
+  async function saveScheduleNow() {
+    if (isDemo) return;
+    setManualSaveState({ status: "saving", message: "Saving schedule…" });
+    const result = await dataRepository.save(data);
+    if (result.ok) {
+      setManualSaveState({ status: "saved", message: "Schedule saved." });
+      return;
+    }
+    setManualSaveState({
+      status: "error",
+      message: result.message || "Schedule could not be saved.",
+    });
+  }
 
   return (
     <div>
@@ -31,32 +52,65 @@ export function ScheduleSetupScreen() {
               which schedule applies on which date.
             </p>
           </div>
-          <div
-            role="status"
-            className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${
-              persistence.status === "error"
-                ? "border-red-700/30 bg-red-50 text-red-900"
-                : persistence.status === "saving"
-                  ? "border-amber-600/30 bg-amber-50 text-amber-900"
-                  : persistence.status === "saved"
-                    ? "border-green-700/25 bg-green-50 text-green-900"
-                    : "border-falcon-brown-700/20 bg-white/50 text-falcon-brown-700/70"
-            }`}
-          >
-            {persistence.status === "error"
-              ? `Save failed: ${persistence.error ?? "browser storage rejected the change"}`
-              : persistence.status === "saving"
-                ? "Saving…"
-                : persistence.status === "saved"
-                  ? "Saved"
-                  : "Ready"}
+
+          <div className="flex flex-col items-end gap-2">
+            {!isDemo && (
+              <button
+                type="button"
+                onClick={saveScheduleNow}
+                disabled={manualSaveState.status === "saving"}
+                className="rounded-md bg-falcon-brown-900 px-4 py-2 text-sm font-bold text-falcon-cream-100 shadow-sm hover:bg-falcon-brown-800 disabled:cursor-wait disabled:opacity-60"
+              >
+                {manualSaveState.status === "saving" ? "Saving…" : "Save Schedule"}
+              </button>
+            )}
+
+            {manualSaveState.status !== "idle" ? (
+              <div
+                role="status"
+                className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${
+                  manualSaveState.status === "error"
+                    ? "border-red-700/30 bg-red-50 text-red-900"
+                    : manualSaveState.status === "saving"
+                      ? "border-amber-600/30 bg-amber-50 text-amber-900"
+                      : "border-green-700/25 bg-green-50 text-green-900"
+                }`}
+              >
+                {manualSaveState.message}
+              </div>
+            ) : (
+              <div
+                role="status"
+                className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${
+                  persistence.status === "error"
+                    ? "border-red-700/30 bg-red-50 text-red-900"
+                    : persistence.status === "saving"
+                      ? "border-amber-600/30 bg-amber-50 text-amber-900"
+                      : persistence.status === "saved"
+                        ? "border-green-700/25 bg-green-50 text-green-900"
+                        : "border-falcon-brown-700/20 bg-white/50 text-falcon-brown-700/70"
+                }`}
+              >
+                {persistence.status === "error"
+                  ? `Autosave failed: ${persistence.error ?? "browser storage rejected the change"}`
+                  : persistence.status === "saving"
+                    ? "Autosaving…"
+                    : persistence.status === "saved"
+                      ? "Autosaved"
+                      : "Ready"}
+              </div>
+            )}
           </div>
         </div>
-        {persistence.status === "error" && (
+
+        {manualSaveState.status === "error" && (
           <p className="mt-2 rounded-lg border border-red-700/20 bg-red-50 p-3 text-sm text-red-900">
-            Falcon Deck changed the schedule on screen, but your browser did not persist it. Do not leave
-            this page assuming the change is saved. The message above identifies the storage failure so it
-            can be corrected instead of silently reverting later.
+            Manual save failed: {manualSaveState.message}
+          </p>
+        )}
+        {manualSaveState.status === "saved" && (
+          <p className="mt-2 rounded-lg border border-green-700/20 bg-green-50 p-3 text-sm text-green-900">
+            Your current default schedule, lunch choice, and schedule setup were written to this browser.
           </p>
         )}
       </div>
