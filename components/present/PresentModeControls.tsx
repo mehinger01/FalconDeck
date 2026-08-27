@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useAppData } from "@/lib/store/AppDataProvider";
+import { useAppData, useDefaultSchedule } from "@/lib/store/AppDataProvider";
 import type { ResolvedScheduleBlock } from "@/types/schedule";
 
 export type PresentMode = "live" | "preview";
@@ -43,7 +43,31 @@ export function PresentModeControls({
 }) {
   const router = useRouter();
   const { data } = useAppData();
+  const defaultSchedule = useDefaultSchedule();
   const [expanded, setExpanded] = useState(false);
+
+  const scheduledSections = useMemo(() => {
+    if (!defaultSchedule) return [];
+
+    const firstTeachingStartBySection = new Map<string, string>();
+    for (const block of defaultSchedule.blocks) {
+      const isTeachingBlock = block.kind === "instructional" || block.kind === "enrichment";
+      if (!isTeachingBlock || !block.classSectionId) continue;
+
+      const previousStart = firstTeachingStartBySection.get(block.classSectionId);
+      if (!previousStart || block.startTime < previousStart) {
+        firstTeachingStartBySection.set(block.classSectionId, block.startTime);
+      }
+    }
+
+    return data.classSections
+      .filter((section) => firstTeachingStartBySection.has(section.id))
+      .sort((a, b) => {
+        const aStart = firstTeachingStartBySection.get(a.id) ?? "99:99";
+        const bStart = firstTeachingStartBySection.get(b.id) ?? "99:99";
+        return aStart.localeCompare(bStart) || a.name.localeCompare(b.name);
+      });
+  }, [data.classSections, defaultSchedule]);
 
   function go(next: Partial<{ mode: PresentMode; date: string; classSectionId: string | null; blockId: string | null }>) {
     router.replace(
@@ -125,7 +149,7 @@ export function PresentModeControls({
           className="rounded border border-falcon-cream-200/20 bg-falcon-brown-900 px-2 py-1 text-falcon-cream-100 disabled:cursor-not-allowed"
         >
           <option value="">— Choose —</option>
-          {data.classSections.map((section) => (
+          {scheduledSections.map((section) => (
             <option key={section.id} value={section.id}>
               {section.name}
             </option>
