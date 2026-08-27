@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useAppData, useDefaultSchedule } from "@/lib/store/AppDataProvider";
 import { getLocalDateKey } from "@/lib/schedule/localDate";
@@ -17,40 +17,97 @@ export function ClassesScreen() {
   const [newSectionCourseId, setNewSectionCourseId] = useState("");
   const [expandedRoutineSectionId, setExpandedRoutineSectionId] = useState<string | null>(null);
 
+  const activeSectionIds = useMemo(() => {
+    if (!defaultSchedule) return new Set<string>();
+    return new Set(
+      defaultSchedule.blocks
+        .filter((block) => block.kind !== "passing" && block.classSectionId)
+        .map((block) => block.classSectionId as string),
+    );
+  }, [defaultSchedule]);
+
+  const activeSections = data.classSections.filter((section) => activeSectionIds.has(section.id));
+  const inactiveSections = data.classSections.filter((section) => !activeSectionIds.has(section.id));
+  const activeCourseIds = new Set(activeSections.map((section) => section.courseId));
+  const activeCourses = data.courses.filter((course) => activeCourseIds.has(course.id));
+  const inactiveCourses = data.courses.filter((course) => !activeCourseIds.has(course.id));
+
+  function renderSection(section: (typeof data.classSections)[number]) {
+    const course = data.courses.find((c) => c.id === section.courseId);
+    const hasArrivalRoutine =
+      (findClassPresentationSettings(data.classPresentationSettings, section.id)?.arrivalInstructions.length ?? 0) > 0;
+    const routineExpanded = expandedRoutineSectionId === section.id;
+
+    return (
+      <li key={section.id} className="rounded-lg border border-falcon-brown-700/15 bg-white/60 p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="font-semibold text-falcon-brown-900">{section.name}</p>
+            <p className="text-xs text-falcon-brown-700/60">{course?.name ?? "Unknown course"}</p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setExpandedRoutineSectionId(routineExpanded ? null : section.id)}
+              aria-expanded={routineExpanded}
+              className="rounded-md border border-falcon-brown-700/30 px-3 py-1.5 text-xs font-semibold text-falcon-brown-800 hover:bg-falcon-gold-300/40"
+            >
+              {hasArrivalRoutine ? "Arrival Routine ✓" : "Arrival Routine"}
+            </button>
+            <Link
+              href={`/lessons?date=${todayKey}&section=${section.id}`}
+              className="rounded-md border border-falcon-brown-700/30 px-3 py-1.5 text-xs font-semibold text-falcon-brown-800 hover:bg-falcon-gold-300/40"
+            >
+              Today&rsquo;s Lesson
+            </Link>
+          </div>
+        </div>
+        {routineExpanded && <ArrivalRoutineEditor classSectionId={section.id} />}
+      </li>
+    );
+  }
+
   return (
     <div>
       <div className="mb-6">
         <h1 className="text-3xl font-bold text-falcon-brown-900">Classes</h1>
         <p className="mt-1 text-sm text-falcon-brown-700/70">
-          Placeholder demo courses and sections — not the official OHHS course catalog. Sections
-          are what schedule blocks reference in Schedule Setup.
+          Your active classes come from the sections assigned to your default schedule. Old or unused setup stays out of the way below.
         </p>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
         <section>
-          <h2 className="mb-2 text-sm font-bold uppercase tracking-wide text-falcon-brown-700/70">
-            Courses
-          </h2>
-          {data.courses.length === 0 ? (
+          <h2 className="mb-2 text-sm font-bold uppercase tracking-wide text-falcon-brown-700/70">Current Courses</h2>
+          {activeCourses.length === 0 ? (
             <p className="rounded-lg border border-dashed border-falcon-brown-700/30 p-4 text-sm text-falcon-brown-700/60">
-              No courses yet. Add one below to start building your class list.
+              No active courses yet. Assign class sections to your default schedule in Schedule Setup.
             </p>
           ) : (
             <ul className="space-y-2">
-              {data.courses.map((course) => (
-                <li
-                  key={course.id}
-                  className="flex items-center gap-2 rounded-lg border border-falcon-brown-700/15 bg-white/60 p-3"
-                >
-                  <span
-                    className="h-3 w-3 rounded-full"
-                    style={{ backgroundColor: course.colorHex ?? "#7A7267" }}
-                  />
+              {activeCourses.map((course) => (
+                <li key={course.id} className="flex items-center gap-2 rounded-lg border border-falcon-brown-700/15 bg-white/60 p-3">
+                  <span className="h-3 w-3 rounded-full" style={{ backgroundColor: course.colorHex ?? "#7A7267" }} />
                   <span className="font-semibold text-falcon-brown-900">{course.name}</span>
                 </li>
               ))}
             </ul>
+          )}
+
+          {inactiveCourses.length > 0 && (
+            <details className="mt-3 rounded-lg border border-falcon-brown-700/15 bg-white/35 p-3">
+              <summary className="cursor-pointer text-sm font-semibold text-falcon-brown-700">
+                Inactive / old courses ({inactiveCourses.length})
+              </summary>
+              <ul className="mt-3 space-y-2">
+                {inactiveCourses.map((course) => (
+                  <li key={course.id} className="flex items-center gap-2 rounded-md border border-falcon-brown-700/10 bg-white/50 p-2 text-sm text-falcon-brown-700/75">
+                    <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: course.colorHex ?? "#7A7267" }} />
+                    {course.name}
+                  </li>
+                ))}
+              </ul>
+            </details>
           )}
 
           <form
@@ -69,65 +126,29 @@ export function ClassesScreen() {
               placeholder="New course name"
               className="flex-1 rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm text-falcon-brown-900"
             />
-            <button
-              type="submit"
-              className="rounded-md bg-falcon-brown-900 px-3 py-1.5 text-sm font-semibold text-falcon-cream-100"
-            >
+            <button type="submit" className="rounded-md bg-falcon-brown-900 px-3 py-1.5 text-sm font-semibold text-falcon-cream-100">
               Add Course
             </button>
           </form>
         </section>
 
         <section>
-          <h2 className="mb-2 text-sm font-bold uppercase tracking-wide text-falcon-brown-700/70">
-            Class Sections
-          </h2>
-          {data.classSections.length === 0 ? (
+          <h2 className="mb-2 text-sm font-bold uppercase tracking-wide text-falcon-brown-700/70">Current Class Sections</h2>
+          {activeSections.length === 0 ? (
             <p className="rounded-lg border border-dashed border-falcon-brown-700/30 p-4 text-sm text-falcon-brown-700/60">
-              No class sections yet. Add one below - sections are what schedule blocks and lessons reference.
+              No active sections yet. Map sections to your default schedule in Schedule Setup.
             </p>
           ) : (
-            <ul className="space-y-2">
-              {data.classSections.map((section) => {
-                const course = data.courses.find((c) => c.id === section.courseId);
-                const hasArrivalRoutine =
-                  (findClassPresentationSettings(data.classPresentationSettings, section.id)?.arrivalInstructions
-                    .length ?? 0) > 0;
-                const routineExpanded = expandedRoutineSectionId === section.id;
-                return (
-                  <li
-                    key={section.id}
-                    className="rounded-lg border border-falcon-brown-700/15 bg-white/60 p-3"
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <p className="font-semibold text-falcon-brown-900">{section.name}</p>
-                        <p className="text-xs text-falcon-brown-700/60">{course?.name ?? "Unknown course"}</p>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setExpandedRoutineSectionId(routineExpanded ? null : section.id)
-                          }
-                          aria-expanded={routineExpanded}
-                          className="rounded-md border border-falcon-brown-700/30 px-3 py-1.5 text-xs font-semibold text-falcon-brown-800 hover:bg-falcon-gold-300/40"
-                        >
-                          {hasArrivalRoutine ? "Arrival Routine ✓" : "Arrival Routine"}
-                        </button>
-                        <Link
-                          href={`/lessons?date=${todayKey}&section=${section.id}`}
-                          className="rounded-md border border-falcon-brown-700/30 px-3 py-1.5 text-xs font-semibold text-falcon-brown-800 hover:bg-falcon-gold-300/40"
-                        >
-                          Today&rsquo;s Lesson
-                        </Link>
-                      </div>
-                    </div>
-                    {routineExpanded && <ArrivalRoutineEditor classSectionId={section.id} />}
-                  </li>
-                );
-              })}
-            </ul>
+            <ul className="space-y-2">{activeSections.map(renderSection)}</ul>
+          )}
+
+          {inactiveSections.length > 0 && (
+            <details className="mt-3 rounded-lg border border-falcon-brown-700/15 bg-white/35 p-3">
+              <summary className="cursor-pointer text-sm font-semibold text-falcon-brown-700">
+                Inactive / old sections ({inactiveSections.length})
+              </summary>
+              <ul className="mt-3 space-y-2">{inactiveSections.map(renderSection)}</ul>
+            </details>
           )}
 
           <form
@@ -147,9 +168,7 @@ export function ClassesScreen() {
             >
               <option value="">Choose a course…</option>
               {data.courses.map((course) => (
-                <option key={course.id} value={course.id}>
-                  {course.name}
-                </option>
+                <option key={course.id} value={course.id}>{course.name}</option>
               ))}
             </select>
             <input
@@ -158,10 +177,7 @@ export function ClassesScreen() {
               placeholder="New section name"
               className="flex-1 rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1.5 text-sm text-falcon-brown-900"
             />
-            <button
-              type="submit"
-              className="rounded-md bg-falcon-brown-900 px-3 py-1.5 text-sm font-semibold text-falcon-cream-100"
-            >
+            <button type="submit" className="rounded-md bg-falcon-brown-900 px-3 py-1.5 text-sm font-semibold text-falcon-cream-100">
               Add Section
             </button>
           </form>
