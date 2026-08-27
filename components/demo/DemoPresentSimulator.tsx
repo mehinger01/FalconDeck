@@ -6,7 +6,7 @@ import { useAppData } from "@/lib/store/AppDataProvider";
 import { useSimulatedNow } from "@/lib/hooks/useSimulatedNow";
 import { useClassroomTimer } from "@/lib/tools/timer/useClassroomTimer";
 import { resolveTeacherSchedule } from "@/lib/schedule/resolveTeacherSchedule";
-import { secondsToTimeString, timeStringToSeconds } from "@/lib/schedule/time";
+import { timeStringToSeconds } from "@/lib/schedule/time";
 import type { LunchWave } from "@/types/teacherSchedule";
 import { LUNCH_WAVE_LABELS } from "@/types/teacherSchedule";
 import { LivePresentScreen } from "@/components/present/LivePresentScreen";
@@ -26,8 +26,12 @@ interface DynamicScenario {
   date: Date;
 }
 
-function atDemoTime(dateKey: string, seconds: number): Date {
-  const time = secondsToTimeString(Math.max(0, Math.min(seconds, 23 * 3600 + 59 * 60 + 59)));
+function atDemoTime(dateKey: string, totalSeconds: number): Date {
+  const clamped = Math.max(0, Math.min(Math.floor(totalSeconds), 23 * 3600 + 59 * 60 + 59));
+  const hours = Math.floor(clamped / 3600);
+  const minutes = Math.floor((clamped % 3600) / 60);
+  const seconds = clamped % 60;
+  const time = [hours, minutes, seconds].map((value) => String(value).padStart(2, "0")).join(":");
   return new Date(`${dateKey}T${time}-04:00`);
 }
 
@@ -76,7 +80,7 @@ export function DemoPresentSimulator() {
       next.push({
         id: "final-thirty",
         label: "Final 30 Seconds",
-        description: `Jump to 30 seconds before ${firstTeaching.label} ends`,
+        description: `Jump to exactly 30 seconds before ${firstTeaching.label} ends`,
         date: atDemoTime(regularDate, end - 30),
       });
     }
