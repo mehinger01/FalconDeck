@@ -4,6 +4,7 @@ import { createDemoAppData } from "./demoData";
 import type { AppData, DataRepository, SaveResult } from "./types";
 
 const STORAGE_KEY = "falcon-deck:app-data:v1";
+const DEFAULT_SCHEDULE_KEY = "falcon-deck:default-schedule-id:v1";
 
 function readStoredData(): Partial<AppData> | null {
   if (typeof window === "undefined") return null;
@@ -12,6 +13,31 @@ function readStoredData(): Partial<AppData> | null {
     return raw ? (JSON.parse(raw) as Partial<AppData>) : null;
   } catch {
     return null;
+  }
+}
+
+function readStoredDefaultScheduleId(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(DEFAULT_SCHEDULE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function saveDefaultScheduleSelection(scheduleId: string): SaveResult {
+  if (typeof window === "undefined") {
+    return { ok: false, reason: "unavailable", message: "Storage is unavailable in this environment." };
+  }
+
+  try {
+    window.localStorage.setItem(DEFAULT_SCHEDULE_KEY, scheduleId);
+    return { ok: true };
+  } catch (error) {
+    if (isQuotaExceededError(error)) {
+      return { ok: false, reason: "quota-exceeded", message: "Local storage is full." };
+    }
+    return { ok: false, reason: "unknown", message: "Storage may be unavailable (e.g. private browsing)." };
   }
 }
 
@@ -55,13 +81,24 @@ export class LocalStorageDataRepository implements DataRepository {
   async load(): Promise<AppData> {
     const stored = readStoredData();
     if (!stored) return createDemoAppData();
+
+    const savedDefaultScheduleId = readStoredDefaultScheduleId();
+    const schedules = stored.schedules ?? [];
+    const normalizedSchedules =
+      savedDefaultScheduleId && schedules.some((schedule) => schedule.id === savedDefaultScheduleId)
+        ? schedules.map((schedule) => ({
+            ...schedule,
+            isDefault: schedule.id === savedDefaultScheduleId,
+          }))
+        : schedules;
+
     // Defensive defaults for data saved by an earlier schema version (e.g.
     // pre-Phase-2, before `lessons` existed) - avoids a hard crash on
     // .map/.filter over a missing field for anyone with existing local data.
     return {
       courses: stored.courses ?? [],
       classSections: stored.classSections ?? [],
-      schedules: stored.schedules ?? [],
+      schedules: normalizedSchedules,
       lessons: stored.lessons ?? [],
       classPresentationSettings: stored.classPresentationSettings ?? [],
       classroomExperienceSettings: {
@@ -89,8 +126,8 @@ export class LocalStorageDataRepository implements DataRepository {
     // keeps this from looping back on itself.
     function handleStorageEvent(event: StorageEvent) {
       // event.key is null when localStorage.clear() was called elsewhere -
-      // treat that as "something changed" too, not just our own key.
-      if (event.key !== null && event.key !== STORAGE_KEY) return;
+      // treat that as "something changed" too, not just our own keys.
+      if (event.key !== null && event.key !== STORAGE_KEY && event.key !== DEFAULT_SCHEDULE_KEY) return;
       onChange();
     }
 
