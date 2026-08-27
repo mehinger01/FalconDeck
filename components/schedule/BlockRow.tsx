@@ -18,6 +18,15 @@ export function BlockRow({
   isLast: boolean;
 }) {
   const { actions } = useAppData();
+  const canAssignClass = block.kind === "instructional" || block.kind === "enrichment";
+
+  function changeKind(kind: ScheduleBlock["kind"]) {
+    const nextCanAssignClass = kind === "instructional" || kind === "enrichment";
+    actions.updateBlock(scheduleId, block.id, {
+      kind,
+      ...(nextCanAssignClass ? {} : { classSectionId: null }),
+    });
+  }
 
   return (
     <li className="rounded-xl border border-falcon-brown-700/15 bg-white/60 p-4">
@@ -57,10 +66,7 @@ export function BlockRow({
 
         <label className="flex flex-col gap-1">
           <span className="text-xs font-semibold text-falcon-brown-700/70">Kind</span>
-          <KindSelect
-            value={block.kind}
-            onChange={(kind) => actions.updateBlock(scheduleId, block.id, { kind })}
-          />
+          <KindSelect value={block.kind} onChange={changeKind} />
         </label>
 
         {block.kind === "custom" && (
@@ -96,15 +102,24 @@ export function BlockRow({
           />
         </label>
 
-        <label className="flex min-w-[12rem] flex-1 flex-col gap-1">
-          <span className="text-xs font-semibold text-falcon-brown-700/70">Assigned Class</span>
-          <ClassSectionSelect
-            value={block.classSectionId}
-            onChange={(classSectionId) =>
-              actions.updateBlock(scheduleId, block.id, { classSectionId })
-            }
-          />
-        </label>
+        {canAssignClass ? (
+          <label className="flex min-w-[12rem] flex-1 flex-col gap-1">
+            <span className="text-xs font-semibold text-falcon-brown-700/70">Assigned Class</span>
+            <ClassSectionSelect
+              value={block.classSectionId}
+              onChange={(classSectionId) =>
+                actions.updateBlock(scheduleId, block.id, { classSectionId })
+              }
+            />
+          </label>
+        ) : (
+          <div className="flex min-w-[12rem] flex-1 flex-col gap-1">
+            <span className="text-xs font-semibold text-falcon-brown-700/70">Assigned Class</span>
+            <div className="rounded-md border border-falcon-brown-700/15 bg-falcon-cream-100/60 px-2 py-1.5 text-sm text-falcon-brown-700/50">
+              Not applicable
+            </div>
+          </div>
+        )}
 
         <button
           type="button"
