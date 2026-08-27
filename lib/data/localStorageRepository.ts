@@ -84,13 +84,25 @@ export class LocalStorageDataRepository implements DataRepository {
 
     const savedDefaultScheduleId = readStoredDefaultScheduleId();
     const schedules = stored.schedules ?? [];
-    const normalizedSchedules =
-      savedDefaultScheduleId && schedules.some((schedule) => schedule.id === savedDefaultScheduleId)
-        ? schedules.map((schedule) => ({
-            ...schedule,
-            isDefault: schedule.id === savedDefaultScheduleId,
-          }))
-        : schedules;
+    const hasSavedDefault = Boolean(
+      savedDefaultScheduleId && schedules.some((schedule) => schedule.id === savedDefaultScheduleId),
+    );
+    const normalizedSchedules = hasSavedDefault
+      ? schedules.map((schedule) => ({
+          ...schedule,
+          isDefault: schedule.id === savedDefaultScheduleId,
+        }))
+      : schedules;
+
+    // Older saves could have the independently persisted default schedule
+    // selection disagree with Master Calendar's normal-day schedule. Treat
+    // the explicit saved default selection as canonical and repair the
+    // calendar during hydration so Week, Present and lesson planning all
+    // resolve against the same BellSchedule immediately after refresh.
+    const normalizedCalendar =
+      stored.schoolCalendar && hasSavedDefault && savedDefaultScheduleId
+        ? { ...stored.schoolCalendar, defaultBellScheduleId: savedDefaultScheduleId }
+        : (stored.schoolCalendar ?? null);
 
     // Defensive defaults for data saved by an earlier schema version (e.g.
     // pre-Phase-2, before `lessons` existed) - avoids a hard crash on
@@ -110,7 +122,7 @@ export class LocalStorageDataRepository implements DataRepository {
         ...DEFAULT_TEACHER_SCHEDULE_PREFERENCES,
         ...stored.teacherSchedulePreferences,
       },
-      schoolCalendar: stored.schoolCalendar ?? null,
+      schoolCalendar: normalizedCalendar,
     };
   }
 
