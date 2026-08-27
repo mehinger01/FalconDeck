@@ -30,15 +30,25 @@ export function ScheduleSetupScreen() {
   async function saveScheduleNow() {
     if (isDemo) return;
 
-    const currentDefault = data.schedules.find((schedule) => schedule.isDefault);
-    if (!currentDefault) {
-      setManualSaveState({ status: "error", message: "Choose a default schedule before saving." });
+    if (!selectedSchedule) {
+      setManualSaveState({ status: "error", message: "Select a schedule before saving." });
       return;
     }
 
     setManualSaveState({ status: "saving", message: "Saving schedule…" });
 
-    const appDataResult = await dataRepository.save(data);
+    // The schedule currently selected in the left-hand list is the teacher's
+    // explicit choice. Persist a snapshot that makes that schedule the one
+    // and only default instead of relying on a separate, easy-to-miss action.
+    const dataToSave = {
+      ...data,
+      schedules: data.schedules.map((schedule) => ({
+        ...schedule,
+        isDefault: schedule.id === selectedSchedule.id,
+      })),
+    };
+
+    const appDataResult = await dataRepository.save(dataToSave);
     if (!appDataResult.ok) {
       setManualSaveState({
         status: "error",
@@ -47,7 +57,7 @@ export function ScheduleSetupScreen() {
       return;
     }
 
-    const defaultResult = saveDefaultScheduleSelection(currentDefault.id);
+    const defaultResult = saveDefaultScheduleSelection(selectedSchedule.id);
     if (!defaultResult.ok) {
       setManualSaveState({
         status: "error",
@@ -58,17 +68,21 @@ export function ScheduleSetupScreen() {
 
     const verification = await dataRepository.load();
     const verifiedDefault = verification.schedules.find((schedule) => schedule.isDefault);
-    if (verifiedDefault?.id !== currentDefault.id) {
+    if (verifiedDefault?.id !== selectedSchedule.id) {
       setManualSaveState({
         status: "error",
-        message: "Falcon Deck could not verify the saved default schedule. Please try again.",
+        message: "Falcon Deck could not verify the selected schedule as default. Please try again.",
       });
       return;
     }
 
+    // Keep the live React state aligned with the verified persisted state so
+    // the Default badge and My Daily Schedule panel update immediately too.
+    actions.setDefaultSchedule(selectedSchedule.id);
+
     setManualSaveState({
       status: "saved",
-      message: `${currentDefault.name} saved as your default.`,
+      message: `${selectedSchedule.name} saved as your default.`,
     });
   }
 
@@ -89,7 +103,7 @@ export function ScheduleSetupScreen() {
               <button
                 type="button"
                 onClick={saveScheduleNow}
-                disabled={manualSaveState.status === "saving"}
+                disabled={manualSaveState.status === "saving" || !selectedSchedule}
                 className="rounded-md bg-falcon-brown-900 px-4 py-2 text-sm font-bold text-falcon-cream-100 shadow-sm hover:bg-falcon-brown-800 disabled:cursor-wait disabled:opacity-60"
               >
                 {manualSaveState.status === "saving" ? "Saving…" : "Save Schedule"}
@@ -134,6 +148,12 @@ export function ScheduleSetupScreen() {
           </div>
         </div>
 
+        {!isDemo && selectedSchedule && manualSaveState.status === "idle" && (
+          <p className="mt-2 text-xs text-falcon-brown-700/65">
+            Save Schedule will make <strong>{selectedSchedule.name}</strong> your default schedule and save your current setup.
+          </p>
+        )}
+
         {manualSaveState.status === "error" && (
           <p className="mt-2 rounded-lg border border-red-700/20 bg-red-50 p-3 text-sm text-red-900">
             Manual save failed: {manualSaveState.message}
@@ -141,7 +161,7 @@ export function ScheduleSetupScreen() {
         )}
         {manualSaveState.status === "saved" && (
           <p className="mt-2 rounded-lg border border-green-700/20 bg-green-50 p-3 text-sm text-green-900">
-            Your chosen default schedule was written separately and verified by reloading it from browser storage.
+            The selected schedule was saved as your default and verified by reloading it from browser storage.
           </p>
         )}
       </div>
@@ -159,7 +179,10 @@ export function ScheduleSetupScreen() {
       <div className="flex flex-col gap-6 sm:flex-row">
         <ScheduleList
           selectedScheduleId={selectedSchedule?.id ?? null}
-          onSelect={setSelectedScheduleId}
+          onSelect={(scheduleId) => {
+            setSelectedScheduleId(scheduleId);
+            setManualSaveState({ status: "idle", message: "" });
+          }}
         />
 
         <div className="min-w-0 flex-1">
