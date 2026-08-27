@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 import { useAppData } from "@/lib/store/AppDataProvider";
 import { useSimulatedNow } from "@/lib/hooks/useSimulatedNow";
 import { useClassroomTimer } from "@/lib/tools/timer/useClassroomTimer";
-import { resolveTeacherSchedule } from "@/lib/schedule/resolveTeacherSchedule";
+import { resolveSchoolDate } from "@/lib/calendar/resolveSchoolDate";
 import { timeStringToSeconds } from "@/lib/schedule/time";
 import type { LunchWave } from "@/types/teacherSchedule";
 import { LUNCH_WAVE_LABELS } from "@/types/teacherSchedule";
@@ -40,13 +40,18 @@ export function DemoPresentSimulator() {
   const [scenarioId, setScenarioId] = useState<string | null>(null);
   const [currentLesson, setCurrentLesson] = useState<DailyLesson | null>(null);
 
-  const defaultSchedule = data.schedules.find((s) => s.isDefault) ?? data.schedules[0] ?? null;
   const regularDate = data.schoolCalendar?.firstStudentDay ?? "2026-08-31";
 
   const scenarios = useMemo<DynamicScenario[]>(() => {
-    if (!defaultSchedule) return [];
+    const regularResolution = resolveSchoolDate({
+      dateKey: regularDate,
+      calendar: data.schoolCalendar,
+      bellSchedules: data.schedules,
+      teacherPreferences: data.teacherSchedulePreferences,
+    });
+    const resolved = regularResolution.resolvedTeacherSchedule ?? null;
+    if (!resolved) return [];
 
-    const resolved = resolveTeacherSchedule(defaultSchedule, data.teacherSchedulePreferences);
     const blocks = [...resolved.blocks].sort(
       (a, b) => timeStringToSeconds(a.startTime) - timeStringToSeconds(b.startTime),
     );
@@ -91,7 +96,7 @@ export function DemoPresentSimulator() {
       next.push({
         id: "passing",
         label: "Passing",
-        description: "Jump into a real passing block from the current schedule",
+        description: "Jump into a real passing block from the calendar-resolved schedule",
         date: atDemoTime(regularDate, Math.floor((start + end) / 2)),
       });
     }
@@ -163,7 +168,7 @@ export function DemoPresentSimulator() {
     }
 
     return next;
-  }, [data.schoolCalendar, data.teacherSchedulePreferences, defaultSchedule, regularDate]);
+  }, [data.schoolCalendar, data.schedules, data.teacherSchedulePreferences, regularDate]);
 
   const scenario = scenarios.find((s) => s.id === scenarioId) ?? null;
   const simulatedNow = useSimulatedNow(scenario?.date ?? null);
@@ -181,7 +186,7 @@ export function DemoPresentSimulator() {
           <p className="text-sm font-bold uppercase tracking-[0.3em] text-falcon-gold-400">Demo Present Simulator</p>
           <h1 className="text-4xl font-black">Choose a jump point below</h1>
           <p className="max-w-xl text-sm text-falcon-cream-200/60">
-            These controls are generated from your saved default schedule and feed a simulated clock into Falcon Deck&rsquo;s real Present engine.
+            These controls are generated from the same Master Calendar-resolved schedule that Live Present uses.
           </p>
         </div>
       )}
