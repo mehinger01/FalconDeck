@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useAppData } from "@/lib/store/AppDataProvider";
 import { useSimulatedNow } from "@/lib/hooks/useSimulatedNow";
 import { useClassroomTimer } from "@/lib/tools/timer/useClassroomTimer";
-import { DEMO_SCENARIOS } from "@/lib/data/demoScenarios";
+import { resolveTeacherSchedule } from "@/lib/schedule/resolveTeacherSchedule";
+import { secondsToTimeString, timeStringToSeconds } from "@/lib/schedule/time";
 import type { LunchWave } from "@/types/teacherSchedule";
 import { LUNCH_WAVE_LABELS } from "@/types/teacherSchedule";
 import { LivePresentScreen } from "@/components/present/LivePresentScreen";
@@ -18,21 +19,150 @@ import type { DailyLesson } from "@/types/lesson";
 
 const LUNCH_WAVES: LunchWave[] = ["A", "B", "C", "none"];
 
-/**
- * Demo Mode's proof that the real engine works, not a static slideshow:
- * every scenario button feeds a concrete simulated Date into the exact
- * same `LivePresentScreen` Live Present Mode uses (Part 15). The lunch
- * wave selector dispatches through the same isolated demo AppData the
- * rest of `/demo` uses (see DemoAppDataProvider) - changing it live
- * changes what the "Lunch" scenario resolves to, exactly like flipping
- * the real teacher preference would.
- */
+interface DynamicScenario {
+  id: string;
+  label: string;
+  description: string;
+  date: Date;
+}
+
+function atDemoTime(dateKey: string, seconds: number): Date {
+  const time = secondsToTimeString(Math.max(0, Math.min(seconds, 23 * 3600 + 59 * 60 + 59)));
+  return new Date(`${dateKey}T${time}-04:00`);
+}
+
 export function DemoPresentSimulator() {
   const { data, actions } = useAppData();
   const [scenarioId, setScenarioId] = useState<string | null>(null);
   const [currentLesson, setCurrentLesson] = useState<DailyLesson | null>(null);
-  const scenario = DEMO_SCENARIOS.find((s) => s.id === scenarioId) ?? null;
-  const simulatedNow = useSimulatedNow(scenario ? scenario.getDate() : null);
+
+  const defaultSchedule = data.schedules.find((s) => s.isDefault) ?? data.schedules[0] ?? null;
+  const regularDate = data.schoolCalendar?.firstStudentDay ?? "2026-08-31";
+
+  const scenarios = useMemo<DynamicScenario[]>(() => {
+    if (!defaultSchedule) return [];
+
+    const resolved = resolveTeacherSchedule(defaultSchedule, data.teacherSchedulePreferences);
+    const blocks = [...resolved.blocks].sort(
+      (a, b) => timeStringToSeconds(a.startTime) - timeStringToSeconds(b.startTime),
+    );
+    const teaching = blocks.filter(
+      (block) => (block.kind === "instructional" || block.kind === "enrichment") && block.classSectionId,
+    );
+    const firstTeaching = teaching[0];
+    const fifthTeaching = teaching[4];
+    const sixthTeaching = teaching[5];
+    const firstPassing = blocks.find((block) => block.kind === "passing");
+    const lunch = blocks.find((block) => block.kind === "lunch");
+    const lastBlock = blocks[blocks.length - 1];
+
+    const next: DynamicScenario[] = [];
+
+    if (firstTeaching) {
+      const start = timeStringToSeconds(firstTeaching.startTime);
+      const end = timeStringToSeconds(firstTeaching.endTime);
+      next.push({
+        id: "start-first",
+        label: `Start ${firstTeaching.label}`,
+        description: `Jump to the beginning of ${firstTeaching.label}`,
+        date: atDemoTime(regularDate, start + 60),
+      });
+      next.push({
+        id: "mid-class",
+        label: "Mid-Class",
+        description: `Jump to the middle of ${firstTeaching.label}`,
+        date: atDemoTime(regularDate, Math.floor((start + end) / 2)),
+      });
+      next.push({
+        id: "final-five",
+        label: "Final 5 Minutes",
+        description: `Jump to about four minutes before ${firstTeaching.label} ends`,
+        date: atDemoTime(regularDate, end - 4 * 60),
+      });
+    }
+
+    if (firstPassing) {
+      const start = timeStringToSeconds(firstPassing.startTime);
+      const end = timeStringToSeconds(firstPassing.endTime);
+      next.push({
+        id: "passing",
+        label: "Passing",
+        description: "Jump into a real passing block from the current schedule",
+        date: atDemoTime(regularDate, Math.floor((start + end) / 2)),
+      });
+    }
+
+    if (lunch) {
+      next.push({
+        id: "lunch",
+        label: `${data.teacherSchedulePreferences.lunchWave} Lunch`,
+        description: "Jump into the lunch wave resolved from your current lunch preference",
+        date: atDemoTime(regularDate, timeStringToSeconds(lunch.startTime) + 60),
+      });
+    }
+
+    if (fifthTeaching) {
+      next.push({
+        id: "start-fifth",
+        label: `Start ${fifthTeaching.label}`,
+        description: `Jump to the instructional portion of ${fifthTeaching.label}`,
+        date: atDemoTime(regularDate, timeStringToSeconds(fifthTeaching.startTime) + 60),
+      });
+    }
+
+    if (sixthTeaching) {
+      next.push({
+        id: "start-sixth",
+        label: `Start ${sixthTeaching.label}`,
+        description: `Jump to the beginning of ${sixthTeaching.label}`,
+        date: atDemoTime(regularDate, timeStringToSeconds(sixthTeaching.startTime) + 60),
+      });
+    }
+
+    if (lastBlock) {
+      next.push({
+        id: "end-of-day",
+        label: "End of Day",
+        description: "Jump to five minutes after the final scheduled block",
+        date: atDemoTime(regularDate, timeStringToSeconds(lastBlock.endTime) + 5 * 60),
+      });
+    }
+
+    const special = data.schoolCalendar?.exceptions.find((e) => e.type === "special-bell");
+    if (special) {
+      next.push({
+        id: "special-bell",
+        label: "Special Bell",
+        description: special.title,
+        date: atDemoTime(special.startDate, 8 * 3600 + 30 * 60),
+      });
+    }
+
+    const noSchool = data.schoolCalendar?.exceptions.find((e) => e.type === "no-school");
+    if (noSchool) {
+      next.push({
+        id: "no-school",
+        label: "No School",
+        description: noSchool.title,
+        date: atDemoTime(noSchool.startDate, 9 * 3600),
+      });
+    }
+
+    const noStudents = data.schoolCalendar?.exceptions.find((e) => e.type === "no-students");
+    if (noStudents) {
+      next.push({
+        id: "no-students",
+        label: "No Students",
+        description: noStudents.title,
+        date: atDemoTime(noStudents.startDate, 9 * 3600),
+      });
+    }
+
+    return next;
+  }, [data.schoolCalendar, data.teacherSchedulePreferences, defaultSchedule, regularDate]);
+
+  const scenario = scenarios.find((s) => s.id === scenarioId) ?? null;
+  const simulatedNow = useSimulatedNow(scenario?.date ?? null);
 
   const timer = useClassroomTimer();
   const tools = usePresentModeTools(data.classroomExperienceSettings.cleanScreenDefaultMessage);
@@ -45,17 +175,16 @@ export function DemoPresentSimulator() {
       ) : (
         <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-falcon-brown-950 px-10 text-center text-falcon-cream-100">
           <p className="text-sm font-bold uppercase tracking-[0.3em] text-falcon-gold-400">Demo Present Simulator</p>
-          <h1 className="text-4xl font-black">Choose a scenario below to begin</h1>
-          <p className="max-w-md text-sm text-falcon-cream-200/60">
-            Each button feeds a real simulated date/time into Falcon Deck&rsquo;s actual scheduling engine -
-            not a slideshow.
+          <h1 className="text-4xl font-black">Choose a jump point below</h1>
+          <p className="max-w-xl text-sm text-falcon-cream-200/60">
+            These controls are generated from your saved default schedule and feed a simulated clock into Falcon Deck&rsquo;s real Present engine.
           </p>
         </div>
       )}
 
       <div className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex justify-center px-4 pb-4">
-        <div className="pointer-events-auto flex max-w-4xl flex-wrap items-center justify-center gap-2 rounded-xl border border-falcon-cream-200/10 bg-falcon-brown-950/95 p-3 shadow-2xl">
-          {DEMO_SCENARIOS.map((s) => (
+        <div className="pointer-events-auto flex max-w-5xl flex-wrap items-center justify-center gap-2 rounded-xl border border-falcon-cream-200/10 bg-falcon-brown-950/95 p-3 shadow-2xl">
+          {scenarios.map((s) => (
             <button
               key={s.id}
               type="button"
@@ -77,7 +206,10 @@ export function DemoPresentSimulator() {
               <button
                 key={wave}
                 type="button"
-                onClick={() => actions.updateTeacherSchedulePreferences({ lunchWave: wave })}
+                onClick={() => {
+                  actions.updateTeacherSchedulePreferences({ lunchWave: wave });
+                  setScenarioId(null);
+                }}
                 className={`rounded-md px-2 py-1 text-xs font-semibold transition-colors ${
                   data.teacherSchedulePreferences.lunchWave === wave
                     ? "bg-falcon-gold-400 text-falcon-brown-950"
