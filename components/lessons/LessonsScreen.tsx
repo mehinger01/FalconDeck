@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useAppData, useDefaultSchedule } from "@/lib/store/AppDataProvider";
 import { findLessonForSection } from "@/lib/data/lessons";
@@ -19,9 +19,33 @@ export function LessonsScreen() {
   const timeZone = defaultSchedule?.timeZone ?? DEFAULT_TIME_ZONE;
   const searchParams = useSearchParams();
 
+  const activeSections = useMemo(() => {
+    if (!defaultSchedule) return [];
+
+    const sectionStartTimes = new Map<string, string>();
+    for (const block of defaultSchedule.blocks) {
+      const isTeachingBlock = block.kind === "instructional" || block.kind === "enrichment";
+      if (!isTeachingBlock || !block.classSectionId) continue;
+
+      const current = sectionStartTimes.get(block.classSectionId);
+      if (!current || block.startTime < current) {
+        sectionStartTimes.set(block.classSectionId, block.startTime);
+      }
+    }
+
+    return data.classSections
+      .filter((section) => sectionStartTimes.has(section.id))
+      .sort((a, b) => {
+        const aStart = sectionStartTimes.get(a.id) ?? "99:99";
+        const bStart = sectionStartTimes.get(b.id) ?? "99:99";
+        const timeCompare = aStart.localeCompare(bStart);
+        return timeCompare !== 0 ? timeCompare : a.name.localeCompare(b.name);
+      });
+  }, [data.classSections, defaultSchedule]);
+
   const [date, setDate] = useState(() => searchParams.get("date") ?? getLocalDateKey(new Date(), timeZone));
   const [classSectionId, setClassSectionId] = useState<string | null>(
-    () => searchParams.get("section") ?? data.classSections[0]?.id ?? null,
+    () => searchParams.get("section") ?? null,
   );
 
   // Re-sync from the URL for navigation into an already-mounted Lessons
@@ -38,7 +62,20 @@ export function LessonsScreen() {
     if (paramSection) setClassSectionId(paramSection);
   }
 
-  const section = data.classSections.find((s) => s.id === classSectionId) ?? null;
+  // Saved app data hydrates after the first client render. If the current
+  // selection is missing or belongs to an old/demo section, move to the
+  // first real teaching section once the active schedule is known.
+  useEffect(() => {
+    if (activeSections.length === 0) {
+      if (classSectionId !== null) setClassSectionId(null);
+      return;
+    }
+    if (!classSectionId || !activeSections.some((section) => section.id === classSectionId)) {
+      setClassSectionId(activeSections[0].id);
+    }
+  }, [activeSections, classSectionId]);
+
+  const section = activeSections.find((s) => s.id === classSectionId) ?? null;
   const course = resolveCourseForSection(data.courses, section);
   const lesson = classSectionId ? findLessonForSection(data.lessons, date, classSectionId) : null;
 
@@ -90,13 +127,13 @@ export function LessonsScreen() {
 
         <label className="flex min-w-[14rem] flex-1 flex-col gap-1">
           <span className="text-xs font-semibold text-falcon-brown-700/70">Class Section</span>
-          <ClassSectionSelect value={classSectionId} onChange={setClassSectionId} />
+          <ClassSectionSelect value={classSectionId} onChange={setClassSectionId} sections={activeSections} />
         </label>
       </div>
 
       {!classSectionId ? (
         <p className="rounded-lg border border-dashed border-falcon-brown-700/30 p-6 text-center text-sm text-falcon-brown-700/60">
-          Choose a class section to plan a lesson.
+          No scheduled teaching sections are available yet. Assign classes in Schedule Setup to start planning lessons.
         </p>
       ) : (
         <>
