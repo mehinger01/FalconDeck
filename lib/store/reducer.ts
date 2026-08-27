@@ -63,7 +63,15 @@ export function appDataReducer(state: AppData, action: AppDataAction): AppData {
       if (wasDefault && !remaining.some((s) => s.isDefault)) {
         remaining[0] = { ...remaining[0], isDefault: true };
       }
-      return { ...state, schedules: remaining };
+      const nextDefaultId = remaining.find((s) => s.isDefault)?.id ?? remaining[0]?.id;
+      return {
+        ...state,
+        schedules: remaining,
+        schoolCalendar:
+          state.schoolCalendar && nextDefaultId
+            ? { ...state.schoolCalendar, defaultBellScheduleId: nextDefaultId }
+            : state.schoolCalendar,
+      };
     }
 
     case "RENAME_SCHEDULE":
@@ -79,6 +87,12 @@ export function appDataReducer(state: AppData, action: AppDataAction): AppData {
           ...schedule,
           isDefault: schedule.id === action.scheduleId,
         })),
+        // There is one canonical normal-day schedule. The Master Calendar
+        // follows the teacher's selected default so Week, Present, Demo and
+        // lesson-copy workflows cannot silently drift onto different copies.
+        schoolCalendar: state.schoolCalendar
+          ? { ...state.schoolCalendar, defaultBellScheduleId: action.scheduleId }
+          : state.schoolCalendar,
       };
 
     case "ADD_BLOCK":
