@@ -2,7 +2,6 @@
 
 import { useEffect } from "react";
 import { useAppData } from "@/lib/store/AppDataProvider";
-import { useNow } from "@/lib/hooks/useNow";
 import { getPresentationState } from "@/lib/schedule/getPresentationState";
 import { getLocalDateKey, weekdayForDateKey } from "@/lib/schedule/localDate";
 import { DEFAULT_TIME_ZONE } from "@/lib/schedule/time";
@@ -80,8 +79,8 @@ function TransitionScreenContainer({
 
 /**
  * The live, schedule-driven presentation. Two layers, run in order every
- * tick, off the real wall clock (or `overrideNow`, for Demo Mode's
- * simulator - see Part 15):
+ * tick, off the `effectiveNow` timestamp its caller supplies - PresentScreen's live time,
+ * or Demo Mode's simulated time (see Part 15):
  *
  * 1. `resolveSchoolDate` (the Master Calendar layer) - is school even in
  *    session today, and if so, which BellSchedule applies once the
@@ -106,16 +105,15 @@ function TransitionScreenContainer({
  */
 export function LivePresentScreen({
   onCurrentLessonChange,
-  overrideNow,
+  effectiveNow,
 }: {
   onCurrentLessonChange?: (lesson: DailyLesson | null) => void;
-  /** Demo Mode's Present Simulator feeds a simulated Date here instead of the real wall clock. */
-  overrideNow?: Date | null;
+  /** The single effective timestamp this presentation renders against - PresentScreen's live, Bell Clock Offset-calibrated time, or Demo Mode's simulated time. This component never subscribes to a clock itself. */
+  effectiveNow: Date | null;
 }) {
-  const liveNow = useNow(1000);
-  const now = overrideNow ?? liveNow;
   const { data } = useAppData();
   const settings = data.classroomExperienceSettings;
+  const now = effectiveNow;
 
   const timeZone =
     data.schoolCalendar?.timeZone ?? data.schedules.find((s) => s.isDefault)?.timeZone ?? DEFAULT_TIME_ZONE;

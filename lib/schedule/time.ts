@@ -3,6 +3,34 @@ import type { Weekday } from "@/types/schedule";
 /** Falcon Deck's canonical time zone for schedule calculations. */
 export const DEFAULT_TIME_ZONE = "America/Detroit";
 
+/** Supported range for the Bell Clock Offset calibration setting, in seconds. */
+export const BELL_OFFSET_MIN_SECONDS = -120;
+export const BELL_OFFSET_MAX_SECONDS = 120;
+
+/**
+ * Clamps a bell-offset value to the supported calibration range, normalized
+ * to whole seconds. Non-finite input (NaN, +/-Infinity - e.g. a malformed
+ * persisted value, or a momentarily-empty numeric input parsed as NaN)
+ * falls back to 0 rather than propagating into schedule/time-shifting math.
+ */
+export function clampBellOffsetSeconds(seconds: number): number {
+  if (!Number.isFinite(seconds)) return 0;
+  const whole = Math.round(seconds);
+  return Math.max(BELL_OFFSET_MIN_SECONDS, Math.min(BELL_OFFSET_MAX_SECONDS, whole));
+}
+
+/**
+ * Applies a bell-calibration offset to a raw Date, shifting the underlying
+ * UTC instant (so downstream zoned-time conversion in getZonedNow etc.
+ * stays correct across DST transitions - the offset is never applied to a
+ * zoned/local time string). The offset is always normalized and clamped via
+ * clampBellOffsetSeconds first, so an out-of-range or malformed value can
+ * never reach the schedule engine.
+ */
+export function applyBellOffset(date: Date, offsetSeconds: number): Date {
+  return new Date(date.getTime() + clampBellOffsetSeconds(offsetSeconds) * 1000);
+}
+
 export interface ZonedNow {
   weekday: Weekday;
   hour: number;

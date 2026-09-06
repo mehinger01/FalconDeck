@@ -1,5 +1,6 @@
 import { createDemoAppData } from "@/lib/data/demoData";
 import type { AppData } from "@/lib/data/types";
+import { clampBellOffsetSeconds } from "@/lib/schedule/time";
 import type { BellSchedule } from "@/types/schedule";
 import type { AppDataAction } from "./actions";
 
@@ -183,11 +184,23 @@ export function appDataReducer(state: AppData, action: AppDataAction): AppData {
       };
     }
 
-    case "UPDATE_CLASSROOM_EXPERIENCE_SETTINGS":
+    case "UPDATE_CLASSROOM_EXPERIENCE_SETTINGS": {
+      const patch =
+        action.patch.bellOffsetSeconds !== undefined
+          ? {
+              ...action.patch,
+              bellOffsetSeconds: clampBellOffsetSeconds(action.patch.bellOffsetSeconds),
+            }
+          : action.patch;
+
       return {
         ...state,
-        classroomExperienceSettings: { ...state.classroomExperienceSettings, ...action.patch },
+        classroomExperienceSettings: {
+          ...state.classroomExperienceSettings,
+          ...patch,
+        },
       };
+    }
 
     case "UPSERT_LIBRARY_RESOURCE": {
       const exists = state.libraryResources.some((resource) => resource.id === action.resource.id);

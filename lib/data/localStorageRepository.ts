@@ -1,4 +1,5 @@
 import { DEFAULT_CLASSROOM_EXPERIENCE_SETTINGS } from "@/types/classPresentation";
+import { clampBellOffsetSeconds } from "@/lib/schedule/time";
 import { DEFAULT_TEACHER_SCHEDULE_PREFERENCES } from "@/types/teacherSchedule";
 import { createDemoAppData } from "./demoData";
 import type { AppData, DataRepository, SaveResult } from "./types";
@@ -116,6 +117,10 @@ export class LocalStorageDataRepository implements DataRepository {
       classroomExperienceSettings: {
         ...DEFAULT_CLASSROOM_EXPERIENCE_SETTINGS,
         ...stored.classroomExperienceSettings,
+        bellOffsetSeconds: clampBellOffsetSeconds(
+          stored.classroomExperienceSettings?.bellOffsetSeconds ??
+            DEFAULT_CLASSROOM_EXPERIENCE_SETTINGS.bellOffsetSeconds,
+        ),
       },
       libraryResources: stored.libraryResources ?? [],
       teacherSchedulePreferences: {

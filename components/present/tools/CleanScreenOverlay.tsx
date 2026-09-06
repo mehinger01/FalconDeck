@@ -1,6 +1,5 @@
 "use client";
 
-import { useNow } from "@/lib/hooks/useNow";
 import { formatZonedDateTime, secondsToClock } from "@/lib/schedule/time";
 import type { ClassroomTimer } from "@/lib/tools/timer/useClassroomTimer";
 
@@ -16,16 +15,17 @@ export function CleanScreenOverlay({
   timeZone,
   showClock,
   timer,
+  effectiveNow,
   onExit,
 }: {
   message: string;
   timeZone: string;
   showClock: boolean;
   timer: ClassroomTimer;
+  /** The same effective timestamp Live Present Mode (or Demo Mode) is rendering against - passed down from the caller so this clock can never disagree with the schedule. This component never subscribes to a clock itself. */
+  effectiveNow: Date | null;
   onExit: () => void;
 }) {
-  const now = useNow(1000);
-
   return (
     <div className="animate-present-fade fixed inset-0 z-40 flex flex-col items-center justify-center gap-6 bg-falcon-brown-950 px-10 text-center">
       <h1 className="text-6xl font-black uppercase tracking-wide text-falcon-cream-100 sm:text-7xl">
@@ -38,8 +38,8 @@ export function CleanScreenOverlay({
         </p>
       )}
 
-      {showClock && now && (
-        <p className="text-lg text-falcon-cream-200/60">{formatZonedDateTime(now, timeZone)}</p>
+      {showClock && effectiveNow && (
+        <p className="text-lg text-falcon-cream-200/60">{formatZonedDateTime(effectiveNow, timeZone)}</p>
       )}
 
       <button

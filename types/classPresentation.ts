@@ -38,6 +38,15 @@ export interface ClassroomExperienceSettings {
   customWatermarkDataUrl?: string;
   /** Opacity (0-1) applied to the Present Mode watermark, built-in or custom. */
   watermarkOpacity: number;
+  /**
+   * Seconds added to the system clock to calibrate Falcon Deck's displayed
+   * and schedule-driving time to the school's actual bell system - see
+   * applyBellOffset/clampBellOffsetSeconds in lib/schedule/time.ts, which
+   * own the supported range and are the only place this value is
+   * interpreted. Positive = bells run ahead of the computer clock;
+   * negative = behind.
+   */
+  bellOffsetSeconds: number;
 }
 
 export const DEFAULT_WATERMARK_OPACITY = 0.35;
@@ -52,4 +61,5 @@ export const DEFAULT_CLASSROOM_EXPERIENCE_SETTINGS: ClassroomExperienceSettings 
   transitionArrivalInstructionsEnabled: true,
   customWatermarkDataUrl: undefined,
   watermarkOpacity: DEFAULT_WATERMARK_OPACITY,
+  bellOffsetSeconds: 0,
 };

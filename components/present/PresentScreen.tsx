@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useAppData, useDefaultSchedule } from "@/lib/store/AppDataProvider";
+import { useEffectiveNow } from "@/lib/hooks/useEffectiveNow";
 import { getLocalDateKey, weekdayForDateKey } from "@/lib/schedule/localDate";
 import { resolveScheduleForWeekday } from "@/lib/schedule/resolveBlockOverride";
 import { DEFAULT_TIME_ZONE } from "@/lib/schedule/time";
@@ -53,13 +54,14 @@ export function PresentScreen() {
   const selectedBlock = blockOptions.find((block) => block.id === blockIdParam) ?? blockOptions[0] ?? null;
 
   const [currentLesson, setCurrentLesson] = useState<DailyLesson | null>(null);
+  const liveEffectiveNow = useEffectiveNow(settings.bellOffsetSeconds, 1000);
   const timer = useClassroomTimer();
   const tools = usePresentModeTools(settings.cleanScreenDefaultMessage);
 
   return (
     <div className="relative min-h-screen">
       {mode === "live" ? (
-        <LivePresentScreen onCurrentLessonChange={setCurrentLesson} />
+        <LivePresentScreen onCurrentLessonChange={setCurrentLesson} effectiveNow={liveEffectiveNow} />
       ) : (
         <PreviewPresentScreen
           date={date}
@@ -86,6 +88,7 @@ export function PresentScreen() {
           timeZone={timeZone}
           showClock={settings.showClockOnCleanScreen}
           timer={timer}
+          effectiveNow={liveEffectiveNow}
           onExit={tools.exitCleanScreen}
         />
       )}

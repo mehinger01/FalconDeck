@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useAppData, useDefaultSchedule } from "@/lib/store/AppDataProvider";
 import { PresentModeBrandingSection } from "@/components/settings/PresentModeBrandingSection";
+import { BellClockOffsetSection } from "@/components/settings/BellClockOffsetSection";
 
 export function SettingsScreen() {
   const { data, actions } = useAppData();
@@ -138,6 +139,8 @@ export function SettingsScreen() {
       </section>
 
       <PresentModeBrandingSection />
+
+      <BellClockOffsetSection />
 
       <section className="mt-6 rounded-xl border border-falcon-gold-500/40 bg-falcon-gold-300/10 p-4">
         <h2 className="text-sm font-bold uppercase tracking-wide text-falcon-brown-700/70">Demo Mode</h2>

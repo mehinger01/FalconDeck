@@ -180,7 +180,7 @@ export function DemoPresentSimulator() {
   return (
     <div className="relative min-h-screen">
       {scenario && simulatedNow ? (
-        <LivePresentScreen overrideNow={simulatedNow} onCurrentLessonChange={setCurrentLesson} />
+        <LivePresentScreen effectiveNow={simulatedNow} onCurrentLessonChange={setCurrentLesson} />
       ) : (
         <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-falcon-brown-950 px-10 text-center text-falcon-cream-100">
           <p className="text-sm font-bold uppercase tracking-[0.3em] text-falcon-gold-400">Demo Present Simulator</p>
@@ -253,6 +253,7 @@ export function DemoPresentSimulator() {
           timeZone={timeZone}
           showClock={data.classroomExperienceSettings.showClockOnCleanScreen}
           timer={timer}
+          effectiveNow={simulatedNow}
           onExit={tools.exitCleanScreen}
         />
       )}
