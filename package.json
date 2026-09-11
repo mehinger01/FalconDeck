@@ -18,6 +18,8 @@
     "verify": "npm run verify:schedule && npm run verify:lessons && npm run verify:preview && npm run verify:week && npm run verify:classroom && npm run verify:resources && npm run verify:calendar && npm run verify:demo"
   },
   "dependencies": {
+    "@supabase/ssr": "^0.12.5",
+    "@supabase/supabase-js": "^2.112.4",
     "next": "16.3.1",
     "qrcode": "^1.5.4",
     "react": "19.2.8",
