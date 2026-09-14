@@ -38,10 +38,19 @@ export function PreviewPresentScreen({
   const { data } = useAppData();
   const displayName = useDisplayName(classSectionId);
   const classroomProps = resolvePreviewClassroomProps({ date, classSectionId, block, lessons: data.lessons });
+  const lesson = classroomProps?.lesson ?? null;
 
+  // `classroomProps` is a fresh wrapper object every render (see
+  // `resolvePreviewClassroomProps`), so depending on it here would re-fire
+  // this effect - and re-notify the parent - on every render regardless of
+  // whether the lesson actually changed, causing a render loop. Depend on
+  // the lesson's own id (a stable primitive) instead, matching how
+  // `LivePresentScreen`'s equivalent effect depends on the lesson value
+  // itself rather than a wrapper.
   useEffect(() => {
-    onCurrentLessonChange?.(classroomProps?.lesson ?? null);
-  }, [classroomProps, onCurrentLessonChange]);
+    onCurrentLessonChange?.(lesson);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lesson?.id, onCurrentLessonChange]);
 
   return (
     <div className="flex min-h-screen flex-1 flex-col bg-falcon-brown-950">
