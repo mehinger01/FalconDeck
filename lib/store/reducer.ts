@@ -169,6 +169,14 @@ export function appDataReducer(state: AppData, action: AppDataAction): AppData {
     case "DELETE_LESSON":
       return { ...state, lessons: state.lessons.filter((lesson) => lesson.id !== action.lessonId) };
 
+    // The already-computed final lessons array - see
+    // lib/lessons/import/lessonImport.ts's commitLessonImport, which is
+    // what actually matches courses, resolves conflicts, and builds the
+    // full replacement array before this action is ever dispatched. The
+    // reducer just applies the result in one atomic state replacement.
+    case "IMPORT_LESSONS":
+      return { ...state, lessons: action.lessons };
+
     case "SET_ARRIVAL_INSTRUCTIONS": {
       const exists = state.classPresentationSettings.some(
         (entry) => entry.classSectionId === action.classSectionId,

@@ -158,6 +158,19 @@ export function LessonsScreen() {
             />
           </section>
 
+          <section className="mb-6 rounded-xl border border-falcon-brown-700/15 bg-white/60 p-4">
+            <h2 className="mb-2 text-sm font-bold uppercase tracking-wide text-falcon-brown-700/70">
+              Materials
+            </h2>
+            <textarea
+              value={lesson?.materials ?? ""}
+              onChange={(e) => actions.updateMaterials(date, classSectionId, e.target.value)}
+              placeholder="What you'll need: textbook pages, handouts, manipulatives, etc. Teacher-facing only - not shown in Present Mode."
+              rows={2}
+              className="w-full rounded-md border border-falcon-brown-700/30 bg-white px-3 py-2 text-sm text-falcon-brown-900"
+            />
+          </section>
+
           <div className="grid gap-6 lg:grid-cols-2">
             <LessonAgendaEditor
               key={`agenda:${date}:${classSectionId}`}

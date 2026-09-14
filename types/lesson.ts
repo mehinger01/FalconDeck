@@ -64,6 +64,13 @@ export interface DailyLesson {
   agendaItems: AgendaItem[];
   resources: LessonResource[];
   announcements: Announcement[];
+  /**
+   * Free-text prep/materials list (e.g. "Student Edition pp. 11-12; guided
+   * notes; calculator"). Teacher-facing only - intentionally not shown in
+   * Present Mode alongside the four student-facing panels. `undefined` for
+   * any lesson created before this field existed or with nothing entered.
+   */
+  materials?: string;
   /** ISO 8601 timestamps, informational only. */
   createdAt: string;
   updatedAt: string;

@@ -4,6 +4,7 @@ import { createDemoAppData } from "@/lib/data/demoData";
 import { dataRepository } from "@/lib/data/localStorageRepository";
 import type { AppData, DataRepository, SaveResult } from "@/lib/data/types";
 import type { ClassSection, Course } from "@/types/course";
+import type { DailyLesson } from "@/types/lesson";
 import type { BellSchedule, ScheduleBlock, ScheduleBlockOverride, Weekday } from "@/types/schedule";
 import type { ClassroomExperienceSettings } from "@/types/classPresentation";
 import type { TeacherSchedulePreferences } from "@/types/teacherSchedule";
@@ -55,6 +56,8 @@ export interface AppDataActions extends LessonActions, LibraryResourceActions {
   addCalendarException: (exception: SchoolCalendarException) => void;
   updateCalendarException: (exceptionId: string, patch: Partial<Omit<SchoolCalendarException, "id">>) => void;
   deleteCalendarException: (exceptionId: string) => void;
+  /** Replaces `data.lessons` wholesale with the already-computed result of `commitLessonImport` - one atomic state replacement, one save. */
+  importLessons: (lessons: DailyLesson[]) => void;
 }
 
 /**
@@ -247,6 +250,7 @@ export function AppDataProvider({
       updateCalendarException: (exceptionId, patch) =>
         dispatch({ type: "UPDATE_CALENDAR_EXCEPTION", exceptionId, patch }),
       deleteCalendarException: (exceptionId) => dispatch({ type: "DELETE_CALENDAR_EXCEPTION", exceptionId }),
+      importLessons: (lessons) => dispatch({ type: "IMPORT_LESSONS", lessons }),
 
       ...createLessonActions(data, dispatch),
       ...createLibraryResourceActions(data, dispatch),
