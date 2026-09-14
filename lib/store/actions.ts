@@ -30,6 +30,7 @@ export type AppDataAction =
   | { type: "ADD_CLASS_SECTION"; section: ClassSection }
   | { type: "UPSERT_LESSON"; lesson: DailyLesson }
   | { type: "DELETE_LESSON"; lessonId: string }
+  | { type: "IMPORT_LESSONS"; lessons: DailyLesson[] }
   | { type: "SET_ARRIVAL_INSTRUCTIONS"; classSectionId: string; instructions: string[] }
   | { type: "UPDATE_CLASSROOM_EXPERIENCE_SETTINGS"; patch: Partial<ClassroomExperienceSettings> }
   | { type: "UPSERT_LIBRARY_RESOURCE"; resource: LibraryResource }

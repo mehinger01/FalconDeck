@@ -138,6 +138,20 @@ export function SettingsScreen() {
         </div>
       </section>
 
+      <section className="mt-6 rounded-xl border border-falcon-brown-700/15 bg-white/60 p-4">
+        <h2 className="text-sm font-bold uppercase tracking-wide text-falcon-brown-700/70">Data</h2>
+        <p className="mt-1 text-sm text-falcon-brown-700/70">
+          Import prepared lesson content from a JSON file into your existing courses and class
+          sections.
+        </p>
+        <Link
+          href="/settings/import-lessons"
+          className="mt-3 inline-block rounded-md border border-falcon-brown-700/30 px-4 py-2 text-sm font-semibold text-falcon-brown-900 hover:bg-falcon-gold-300/30"
+        >
+          Import Lessons
+        </Link>
+      </section>
+
       <PresentModeBrandingSection />
 
       <BellClockOffsetSection />
