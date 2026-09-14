@@ -12,10 +12,14 @@
  *   npm run verify:preview
  */
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { getPresentationState } from "@/lib/schedule/getPresentationState";
 import { resolveScheduleForWeekday } from "@/lib/schedule/resolveBlockOverride";
 import { weekdayForDateKey } from "@/lib/schedule/localDate";
 import { genericPreviewBlock, resolvePreviewClassroomProps } from "@/lib/present/resolvePreviewClassroomProps";
+import { buildLessonImportPreview, commitLessonImport, parseLessonImportJson } from "@/lib/lessons/import/lessonImport";
 import { createDemoAppData, DEMO_SCHEDULES } from "@/lib/data/demoData";
 import { appDataReducer } from "@/lib/store/reducer";
 import type { AppDataAction } from "@/lib/store/actions";
@@ -204,6 +208,85 @@ console.log("\nExtra: the generic preview block never claims a real schedule kin
   const block = genericPreviewBlock("section-algebra-1-p1");
   check('generic block kind is "custom", never a real BlockKind like "instructional"', block.kind === "custom");
   check('generic block reads "Preview" rather than pretending to be a class', block.customKindLabel === "Preview");
+}
+
+console.log("\n10. PreviewPresentScreen's onCurrentLessonChange effect can't render-loop");
+{
+  // Root cause of a real "Maximum update depth exceeded" regression:
+  // resolvePreviewClassroomProps builds a brand-new wrapper object every
+  // call, even when nothing about the lesson changed. An effect that
+  // depended on that wrapper (instead of the lesson itself) re-fired - and
+  // re-notified the parent - on every render, forever. These two checks
+  // pin the exact facts the fix relies on.
+  const args = {
+    date: "2026-08-17",
+    classSectionId: "section-algebra-1-p1",
+    block: null,
+    lessons: state.lessons,
+  };
+  const first = resolvePreviewClassroomProps(args);
+  const second = resolvePreviewClassroomProps(args);
+  check(
+    "10a: the wrapper object is a new reference every call, even for identical inputs (this is why depending on it is unsafe)",
+    first !== second,
+  );
+  check(
+    "10b: the lesson inside it IS the same reference across calls (this is why depending on lesson?.id is safe)",
+    first?.lesson === second?.lesson,
+  );
+
+  const noLessonArgs = { ...args, date: "2099-12-31" };
+  const thirdNoLesson = resolvePreviewClassroomProps(noLessonArgs);
+  const fourthNoLesson = resolvePreviewClassroomProps(noLessonArgs);
+  check("10c: both null-lesson results agree lesson is null", thirdNoLesson?.lesson === null && fourthNoLesson?.lesson === null);
+
+  // Static-source check, matching this project's established pattern for
+  // confirming React-effect wiring without a DOM renderer (see
+  // verify-calendar.ts / verify-lesson-import.ts): the effect must key off
+  // a stable primitive, never the wrapper object or the lesson object
+  // itself.
+  const source = readFileSync(join(process.cwd(), "components/present/PreviewPresentScreen.tsx"), "utf8");
+  check(
+    "10d: the effect depends on lesson?.id, not the classroomProps wrapper",
+    /\},\s*\[lesson\?\.id,\s*onCurrentLessonChange\]\);/.test(source),
+  );
+  check(
+    "10e: the effect no longer depends on the classroomProps wrapper object",
+    !/\[classroomProps,\s*onCurrentLessonChange\]/.test(source),
+  );
+}
+
+console.log("\n11. Previewing an imported lesson (agenda items built from what/how/why) is loop-safe too");
+{
+  const importFile = JSON.stringify({
+    version: 1,
+    lessons: [
+      {
+        date: "2026-09-15",
+        course: "Algebra 1",
+        learningTarget: "Imported: radicals and rational exponents",
+        what: "What content",
+        how: "How content",
+        why: "Why content",
+      },
+    ],
+  });
+  const parsed = parseLessonImportJson(importFile);
+  if (!parsed.ok) throw new Error("expected the sample import file to parse");
+  const importPreview = buildLessonImportPreview(parsed.rows, state.courses, state.classSections, state.lessons);
+  const { lessons: lessonsAfterImport } = commitLessonImport({
+    preview: importPreview,
+    resolutions: {},
+    existingLessons: state.lessons,
+    generateId: (prefix) => `${prefix}-verify-preview`,
+    now: () => "2026-09-01T00:00:00.000Z",
+  });
+
+  const args = { date: "2026-09-15", classSectionId: "section-algebra-1-p1", block: null, lessons: lessonsAfterImport };
+  const first = resolvePreviewClassroomProps(args);
+  const second = resolvePreviewClassroomProps(args);
+  check("11a: the imported lesson previews with its agenda items intact", first?.lesson?.agendaItems.length === 3);
+  check("11b: the imported lesson's reference is stable across preview calls, same as any other lesson", first?.lesson === second?.lesson);
 }
 
 console.log(
