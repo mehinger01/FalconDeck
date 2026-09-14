@@ -448,10 +448,16 @@ CREATE TABLE lessons (
   agenda_items jsonb NOT NULL DEFAULT '[]',
   resources jsonb NOT NULL DEFAULT '[]',
   announcements jsonb NOT NULL DEFAULT '[]',
+  materials text,
   UNIQUE (organization_id, owner_membership_id, id),
   FOREIGN KEY (organization_id, course_id) REFERENCES courses (organization_id, id)
 );
 ```
+- **`materials`** (nullable, no default) maps to `DailyLesson.materials` — a
+  teacher-facing free-text prep/materials list, optional since older lessons
+  and any lesson with nothing entered leave it unset. This field did not
+  exist in `DailyLesson` when this section was first written; added here as
+  a compatibility-audit correction, not a design change.
 - **`course_id`'s composite FK (retained)** — same reasoning as `class_sections`
   (§2.9): a lesson wired to a different organization's course is a functional
   integrity error worth database enforcement.
@@ -560,11 +566,19 @@ CREATE TABLE classroom_experience_settings (
   transition_countdown_enabled boolean NOT NULL DEFAULT true,
   transition_arrival_instructions_enabled boolean NOT NULL DEFAULT true,
   watermark_override_storage_path text,
-  watermark_override_opacity numeric(3,2) CHECK (watermark_override_opacity IS NULL OR watermark_override_opacity BETWEEN 0 AND 1)
+  watermark_override_opacity numeric(3,2) CHECK (watermark_override_opacity IS NULL OR watermark_override_opacity BETWEEN 0 AND 1),
+  bell_offset_seconds integer NOT NULL DEFAULT 0 CHECK (bell_offset_seconds BETWEEN -120 AND 120)
 );
 ```
 - `watermark_override_storage_path`: `NULL` ⇒ render the organization's default
   (§2.4); set ⇒ the teacher's own wins.
+- **`bell_offset_seconds`** maps to `ClassroomExperienceSettings.bellOffsetSeconds`
+  — calibrates Falcon Deck's displayed/schedule-driving clock to the school's
+  actual bell system. Range (`-120` to `120`) and default (`0`) match
+  `BELL_OFFSET_MIN_SECONDS`/`BELL_OFFSET_MAX_SECONDS`/`clampBellOffsetSeconds`
+  in `lib/schedule/time.ts` exactly. This field did not exist in
+  `ClassroomExperienceSettings` when this section was first written; added
+  here as a compatibility-audit correction, not a design change.
 - **RLS:** strictly owner-only.
 
 ### 2.19 `teacher_schedule_preferences`
