@@ -1,51 +1,46 @@
 "use client";
 
-import { useCallback, useSyncExternalStore } from "react";
-
-function getSnapshot(): number {
-  return Date.now();
-}
-
-// Server (and the client's first hydration pass) has no meaningful "now" -
-// a live clock can never match between server-render time and
-// client-hydration time, so we render nothing until mounted.
-function getServerSnapshot(): number {
-  return 0;
-}
+import { useEffect, useState } from "react";
 
 /**
  * Subscribes to the wall clock, ticking once per `intervalMs`. Returns
- * `null` until mounted on the client, so server and client render
- * identical markup on first paint.
+ * `null` until mounted on the client so server and first client render match.
  *
- * Also resyncs immediately on tab-visible/window-focus. Backgrounded tabs
- * get their `setInterval` throttled by the browser (Chrome: as infrequent
- * as once/minute after ~5 minutes hidden), so without this a teacher
- * returning to Falcon Deck could stare at a stale period/countdown for up
- * to a minute even though every consumer already recomputes state fresh
- * from `Date.now()` on each tick. Firing `onStoreChange` on resume forces
- * that recompute instantly instead of waiting for the next throttled tick.
+ * Background tabs are heavily throttled by browsers. When Falcon Deck becomes
+ * visible again, regains focus, or is restored from the back/forward cache,
+ * resync immediately from the device clock instead of waiting for the next
+ * throttled interval.
+ *
+ * This intentionally uses local state instead of `useSyncExternalStore`.
+ * A clock snapshot based directly on `Date.now()` is not stable between React
+ * snapshot reads, which can cause repeated renders / maximum-update-depth
+ * failures when the tab resumes. State changes only when one of our explicit
+ * clock events fires, so the snapshot is stable during rendering.
  */
 export function useNow(intervalMs: number = 1000): Date | null {
-  const subscribe = useCallback(
-    (onStoreChange: () => void) => {
-      const id = setInterval(onStoreChange, intervalMs);
+  const [timestamp, setTimestamp] = useState<number | null>(null);
 
-      const resync = () => {
-        if (document.visibilityState === "visible") onStoreChange();
-      };
-      document.addEventListener("visibilitychange", resync);
-      window.addEventListener("focus", resync);
+  useEffect(() => {
+    const syncNow = () => setTimestamp(Date.now());
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") syncNow();
+    };
 
-      return () => {
-        clearInterval(id);
-        document.removeEventListener("visibilitychange", resync);
-        window.removeEventListener("focus", resync);
-      };
-    },
-    [intervalMs],
-  );
+    // Establish the first client-side clock value after hydration.
+    syncNow();
 
-  const timestamp = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
-  return timestamp === 0 ? null : new Date(timestamp);
+    const id = window.setInterval(syncNow, intervalMs);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", syncNow);
+    window.addEventListener("pageshow", syncNow);
+
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", syncNow);
+      window.removeEventListener("pageshow", syncNow);
+    };
+  }, [intervalMs]);
+
+  return timestamp === null ? null : new Date(timestamp);
 }
