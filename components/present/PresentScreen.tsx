@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useAppData, useDefaultSchedule } from "@/lib/store/AppDataProvider";
 import { useEffectiveNow } from "@/lib/hooks/useEffectiveNow";
@@ -9,6 +9,7 @@ import { resolveScheduleForWeekday } from "@/lib/schedule/resolveBlockOverride";
 import { DEFAULT_TIME_ZONE } from "@/lib/schedule/time";
 import { useClassroomTimer } from "@/lib/tools/timer/useClassroomTimer";
 import type { DailyLesson } from "@/types/lesson";
+import { FullscreenButton } from "./FullscreenButton";
 import { LivePresentScreen } from "./LivePresentScreen";
 import { PresentModeControls, type PresentMode } from "./PresentModeControls";
 import { PreviewPresentScreen } from "./PreviewPresentScreen";
@@ -69,9 +70,14 @@ export function PresentScreen() {
   const liveEffectiveNow = useEffectiveNow(settings.bellOffsetSeconds, 1000);
   const timer = useClassroomTimer();
   const tools = usePresentModeTools(settings.cleanScreenDefaultMessage);
+  // Fullscreen target - the whole mode/controls/overlays tree below, but
+  // not the sibling "Setup" link `app/present/page.tsx` renders outside
+  // this component. One button here covers both Live and Preview, since
+  // this component is their single shared parent.
+  const fullscreenRootRef = useRef<HTMLDivElement>(null);
 
   return (
-    <div className="relative min-h-screen">
+    <div ref={fullscreenRootRef} className="relative min-h-screen">
       {mode === "live" ? (
         <LivePresentScreen onCurrentLessonChange={setCurrentLesson} effectiveNow={liveEffectiveNow} />
       ) : (
@@ -93,6 +99,7 @@ export function PresentScreen() {
 
       <ToolTray tools={tools} timer={timer} currentLesson={currentLesson} />
       <TimerWidget timer={timer} />
+      <FullscreenButton targetRef={fullscreenRootRef} />
 
       {tools.cleanScreenActive && (
         <CleanScreenOverlay

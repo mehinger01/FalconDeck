@@ -89,3 +89,140 @@ body {
     animation: none;
   }
 }
+
+/*
+ * BenQ-board-first presentation tier for LessonPanels/CountdownBanner
+ * (Present + Preview Mode - see components/present/LessonPanels.tsx and
+ * CountdownBanner.tsx). Gated on width AND height together, not width
+ * alone: a physical 1920x1080 display can report far fewer CSS pixels
+ * under Windows display scaling (e.g. ~1280x720 at 150%), and a
+ * width-only query risks either never firing on a scaled real board, or
+ * firing on a merely-wide-but-short window that isn't one. Entering real
+ * browser Fullscreen resizes the viewport to this same scaled CSS-pixel
+ * box, so no separate JS "is fullscreen" signal is needed here - the
+ * media query already reflects it.
+ *
+ * These rules are intentionally NOT inside a Tailwind utility/component
+ * @layer, so - per the CSS cascade layers spec - they win over the
+ * layered `p-6`/`text-xl`/`grid-cols-2`/etc. utility classes already on
+ * these elements at every OTHER breakpoint, with no !important needed,
+ * and are completely inert below this breakpoint (existing behavior at
+ * every current breakpoint is unchanged).
+ */
+@media (min-width: 1536px) and (min-height: 800px) {
+  /*
+   * 12 columns (not 6) so Agenda/Materials ("wide") can take noticeably
+   * more width than Learning Target ("narrow") in the 3-up row: real
+   * agenda/materials text wraps to many lines even at generous widths,
+   * while a learning target is normally a sentence or two with room to
+   * spare - measured with Playwright against a deliberately long,
+   * realistic lesson (3 agenda items with details, a long materials list)
+   * before landing on 5/2/5 and 6/6 as the split that lets all five cards
+   * plus the compact countdown fit at 1536x864 and 1920x1080 with zero
+   * page scroll. Narrowing Learning Target further than 2/12 (tried 2/24)
+   * backfires - its own text starts wrapping to many more lines than it
+   * saves on Agenda/Materials, making Learning Target the tallest card
+   * instead. See scripts/verify-present-layout.ts.
+   */
+  .present-grid {
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    gap: 0.875rem 1.5rem; /* 14px row gap, 24px column gap */
+    max-width: none;
+    width: 100%;
+  }
+  .present-grid > [data-span="wide"] {
+    grid-column: span 5 / span 5;
+  }
+  .present-grid > [data-span="narrow"] {
+    grid-column: span 2 / span 2;
+  }
+  .present-grid > [data-span="half"] {
+    grid-column: span 6 / span 6;
+  }
+
+  .present-card {
+    padding: 0.75rem; /* 12px - tighter than the sm:p-7 (28px) it overrides, still comfortable */
+    min-height: 8rem; /* a floor only - realistic content is taller; never a fixed/max height */
+  }
+  .present-card-heading {
+    font-size: 2.25rem; /* 36px, per "approximately 36px card headings" */
+    line-height: 2.25rem; /* tight - a single-line heading needs no extra leading */
+  }
+  .present-card-body {
+    font-size: 1.5rem; /* 24px, per "at least 24px body text" */
+    line-height: 1.75rem; /* tighter than the 2rem this overrides - still comfortably readable, not shrunk (font-size is unchanged) */
+  }
+  .present-card-detail {
+    /* Secondary text only (e.g. an agenda item's details line, already
+       visually smaller than its title in every other breakpoint too) -
+       deliberately below the 24px primary-body floor. */
+    font-size: 1.25rem; /* 20px */
+    line-height: 1.5rem;
+  }
+  .present-checkbox {
+    width: 2rem;
+    height: 2rem;
+  }
+  /* The gap directly under each card's heading (mt-3 in every card) and
+     between agenda items (space-y-3) - tightened the same way as the line
+     heights above: less whitespace, same type size. */
+  .present-card-section-gap {
+    margin-top: 0.5rem;
+  }
+  .present-agenda-list {
+    margin-top: 0.5rem;
+  }
+  .present-agenda-list > li + li {
+    margin-top: 0.5rem;
+  }
+
+  /* The chrome around the card grid (Falcon Deck header, the period/class
+     name block, the Preview date pill) - tightened so the grid gets more
+     of the viewport's height without touching any of its own type sizes. */
+  .present-classroom-shell {
+    gap: 0.625rem;
+    padding-block: 0.375rem;
+  }
+  .present-header {
+    padding-top: 0.375rem;
+  }
+  .present-title {
+    margin-top: 0.25rem;
+    /* Still well above the 36px card-heading floor the spec sets - this is
+       the class-name hero title, not a card, so shrinking it from the
+       md:text-6xl (60px) it overrides is a legitimate space-saver rather
+       than "shrinking text to fit," and it stays clearly the largest,
+       boldest text on screen. */
+    font-size: 3rem; /* 48px */
+    line-height: 3.25rem;
+  }
+
+  .present-countdown {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 0.75rem;
+    padding: 0.375rem 1.125rem;
+    width: auto; /* overrides w-full - a compact pill, not a full-width banner, at this tier */
+  }
+  .present-countdown-label {
+    font-size: 1.125rem; /* 18px */
+  }
+  .present-countdown-digits {
+    margin-top: 0; /* overrides mt-2 - baseline-aligned in a row, not stacked */
+    font-size: 2.5rem; /* 40px - large and unmistakable, single line */
+    line-height: 1;
+  }
+
+  /* The optional final-5:00 teacher message sits beside the countdown
+     pill, not stacked below it - saves a full text line's worth of
+     height in exactly the scenario (Live Mode, final five minutes) that
+     stacks the tallest amount of chrome above the card grid. */
+  .present-countdown-row {
+    flex-direction: row;
+    gap: 1rem;
+  }
+  .present-countdown-message {
+    max-width: 22rem;
+    text-align: left;
+  }
+}

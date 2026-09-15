@@ -34,7 +34,7 @@ export function ClassroomView({
   const branding = data.classroomExperienceSettings;
 
   return (
-    <div className="relative flex flex-1 flex-col items-center justify-center gap-6 px-10 py-6 text-center sm:px-16">
+    <div className="present-classroom-shell relative flex flex-1 flex-col items-center justify-center gap-6 px-10 py-6 text-center sm:px-16">
       <PresentWatermark customImageSrc={branding.customWatermarkDataUrl} opacity={branding.watermarkOpacity} />
 
       <div className="relative z-10 flex flex-1 flex-col items-center justify-center gap-6">
@@ -42,16 +42,18 @@ export function ClassroomView({
           <p className="text-xs font-bold uppercase tracking-[0.3em] text-falcon-gold-400/90 sm:text-sm">
             {block.label} · {kindLabel(block)}
           </p>
-          <h1 className="mt-2 text-4xl font-black text-falcon-cream-100 sm:text-5xl md:text-6xl">
+          <h1 className="present-title mt-2 text-4xl font-black text-falcon-cream-100 sm:text-5xl md:text-6xl">
             {displayName}
           </h1>
         </div>
 
         {showCountdown && (
-          <div className="animate-present-fade flex flex-col items-center gap-2">
+          <div className="present-countdown-row animate-present-fade flex flex-col items-center gap-2">
             <CountdownBanner remainingSeconds={remainingSeconds} />
             {finalFiveMessage && (
-              <p className="text-sm font-medium text-falcon-cream-200/70">{finalFiveMessage}</p>
+              <p className="present-countdown-message text-sm font-medium text-falcon-cream-200/70">
+                {finalFiveMessage}
+              </p>
             )}
           </div>
         )}

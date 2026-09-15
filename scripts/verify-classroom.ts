@@ -71,6 +71,12 @@ import {
 import { processWatermarkUpload } from "@/lib/present/processWatermarkUpload";
 import { LessonPanels } from "@/components/present/LessonPanels";
 import type { DailyLesson } from "@/types/lesson";
+import {
+  deriveChangeState,
+  deriveErrorState,
+  deriveInitialState,
+  INACTIVE_STATE,
+} from "@/lib/present/fullscreenState";
 // Note: components/present/PresentWatermark.tsx is not imported here - it's
 // a React component (needs a DOM renderer, not available under plain
 // tsx/Node). Its default-asset behavior is instead confirmed with a
@@ -1081,6 +1087,211 @@ console.log("\n47. Materials panel: appears when populated, hidden when blank, w
     check(
       "both still route through the one shared ClassroomView (proven above), so the Materials card can never diverge between modes",
       liveSource.includes("<ClassroomView") && previewSource.includes("<ClassroomView"),
+    );
+  }
+}
+
+console.log("\n48. BenQ presentation-tier grid: card spans react to Materials presence; countdown carries its compact-variant classes");
+{
+  // Same direct-function-call technique as #47, but this time collecting
+  // every element (not just text-bearing ones) so `data-span` and the
+  // `present-*` classes - both invisible to #47's text-only walk - can be
+  // asserted on directly, without a DOM renderer.
+  interface ReactLikeElement {
+    type?: unknown;
+    props?: { children?: unknown; className?: unknown; "data-span"?: unknown; [key: string]: unknown };
+  }
+
+  function collectElements(node: unknown, sink: ReactLikeElement[]): void {
+    if (node === null || node === undefined || typeof node === "boolean") return;
+    if (typeof node === "string" || typeof node === "number") return;
+    if (Array.isArray(node)) {
+      node.forEach((child) => collectElements(child, sink));
+      return;
+    }
+    if (typeof node === "object" && "props" in node) {
+      const el = node as ReactLikeElement;
+      sink.push(el);
+      collectElements(el.props?.children, sink);
+    }
+  }
+
+  function renderPanels(lesson: DailyLesson) {
+    const elements: ReactLikeElement[] = [];
+    const tree = LessonPanels({ lesson, onToggleAgendaItem: () => {} });
+    collectElements(tree, elements);
+    return elements;
+  }
+
+  const baseLesson: DailyLesson = {
+    id: "lesson-span-test",
+    date: "2026-09-15",
+    classSectionId: "section-test",
+    learningTarget: "Test target",
+    agendaItems: [],
+    resources: [],
+    announcements: [],
+    createdAt: "2026-09-01T00:00:00.000Z",
+    updatedAt: "2026-09-01T00:00:00.000Z",
+  };
+
+  console.log(
+    "  Materials present: Agenda/Materials are data-span=\"wide\", Learning Target is \"narrow\", Resources/Announcements stay \"half\"",
+  );
+  {
+    const elements = renderPanels({ ...baseLesson, materials: "Guided notes packet" });
+    const sections = elements.filter((el) => el.type === "section");
+    check("exactly 5 cards render", sections.length === 5);
+    const spans = sections.map((s) => s.props?.["data-span"]);
+    check(
+      "all five spans are present and only 'wide'/'narrow'/'half'",
+      spans.every((s) => s === "wide" || s === "narrow" || s === "half"),
+    );
+    check("exactly two cards are 'wide' (Agenda, Materials)", spans.filter((s) => s === "wide").length === 2);
+    check("exactly one card is 'narrow' (Learning Target)", spans.filter((s) => s === "narrow").length === 1);
+    check("exactly two cards are 'half' (Resources, Announcements)", spans.filter((s) => s === "half").length === 2);
+    check("every card carries the present-card class", sections.every((s) => String(s.props?.className ?? "").includes("present-card")));
+  }
+
+  console.log("  Materials absent: Agenda/Target widen to 'half', matching Resources/Announcements; only 4 cards render");
+  {
+    const elements = renderPanels({ ...baseLesson, materials: undefined });
+    const sections = elements.filter((el) => el.type === "section");
+    check("exactly 4 cards render (no Materials card)", sections.length === 4);
+    const spans = sections.map((s) => s.props?.["data-span"]);
+    check(
+      "all four spans are 'half' - no leftover 'wide'/'narrow' from a hasMaterials mistake",
+      spans.every((s) => s === "half"),
+    );
+  }
+
+  console.log("  The whole grid container carries present-grid; card text carries the presentation-tier type classes");
+  {
+    const tree = LessonPanels({
+      lesson: { ...baseLesson, materials: "x" },
+      onToggleAgendaItem: () => {},
+    });
+    const outer = tree as ReactLikeElement;
+    check("the outer container has the present-grid class", String(outer.props?.className ?? "").includes("present-grid"));
+
+    const elements = renderPanels({ ...baseLesson, materials: "x" });
+    const headings = elements.filter((el) => el.type === "h3");
+    check(
+      "every card heading carries present-card-heading",
+      headings.length > 0 && headings.every((h) => String(h.props?.className ?? "").includes("present-card-heading")),
+    );
+  }
+
+  console.log("  CountdownBanner carries its compact-variant classes at every call site (Live and the transition screen)");
+  {
+    const countdownSource = readFileSync(join(process.cwd(), "components", "present", "CountdownBanner.tsx"), "utf8");
+    check("CountdownBanner's outer container carries present-countdown", countdownSource.includes("present-countdown "));
+    check("its label carries present-countdown-label", countdownSource.includes("present-countdown-label"));
+    check("its digits carry present-countdown-digits", countdownSource.includes("present-countdown-digits"));
+
+    const cssSource = readFileSync(join(process.cwd(), "app", "globals.css"), "utf8");
+    check(
+      "globals.css defines the compact countdown variant inside the compound width+height media query, not a width-only one",
+      /@media \(min-width: 1536px\) and \(min-height: 800px\)/.test(cssSource) &&
+        cssSource.includes(".present-countdown {") &&
+        !/@media\s*\(min-width:\s*1800px\)/.test(cssSource),
+    );
+  }
+}
+
+console.log(
+  "\n49. Fullscreen state machine (lib/present/fullscreenState.ts) - pure, DOM-free, directly testable, " +
+    "mirroring the clockStore.ts/useNow.ts split. Real browser/API behavior (an actual requestFullscreen() " +
+    "call, a real Escape keypress) is separately verified with Playwright in scripts/verify-present-layout.ts, " +
+    "since headless Chromium is required to observe it; what's DOM-free here is proven directly.",
+);
+{
+  console.log("  inactive -> active");
+  {
+    const active = deriveChangeState(true);
+    check("deriveChangeState(true) reports status 'active'", active.status === "active");
+    check("the active state carries no fallback message", active.fallbackMessage === null);
+  }
+
+  console.log("  active -> inactive, via the same path Escape and a manual Exit Fullscreen click both take");
+  {
+    // useFullscreen.ts's fullscreenchange listener is the ONLY place
+    // deriveChangeState is called (confirmed by the source scan below) -
+    // there is no separate keydown handler for Escape, because the browser
+    // itself exits fullscreen on Escape and fires this same native event.
+    // So one function covers both "user clicked Exit Fullscreen" and
+    // "user pressed Escape": both end with the browser reporting
+    // document.fullscreenElement !== target, i.e. isCurrentlyFullscreen=false.
+    const backToInactive = deriveChangeState(false);
+    check(
+      "deriveChangeState(false) (Escape or a manual exit) returns the exact INACTIVE_STATE constant",
+      backToInactive === INACTIVE_STATE,
+    );
+  }
+
+  console.log("  unsupported-browser fallback mentions F11");
+  {
+    const unsupported = deriveInitialState(false);
+    check("deriveInitialState(false) reports status 'unsupported'", unsupported.status === "unsupported");
+    check(
+      "the unsupported fallback message mentions F11 as a manual alternative",
+      typeof unsupported.fallbackMessage === "string" && unsupported.fallbackMessage.includes("F11"),
+    );
+    const supported = deriveInitialState(true);
+    check(
+      "a browser that DOES support fullscreen gets the plain inactive state, not the fallback",
+      supported === INACTIVE_STATE,
+    );
+  }
+
+  console.log("  a rejected fullscreen request (blocked mid-session) also falls back with F11 mentioned");
+  {
+    const rejected = deriveErrorState();
+    check("deriveErrorState() reports status 'unsupported'", rejected.status === "unsupported");
+    check(
+      "the rejected/blocked message also mentions F11",
+      typeof rejected.fallbackMessage === "string" && rejected.fallbackMessage.includes("F11"),
+    );
+    check(
+      "the blocked message is worded distinctly from the not-supported message (different failure, different explanation)",
+      rejected.fallbackMessage !== deriveInitialState(false).fallbackMessage,
+    );
+  }
+
+  console.log("  useFullscreen.ts: listener cleanup is symmetric, and fullscreen only ever starts from a click");
+  {
+    const hookSource = readFileSync(join(process.cwd(), "lib", "hooks", "useFullscreen.ts"), "utf8");
+
+    const addCount = (hookSource.match(/addEventListener\("fullscreenchange"/g) ?? []).length;
+    const removeCount = (hookSource.match(/removeEventListener\("fullscreenchange"/g) ?? []).length;
+    check("addEventListener('fullscreenchange') appears exactly once (the mount effect)", addCount === 1);
+    check(
+      "removeEventListener('fullscreenchange') appears exactly once, matching it (the effect's cleanup function)",
+      removeCount === 1,
+    );
+
+    // The cleanup must run inside the same effect's `return () => ...}`,
+    // not somewhere unrelated - isolate the effect body between its
+    // `useEffect(() => {` and the closing `}, []);` and check both calls
+    // live inside that one block.
+    const effectStart = hookSource.indexOf("useEffect(() => {");
+    const effectEnd = hookSource.indexOf("}, []);", effectStart);
+    const effectBody = hookSource.slice(effectStart, effectEnd);
+    check(
+      "both the add and the remove happen inside the same mount effect, not split across effects",
+      effectBody.includes('addEventListener("fullscreenchange"') && effectBody.includes('removeEventListener("fullscreenchange"'),
+    );
+    check(
+      "the cleanup function also clears mountedRef, so a stray fullscreenchange after unmount can't call setState",
+      /return \(\) => \{[^}]*mountedRef\.current = false;[^}]*removeEventListener/.test(effectBody),
+    );
+
+    check(
+      "requestFullscreen()/exitFullscreen() are each called exactly once in the file, both inside toggle() - never from the mount effect",
+      (hookSource.match(/\.requestFullscreen\(\)/g) ?? []).length === 1 &&
+        (hookSource.match(/\.exitFullscreen\(\)/g) ?? []).length === 1 &&
+        !effectBody.includes("requestFullscreen") &&
+        !effectBody.includes("exitFullscreen"),
     );
   }
 }

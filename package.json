@@ -17,6 +17,7 @@
     "verify:demo": "tsx scripts/verify-demo.ts",
     "verify:lesson-import": "tsx scripts/verify-lesson-import.ts",
     "verify:clockstore": "tsx scripts/verify-clockstore.ts",
+    "verify:present-layout": "tsx scripts/verify-present-layout.ts",
     "verify": "npm run verify:schedule && npm run verify:lessons && npm run verify:preview && npm run verify:week && npm run verify:classroom && npm run verify:resources && npm run verify:calendar && npm run verify:demo && npm run verify:lesson-import && npm run verify:clockstore"
   },
   "dependencies": {
@@ -36,6 +37,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.3.1",
+    "playwright": "^1.63.0",
     "tailwindcss": "^4",
     "tsx": "^4.23.12",
     "typescript": "^5"

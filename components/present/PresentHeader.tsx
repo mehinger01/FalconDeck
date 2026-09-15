@@ -8,7 +8,7 @@ import { formatZonedDateTime } from "@/lib/schedule/time";
  */
 export function PresentHeader({ now, timeZone }: { now: Date; timeZone: string }) {
   return (
-    <header className="px-6 pt-5 sm:px-8 sm:pt-6">
+    <header className="present-header px-6 pt-5 sm:px-8 sm:pt-6">
       <p className="text-xs font-extrabold uppercase tracking-[0.2em] text-falcon-gold-400/80">
         Falcon Deck
       </p>
