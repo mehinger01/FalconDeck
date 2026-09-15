@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useAppData, useDefaultSchedule } from "@/lib/store/AppDataProvider";
 import { useEffectiveNow } from "@/lib/hooks/useEffectiveNow";
@@ -45,13 +45,25 @@ export function PresentScreen() {
 
   // Real schedule context for Preview's optional period label - reuses the
   // same override-resolution the live engine uses, never re-implements it.
-  const blockOptions =
-    schedule && classSectionId
-      ? resolveScheduleForWeekday(schedule, weekdayForDateKey(date)).filter(
-          (block) => block.classSectionId === classSectionId,
-        )
-      : [];
-  const selectedBlock = blockOptions.find((block) => block.id === blockIdParam) ?? blockOptions[0] ?? null;
+  // Memoized because `resolveScheduleForWeekday` builds a brand-new
+  // ResolvedScheduleBlock object for every block on every call (see
+  // `resolveBlockOverride`) - without this, `blockOptions`/`selectedBlock`
+  // would be fresh references on every render even when nothing about the
+  // schedule/date/section actually changed, destabilizing every downstream
+  // prop and effect that depends on them (see `PreviewPresentScreen`).
+  const blockOptions = useMemo(
+    () =>
+      schedule && classSectionId
+        ? resolveScheduleForWeekday(schedule, weekdayForDateKey(date)).filter(
+            (block) => block.classSectionId === classSectionId,
+          )
+        : [],
+    [schedule, date, classSectionId],
+  );
+  const selectedBlock = useMemo(
+    () => blockOptions.find((block) => block.id === blockIdParam) ?? blockOptions[0] ?? null,
+    [blockOptions, blockIdParam],
+  );
 
   const [currentLesson, setCurrentLesson] = useState<DailyLesson | null>(null);
   const liveEffectiveNow = useEffectiveNow(settings.bellOffsetSeconds, 1000);

@@ -16,7 +16,8 @@
     "verify:calendar": "tsx scripts/verify-calendar.ts",
     "verify:demo": "tsx scripts/verify-demo.ts",
     "verify:lesson-import": "tsx scripts/verify-lesson-import.ts",
-    "verify": "npm run verify:schedule && npm run verify:lessons && npm run verify:preview && npm run verify:week && npm run verify:classroom && npm run verify:resources && npm run verify:calendar && npm run verify:demo && npm run verify:lesson-import"
+    "verify:clockstore": "tsx scripts/verify-clockstore.ts",
+    "verify": "npm run verify:schedule && npm run verify:lessons && npm run verify:preview && npm run verify:week && npm run verify:classroom && npm run verify:resources && npm run verify:calendar && npm run verify:demo && npm run verify:lesson-import && npm run verify:clockstore"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",

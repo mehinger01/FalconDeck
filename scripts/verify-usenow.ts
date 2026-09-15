@@ -1,8 +1,7 @@
 /**
  * Standalone verification for the `useNow` visibility/focus resync fix,
- * without modifying `lib/hooks/useNow.ts` or executing it through a React
- * renderer (no jsdom/react-test-renderer in this project, and none should
- * be added just for this).
+ * without executing it through a React renderer (no jsdom/react-test-
+ * renderer in this project, and none should be added just for this).
  *
  * Two halves:
  *
@@ -12,15 +11,18 @@
  *      a period boundary, or landing inside a passing block - always
  *      resolves directly to the correct current state. This is the
  *      property `useNow`'s resync relies on: it does not replay missed
- *      ticks, it just forces one fresh recompute from `Date.now()`.
+ *      ticks, it just forces one fresh recompute of the cached timestamp.
  *
- *   2. Static - reads `lib/hooks/useNow.ts` as text and asserts its
+ *   2. Static - reads `lib/hooks/clockStore.ts` as text and asserts its
  *      subscribe/cleanup structure directly: one interval, one
  *      visibilitychange listener, one focus listener, the SAME handler
  *      wired to both (so focus and visibilitychange are provably
- *      equivalent), a stable `useCallback` dependency array (no
- *      re-subscription churn across renders), and a cleanup closure that
- *      tears down all three.
+ *      equivalent), and a cleanup closure that tears down all three.
+ *      (The subscribe/getSnapshot caching behavior itself - the "Maximum
+ *      update depth exceeded" regression - is exercised for real, not just
+ *      read as text, in scripts/verify-clockstore.ts; `createClockStore`
+ *      is pure and DOM-free specifically so that's possible without a
+ *      renderer.)
  *
  * Not a test framework - just a script with assertions, run via `tsx`,
  * matching the existing scripts/verify-*.ts convention:
@@ -112,57 +114,99 @@ console.log("\n4. getPresentationState is a pure function of (schedule, now)");
   check("earlier call does not leak into a later independent call", backwardsFirst.mode === "student-facing");
 }
 
-console.log("\n5. Static structure of lib/hooks/useNow.ts (read-only, not executed)");
+console.log("\n5. Static structure of lib/hooks/clockStore.ts (read-only, not executed)");
 {
-  const source = readFileSync(join(process.cwd(), "lib/hooks/useNow.ts"), "utf8");
+  // `useNow.ts` itself is now a thin useSyncExternalStore wrapper around
+  // `createClockStore` (see scripts/verify-clockstore.ts for the fix this
+  // enabled) - the actual subscribe/interval/listener wiring these checks
+  // pin now lives here instead.
+  const source = readFileSync(join(process.cwd(), "lib/hooks/clockStore.ts"), "utf8");
 
   const countOccurrences = (re: RegExp) => (source.match(re) ?? []).length;
 
-  check("exactly one setInterval(...) registration", countOccurrences(/\bsetInterval\(/g) === 1);
-  check("exactly one clearInterval(...) call", countOccurrences(/\bclearInterval\(/g) === 1);
+  check("exactly one deps.setInterval(...) registration", countOccurrences(/\bdeps\.setInterval\(/g) === 1);
+  check("exactly one deps.clearInterval(...) call", countOccurrences(/\bdeps\.clearInterval\(/g) === 1);
   check(
-    'exactly one document.addEventListener("visibilitychange", ...)',
-    countOccurrences(/document\.addEventListener\(\s*["']visibilitychange["']/g) === 1,
+    "exactly one deps.addVisibilityChangeListener(...) registration",
+    countOccurrences(/\bdeps\.addVisibilityChangeListener\(/g) === 1,
   );
   check(
-    'exactly one document.removeEventListener("visibilitychange", ...)',
-    countOccurrences(/document\.removeEventListener\(\s*["']visibilitychange["']/g) === 1,
+    "exactly one deps.removeVisibilityChangeListener(...) call",
+    countOccurrences(/\bdeps\.removeVisibilityChangeListener\(/g) === 1,
+  );
+  check("exactly one deps.addFocusListener(...) registration", countOccurrences(/\bdeps\.addFocusListener\(/g) === 1);
+  check("exactly one deps.removeFocusListener(...) call", countOccurrences(/\bdeps\.removeFocusListener\(/g) === 1);
+  check(
+    "exactly one deps.addPageShowListener(...) registration",
+    countOccurrences(/\bdeps\.addPageShowListener\(/g) === 1,
   );
   check(
-    'exactly one window.addEventListener("focus", ...)',
-    countOccurrences(/window\.addEventListener\(\s*["']focus["']/g) === 1,
-  );
-  check(
-    'exactly one window.removeEventListener("focus", ...)',
-    countOccurrences(/window\.removeEventListener\(\s*["']focus["']/g) === 1,
+    "exactly one deps.removePageShowListener(...) call",
+    countOccurrences(/\bdeps\.removePageShowListener\(/g) === 1,
   );
 
-  const addVisibility = source.match(/document\.addEventListener\(\s*["']visibilitychange["']\s*,\s*(\w+)/);
-  const addFocus = source.match(/window\.addEventListener\(\s*["']focus["']\s*,\s*(\w+)/);
-  const removeVisibility = source.match(/document\.removeEventListener\(\s*["']visibilitychange["']\s*,\s*(\w+)/);
-  const removeFocus = source.match(/window\.removeEventListener\(\s*["']focus["']\s*,\s*(\w+)/);
+  const addVisibility = source.match(/deps\.addVisibilityChangeListener\(\s*(\w+)/);
+  const addFocus = source.match(/deps\.addFocusListener\(\s*(\w+)/);
+  const removeVisibility = source.match(/deps\.removeVisibilityChangeListener\(\s*(\w+)/);
+  const removeFocus = source.match(/deps\.removeFocusListener\(\s*(\w+)/);
   check("visibilitychange and focus are wired to the SAME handler (proves focus is behaviorally identical to visibilitychange)", !!addVisibility && !!addFocus && addVisibility[1] === addFocus[1]);
-  check("removeEventListener calls target that same handler identifier (cleanup actually detaches what was attached, not a look-alike)", !!removeVisibility && !!removeFocus && addVisibility?.[1] === removeVisibility[1] && addFocus?.[1] === removeFocus[1]);
+  check("remove calls target that same handler identifier (cleanup actually detaches what was attached, not a look-alike)", !!removeVisibility && !!removeFocus && addVisibility?.[1] === removeVisibility[1] && addFocus?.[1] === removeFocus[1]);
 
+  const addPageShow = source.match(/deps\.addPageShowListener\(\s*(\w+)/);
+  const removePageShow = source.match(/deps\.removePageShowListener\(\s*(\w+)/);
   check(
-    'useCallback dependency array is exactly "[intervalMs]" (stable subscribe identity - no re-subscription churn across renders with the same intervalMs, so no duplicate interval/listener registration)',
-    /useCallback\(\s*[\s\S]*?,\s*\[intervalMs\]\s*,?\s*\)/.test(source),
+    "pageshow is wired to tick directly, NOT the visibility-guarded resync (bfcache restoration must resync unconditionally)",
+    addPageShow?.[1] === "tick",
+  );
+  check(
+    "pageshow's remove call targets the same tick identifier",
+    !!addPageShow && !!removePageShow && addPageShow[1] === removePageShow[1],
   );
 
-  // The returned cleanup closure must contain all three teardown calls -
-  // confirm they appear after the subscribe function's `return (` marker,
-  // i.e. inside the actual unsubscribe closure and not dead code elsewhere.
+  // The returned cleanup closure must contain all four teardown calls -
+  // confirm they appear after subscribe's `return (` marker, i.e. inside
+  // the actual unsubscribe closure and not dead code elsewhere.
   const returnIndex = source.indexOf("return () => {");
   check("subscribe function has a `return () => { ... }` cleanup closure", returnIndex !== -1);
   const cleanupBody = returnIndex !== -1 ? source.slice(returnIndex) : "";
-  check("cleanup closure clears the interval", /clearInterval\(/.test(cleanupBody));
-  check("cleanup closure removes the visibilitychange listener", /document\.removeEventListener\(\s*["']visibilitychange["']/.test(cleanupBody));
-  check("cleanup closure removes the focus listener", /window\.removeEventListener\(\s*["']focus["']/.test(cleanupBody));
+  check("cleanup closure clears the interval", /deps\.clearInterval\(/.test(cleanupBody));
+  check("cleanup closure removes the visibilitychange listener", /deps\.removeVisibilityChangeListener\(/.test(cleanupBody));
+  check("cleanup closure removes the focus listener", /deps\.removeFocusListener\(/.test(cleanupBody));
+  check("cleanup closure removes the pageshow listener", /deps\.removePageShowListener\(/.test(cleanupBody));
 
-  const resyncGuard = source.match(/const\s+resync\s*=\s*\(\)\s*=>\s*\{\s*if\s*\(document\.visibilityState\s*===\s*["']visible["']\)\s*(\w+)\(\);?\s*\};/);
+  const resyncGuard = source.match(/const\s+resync\s*=\s*\(\)\s*=>\s*\{\s*if\s*\(deps\.isVisible\(\)\)\s*(\w+)\(\);?\s*\};/);
   check(
-    "resync only fires onStoreChange when document.visibilityState is visible (no spurious recompute while still hidden)",
+    "resync only fires tick() when deps.isVisible() is true (no spurious recompute while still hidden)",
     !!resyncGuard,
+  );
+
+  check(
+    "getSnapshot returns the cached variable, never a fresh deps.now() read (the exact bug this module fixes)",
+    /function getSnapshot\(\): number \{\s*return cachedNow;\s*\}/.test(source),
+  );
+  check(
+    "the cache is written only inside tick, immediately before notifying (cache-then-notify order, never notify-then-cache)",
+    /const tick = \(\) => \{\s*cachedNow = deps\.now\(\);\s*onStoreChange\(\);\s*\};/.test(source),
+  );
+}
+
+console.log("\n6. Static structure of lib/hooks/useNow.ts's real browser bindings (read-only, not executed)");
+{
+  // clockStore.ts is DOM-free by design (see section 5) - the actual
+  // document/window bindings for those injected deps live here instead.
+  const source = readFileSync(join(process.cwd(), "lib/hooks/useNow.ts"), "utf8");
+  check(
+    'browserClockDeps binds a real window.addEventListener("pageshow", ...)',
+    /window\.addEventListener\(\s*["']pageshow["']/.test(source),
+  );
+  check(
+    'browserClockDeps binds a real window.removeEventListener("pageshow", ...)',
+    /window\.removeEventListener\(\s*["']pageshow["']/.test(source),
+  );
+  check(
+    'browserClockDeps still binds visibilitychange/focus too',
+    /document\.addEventListener\(\s*["']visibilitychange["']/.test(source) &&
+      /window\.addEventListener\(\s*["']focus["']/.test(source),
   );
 }
 

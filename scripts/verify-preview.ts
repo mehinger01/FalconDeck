@@ -247,12 +247,46 @@ console.log("\n10. PreviewPresentScreen's onCurrentLessonChange effect can't ren
   // itself.
   const source = readFileSync(join(process.cwd(), "components/present/PreviewPresentScreen.tsx"), "utf8");
   check(
-    "10d: the effect depends on lesson?.id, not the classroomProps wrapper",
-    /\},\s*\[lesson\?\.id,\s*onCurrentLessonChange\]\);/.test(source),
+    "10d: classroomProps is memoized (resolvePreviewClassroomProps is not called unwrapped in the component body)",
+    /useMemo\(\s*\(\)\s*=>\s*resolvePreviewClassroomProps/.test(source),
   );
   check(
-    "10e: the effect no longer depends on the classroomProps wrapper object",
+    "10e: the effect depends on a primitive lessonId, not the classroomProps wrapper or the lesson object itself",
+    /\},\s*\[lessonId,\s*onCurrentLessonChange\]\);/.test(source),
+  );
+  check(
+    "10f: the effect no longer depends on the classroomProps wrapper object",
     !/\[classroomProps,\s*onCurrentLessonChange\]/.test(source),
+  );
+  check(
+    "10g: a ref-based guard additionally prevents re-notifying for an unchanged lessonId",
+    /notifiedLessonIdRef\.current === lessonId\) return;/.test(source),
+  );
+  check(
+    "10h: PresentScreen memoizes blockOptions/selectedBlock too - resolveScheduleForWeekday builds fresh objects every call",
+    (() => {
+      const presentScreenSource = readFileSync(join(process.cwd(), "components/present/PresentScreen.tsx"), "utf8");
+      return /const blockOptions = useMemo\(/.test(presentScreenSource) && /const selectedBlock = useMemo\(/.test(presentScreenSource);
+    })(),
+  );
+}
+
+console.log("\n10i. resolveScheduleForWeekday confirmed unstable by reference - why PresentScreen must memoize it");
+{
+  const monday = weekdayForDateKey("2026-08-17");
+  const first = resolveScheduleForWeekday(schedule, monday);
+  const second = resolveScheduleForWeekday(schedule, monday);
+  check(
+    "the returned array is a new reference every call, even for identical inputs",
+    first !== second,
+  );
+  check(
+    "each resolved block inside it is also a new object every call (resolveBlockOverride always builds a fresh literal)",
+    first.every((block, i) => block !== second[i]),
+  );
+  check(
+    "despite the reference churn, the actual field values are identical - proving useMemo is safe here",
+    JSON.stringify(first) === JSON.stringify(second),
   );
 }
 

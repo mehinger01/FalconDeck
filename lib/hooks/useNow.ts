@@ -1,46 +1,41 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useMemo, useSyncExternalStore } from "react";
+import { createClockStore, type ClockStoreDeps } from "./clockStore";
+
+// Server (and the client's first hydration pass) has no meaningful "now" -
+// a live clock can never match between server-render time and
+// client-hydration time, so we render nothing until mounted.
+function getServerSnapshot(): number {
+  return 0;
+}
+
+const browserClockDeps: ClockStoreDeps = {
+  now: () => Date.now(),
+  setInterval: (handler, intervalMs) => setInterval(handler, intervalMs),
+  clearInterval: (id) => clearInterval(id as ReturnType<typeof setInterval>),
+  addVisibilityChangeListener: (handler) => document.addEventListener("visibilitychange", handler),
+  removeVisibilityChangeListener: (handler) => document.removeEventListener("visibilitychange", handler),
+  addFocusListener: (handler) => window.addEventListener("focus", handler),
+  removeFocusListener: (handler) => window.removeEventListener("focus", handler),
+  addPageShowListener: (handler) => window.addEventListener("pageshow", handler),
+  removePageShowListener: (handler) => window.removeEventListener("pageshow", handler),
+  isVisible: () => document.visibilityState === "visible",
+};
 
 /**
  * Subscribes to the wall clock, ticking once per `intervalMs`. Returns
  * `null` until mounted on the client so server and first client render match.
  *
- * Background tabs are heavily throttled by browsers. When Falcon Deck becomes
- * visible again, regains focus, or is restored from the back/forward cache,
- * resync immediately from the device clock instead of waiting for the next
- * throttled interval.
- *
- * This intentionally uses local state instead of `useSyncExternalStore`.
- * A clock snapshot based directly on `Date.now()` is not stable between React
- * snapshot reads, which can cause repeated renders / maximum-update-depth
- * failures when the tab resumes. State changes only when one of our explicit
- * clock events fires, so the snapshot is stable during rendering.
+ * All of the actual subscribe/getSnapshot/cache logic - including why the
+ * snapshot must be cached at all, and the visibility/focus/pageshow resync
+ * (background tabs, regained focus, and back/forward-cache restoration) -
+ * lives in `createClockStore` (pure, no React, directly testable without a
+ * DOM; see scripts/verify-clockstore.ts). This hook only creates one store
+ * instance per `intervalMs` and wires it to React.
  */
 export function useNow(intervalMs: number = 1000): Date | null {
-  const [timestamp, setTimestamp] = useState<number | null>(null);
-
-  useEffect(() => {
-    const syncNow = () => setTimestamp(Date.now());
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") syncNow();
-    };
-
-    // Establish the first client-side clock value after hydration.
-    syncNow();
-
-    const id = window.setInterval(syncNow, intervalMs);
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    window.addEventListener("focus", syncNow);
-    window.addEventListener("pageshow", syncNow);
-
-    return () => {
-      window.clearInterval(id);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-      window.removeEventListener("focus", syncNow);
-      window.removeEventListener("pageshow", syncNow);
-    };
-  }, [intervalMs]);
-
-  return timestamp === null ? null : new Date(timestamp);
+  const store = useMemo(() => createClockStore(intervalMs, browserClockDeps), [intervalMs]);
+  const timestamp = useSyncExternalStore(store.subscribe, store.getSnapshot, getServerSnapshot);
+  return timestamp === 0 ? null : new Date(timestamp);
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useAppData } from "@/lib/store/AppDataProvider";
 import { resolvePreviewClassroomProps } from "@/lib/present/resolvePreviewClassroomProps";
 import { formatDateKeyLong } from "@/lib/schedule/localDate";
@@ -37,20 +37,35 @@ export function PreviewPresentScreen({
 }) {
   const { data } = useAppData();
   const displayName = useDisplayName(classSectionId);
-  const classroomProps = resolvePreviewClassroomProps({ date, classSectionId, block, lessons: data.lessons });
-  const lesson = classroomProps?.lesson ?? null;
 
-  // `classroomProps` is a fresh wrapper object every render (see
-  // `resolvePreviewClassroomProps`), so depending on it here would re-fire
-  // this effect - and re-notify the parent - on every render regardless of
-  // whether the lesson actually changed, causing a render loop. Depend on
-  // the lesson's own id (a stable primitive) instead, matching how
-  // `LivePresentScreen`'s equivalent effect depends on the lesson value
-  // itself rather than a wrapper.
+  // Memoized because `resolvePreviewClassroomProps` builds a brand-new
+  // wrapper object on every call, even when `date`/`classSectionId`/
+  // `block`/`data.lessons` haven't actually changed. Without this, every
+  // unrelated re-render (a clock tick, a tool-tray toggle, anything) would
+  // produce a "new" `classroomProps`/`lesson` reference, and any effect or
+  // memoized child depending on it would re-fire needlessly - or loop, if
+  // that effect also calls a state setter.
+  const classroomProps = useMemo(
+    () => resolvePreviewClassroomProps({ date, classSectionId, block, lessons: data.lessons }),
+    [date, classSectionId, block, data.lessons],
+  );
+  const lesson = classroomProps?.lesson ?? null;
+  const lessonId = lesson?.id ?? null;
+
+  // Belt-and-suspenders against a render loop: the primitive `lessonId`
+  // dependency already keeps this effect from re-firing on reference-only
+  // churn (matching `LivePresentScreen`'s equivalent effect, which depends
+  // on the lesson value itself rather than a wrapper), and the ref guard
+  // additionally ensures `onCurrentLessonChange` is never called twice in a
+  // row for the same lesson even if this effect is re-invoked for an
+  // unrelated reason.
+  const notifiedLessonIdRef = useRef<string | null>(null);
   useEffect(() => {
+    if (notifiedLessonIdRef.current === lessonId) return;
+    notifiedLessonIdRef.current = lessonId;
     onCurrentLessonChange?.(lesson);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lesson?.id, onCurrentLessonChange]);
+  }, [lessonId, onCurrentLessonChange]);
 
   return (
     <div className="flex min-h-screen flex-1 flex-col bg-falcon-brown-950">
