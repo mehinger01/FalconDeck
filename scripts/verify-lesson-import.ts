@@ -90,7 +90,14 @@ console.log("1. Valid one-lesson import");
   check("1c: one ready row", p.readyCount === 1);
   check("1d: row targets both Algebra sections", p.rows[0].sectionIds.length === 2);
 
-  const commit = commitLessonImport({ preview: p, resolutions: {}, existingLessons: [], generateId: genId, now });
+  const commit = commitLessonImport({
+    preview: p,
+    resolutions: {},
+    existingLessons: [],
+    generateId: genId,
+    now,
+    importAnnouncements: false,
+  });
   check("1e: creates one lesson per active section", commit.lessons.length === 2);
   check("1f: outcome is 'imported'", commit.results[0]?.outcome === "imported");
 
@@ -112,7 +119,14 @@ console.log("\n2. Multiple lessons (different courses/dates)");
   });
   const p = preview(file, []);
   check("2a: both rows ready", p.readyCount === 2);
-  const commit = commitLessonImport({ preview: p, resolutions: {}, existingLessons: [], generateId: genId, now });
+  const commit = commitLessonImport({
+    preview: p,
+    resolutions: {},
+    existingLessons: [],
+    generateId: genId,
+    now,
+    importAnnouncements: false,
+  });
   // 2 Algebra sections + 1 Geometry section
   check("2b: fans out across all active sections", commit.lessons.length === 3);
 }
@@ -201,6 +215,7 @@ console.log("\n8. Existing lesson + Skip");
     existingLessons: [existing],
     generateId: genId,
     now,
+    importAnnouncements: false,
   });
   const l1 = findLessonForSection(commit.lessons, "2026-09-15", "section-alg-p1");
   check("8b: existing lesson content untouched", l1?.learningTarget === "Original target");
@@ -233,6 +248,7 @@ console.log("\n9. Existing lesson + Replace");
     existingLessons: [existing],
     generateId: genId,
     now,
+    importAnnouncements: false,
   });
   const l1 = findLessonForSection(commit.lessons, "2026-09-15", "section-alg-p1");
   check("9a: content replaced with imported values", l1?.learningTarget === "Imported target");
@@ -273,6 +289,7 @@ console.log("\n10. Existing lesson + Merge");
     existingLessons: [existing],
     generateId: genId,
     now,
+    importAnnouncements: false,
   });
   const l1 = findLessonForSection(commit.lessons, "2026-09-15", "section-alg-p1");
   check("10a: nonblank existing field preserved", l1?.learningTarget === "Original target (nonblank)");
@@ -287,7 +304,14 @@ console.log("\n11. Multiple sections of the same course");
     lessons: [{ date: "2026-09-20", course: "Algebra 1", learningTarget: "Shared content" }],
   });
   const p = preview(file, []);
-  const commit = commitLessonImport({ preview: p, resolutions: {}, existingLessons: [], generateId: genId, now });
+  const commit = commitLessonImport({
+    preview: p,
+    resolutions: {},
+    existingLessons: [],
+    generateId: genId,
+    now,
+    importAnnouncements: false,
+  });
   const l1 = findLessonForSection(commit.lessons, "2026-09-20", "section-alg-p1");
   const l3 = findLessonForSection(commit.lessons, "2026-09-20", "section-alg-p3");
   check("11a: both sections got their own lesson", l1 !== null && l3 !== null);
@@ -309,6 +333,7 @@ console.log("\n12. Retry does not generate duplicate lessons");
     existingLessons: [],
     generateId: genId,
     now,
+    importAnnouncements: false,
   });
   check("12a: first run creates exactly one lesson", firstCommit.lessons.length === 1);
 
@@ -322,6 +347,7 @@ console.log("\n12. Retry does not generate duplicate lessons");
     existingLessons: firstCommit.lessons,
     generateId: genId,
     now,
+    importAnnouncements: false,
   });
   check("12c: retry does not add a duplicate", secondCommit.lessons.length === 1);
   check("12d: retry outcome is 'skipped'", secondCommit.results[0]?.outcome === "skipped");
@@ -333,6 +359,7 @@ console.log("\n12. Retry does not generate duplicate lessons");
     existingLessons: firstCommit.lessons,
     generateId: genId,
     now,
+    importAnnouncements: false,
   });
   check("12e: explicit replace on retry still yields exactly one lesson", thirdCommit.lessons.length === 1);
   check("12f: same id reused, not a new row", thirdCommit.lessons[0].id === firstCommit.lessons[0].id);
@@ -357,7 +384,14 @@ console.log("\n13. Manual course-name mapping (unmatched -> existing course)");
   check("13b: mapping applies to every row sharing the name (including case/whitespace variants)", mapped.rows.every((r) => r.kind === "ready"));
   check("13c: matched course is the mapped one", mapped.rows.every((r) => r.courseId === "course-enrichment"));
 
-  const commit = commitLessonImport({ preview: mapped, resolutions: {}, existingLessons: [], generateId: genId, now });
+  const commit = commitLessonImport({
+    preview: mapped,
+    resolutions: {},
+    existingLessons: [],
+    generateId: genId,
+    now,
+    importAnnouncements: false,
+  });
   check("13d: lessons land in the mapped course's active sections", commit.lessons.every((l) => l.classSectionId === "section-enrichment-p7"));
 
   // An explicit exact-name match always wins over a manual override, so a
@@ -370,23 +404,305 @@ console.log("\n13. Manual course-name mapping (unmatched -> existing course)");
   check("13e: automatic exact match takes priority over any override", withRealMatch.rows[0].courseId === "course-algebra");
 }
 
-console.log("\n14. Repository failure does not falsely report success");
+console.log("\n14. agendaItems-nested What/How/Why/Materials (real-world package format)");
+{
+  // Matches the actual shape a real generated import package used - What/
+  // How/Why/Materials nested inside an `agendaItems` array of
+  // `{title, details, sortOrder}`, mirroring DailyLesson.agendaItems
+  // directly rather than this schema's flatter what/how/why/materials
+  // fields. Before this was supported, all four were silently dropped
+  // (only learningTarget, a flat field, came through) with no warning.
+  const file = JSON.stringify({
+    format: "falcon-deck-lesson-import",
+    version: 1,
+    lessons: [
+      {
+        date: "2026-09-15",
+        course: "Algebra 1",
+        learningTarget: "I can explain how radicals and rational exponents are related.",
+        agendaItems: [
+          { title: "What", details: "Learn how radicals connect to rational exponents.", sortOrder: 1 },
+          { title: "How", details: "Review exponent rules, then practice.", sortOrder: 2 },
+          { title: "Why", details: "Both forms describe the same values.", sortOrder: 3 },
+          { title: "Materials", details: "Student Edition pp. 11-12; calculator.", sortOrder: 4 },
+        ],
+      },
+    ],
+  });
+  const p = preview(file, []);
+  check("14a: row is ready, not invalid (learningTarget alone doesn't mask the missing flat fields)", p.rows[0].kind === "ready");
+  check("14b: what extracted from agendaItems", p.rows[0].row.what === "Learn how radicals connect to rational exponents.");
+  check("14c: how extracted from agendaItems", p.rows[0].row.how === "Review exponent rules, then practice.");
+  check("14d: why extracted from agendaItems", p.rows[0].row.why === "Both forms describe the same values.");
+  check("14e: materials extracted from agendaItems (title-matched, not treated as a 4th agenda item)", p.rows[0].row.materials === "Student Edition pp. 11-12; calculator.");
+
+  const commit = commitLessonImport({
+    preview: p,
+    resolutions: {},
+    existingLessons: [],
+    generateId: genId,
+    now,
+    importAnnouncements: false,
+  });
+  const l1 = commit.lessons[0];
+  check("14f: exactly 3 real agenda items (What/How/Why) - Materials goes to the materials field, not a 4th agenda item", l1.agendaItems.length === 3);
+  check("14g: materials field is populated on the committed lesson", l1.materials === "Student Edition pp. 11-12; calculator.");
+
+  // Flat fields win when both a flat field and an agendaItems entry exist
+  // for the same slot.
+  const mixedFile = JSON.stringify({
+    version: 1,
+    lessons: [
+      {
+        date: "2026-09-16",
+        course: "Algebra 1",
+        what: "Flat what wins",
+        agendaItems: [{ title: "What", details: "agendaItems what loses" }],
+      },
+    ],
+  });
+  const mixedPreview = preview(mixedFile, []);
+  check("14h: a flat field present alongside agendaItems wins over the agendaItems entry for the same slot", mixedPreview.rows[0].row.what === "Flat what wins");
+
+  // A title match is case/whitespace-insensitive, same convention as course matching.
+  const caseFile = JSON.stringify({
+    version: 1,
+    lessons: [{ date: "2026-09-17", course: "Algebra 1", agendaItems: [{ title: "  WHY  ", details: "Case-insensitive why" }] }],
+  });
+  const casePreview = preview(caseFile, []);
+  check("14i: agendaItems title matching is case/whitespace-insensitive", casePreview.rows[0].row.why === "Case-insensitive why");
+}
+
+console.log("\n15. Announcements (opt-in, additive, deduplicated)");
+{
+  console.log("  15a. Opt-in off: announcements are parsed/previewed but never written");
+  {
+    const file = JSON.stringify({
+      version: 1,
+      lessons: [{ date: "2026-09-15", course: "Algebra 1", learningTarget: "x", announcements: ["Football tonight"] }],
+    });
+    const p = preview(file, []);
+    check("row.announcements is parsed regardless of the opt-in setting", p.rows[0].row.announcements.length === 1);
+    check(
+      "announcementPreview shows it would be added to both sections if enabled",
+      p.rows[0].announcementPreview[0]?.sectionIdsToAdd.length === 2,
+    );
+
+    const commit = commitLessonImport({
+      preview: p,
+      resolutions: {},
+      existingLessons: [],
+      generateId: genId,
+      now,
+      importAnnouncements: false,
+    });
+    check("with importAnnouncements: false, the committed lesson has zero announcements", commit.lessons[0].announcements.length === 0);
+    check("result reports 0 announcements added", commit.results[0]?.announcementsAdded === 0);
+  }
+
+  console.log("  15b. Opt-in on: new announcements are appended");
+  {
+    // Geometry has exactly one active section in this fixture, so the
+    // announcement count below is unambiguous (no fan-out to reason about
+    // - that's covered separately by scenario 11 and 15a).
+    const existing: DailyLesson = {
+      id: "lesson-announce-1",
+      date: "2026-09-15",
+      classSectionId: "section-geo-p2",
+      learningTarget: "Existing",
+      agendaItems: [],
+      resources: [],
+      announcements: [{ id: "a1", text: "Existing announcement" }],
+      createdAt: "2026-08-01T00:00:00.000Z",
+      updatedAt: "2026-08-01T00:00:00.000Z",
+    };
+    const file = JSON.stringify({
+      version: 1,
+      lessons: [{ date: "2026-09-15", course: "Geometry", learningTarget: "y", announcements: ["Brand new announcement"] }],
+    });
+    const p = preview(file, [existing]);
+    const commit = commitLessonImport({
+      preview: p,
+      resolutions: { 0: "replace" },
+      existingLessons: [existing],
+      generateId: genId,
+      now,
+      importAnnouncements: true,
+    });
+    const l1 = findLessonForSection(commit.lessons, "2026-09-15", "section-geo-p2");
+    check("new announcement is appended", l1?.announcements.some((a) => a.text === "Brand new announcement") === true);
+    check("appended announcement gets a real generated id", l1?.announcements.find((a) => a.text === "Brand new announcement")?.id !== undefined);
+    check("result reports 1 announcement added for this section", commit.results[0]?.announcementsAdded === 1);
+  }
+
+  console.log("  15c. Duplicate prevention: exact-match text is never appended twice");
+  {
+    const existing: DailyLesson = {
+      id: "lesson-announce-2",
+      date: "2026-09-15",
+      classSectionId: "section-geo-p2",
+      learningTarget: "Existing",
+      agendaItems: [],
+      resources: [],
+      announcements: [{ id: "a1", text: "Girls Volleyball tonight" }],
+      createdAt: "2026-08-01T00:00:00.000Z",
+      updatedAt: "2026-08-01T00:00:00.000Z",
+    };
+    // The file repeats the exact same text (within-row duplicate) AND
+    // repeats what's already on the existing lesson (against-existing
+    // duplicate).
+    const file = JSON.stringify({
+      version: 1,
+      lessons: [
+        {
+          date: "2026-09-15",
+          course: "Geometry",
+          learningTarget: "y",
+          announcements: ["Girls Volleyball tonight", "Girls Volleyball tonight", "New event"],
+        },
+      ],
+    });
+    const p = preview(file, [existing]);
+    check("within-row duplicates are already collapsed at parse time", p.rows[0].row.announcements.length === 2);
+    check(
+      "preview shows the already-existing text would be skipped for this section",
+      p.rows[0].announcementPreview.find((e) => e.text === "Girls Volleyball tonight")?.sectionIdsAlreadyPresent.includes("section-geo-p2") ?? false,
+    );
+
+    const commit = commitLessonImport({
+      preview: p,
+      resolutions: { 0: "replace" },
+      existingLessons: [existing],
+      generateId: genId,
+      now,
+      importAnnouncements: true,
+    });
+    const l1 = findLessonForSection(commit.lessons, "2026-09-15", "section-geo-p2");
+    check("the duplicate text appears exactly once, not twice", l1?.announcements.filter((a) => a.text === "Girls Volleyball tonight").length === 1);
+    check("only the genuinely new text was added", commit.results[0]?.announcementsAdded === 1);
+  }
+
+  console.log("  15d. Empty announcements: no crash, no-op");
+  {
+    const fileNoField = JSON.stringify({
+      version: 1,
+      lessons: [{ date: "2026-09-15", course: "Algebra 1", learningTarget: "x" }],
+    });
+    const p1 = preview(fileNoField, []);
+    check("a row with no announcements field parses to an empty array", p1.rows[0].row.announcements.length === 0);
+    check("announcementPreview is empty when there's nothing to preview", p1.rows[0].announcementPreview.length === 0);
+
+    const fileEmptyArray = JSON.stringify({
+      version: 1,
+      lessons: [{ date: "2026-09-16", course: "Algebra 1", learningTarget: "x", announcements: [] }],
+    });
+    const p2 = preview(fileEmptyArray, []);
+    check("an explicit empty announcements array parses cleanly too", p2.rows[0].row.announcements.length === 0);
+
+    const commit = commitLessonImport({
+      preview: p1,
+      resolutions: {},
+      existingLessons: [],
+      generateId: genId,
+      now,
+      importAnnouncements: true,
+    });
+    check("committing with importAnnouncements: true and no announcements is a safe no-op", commit.lessons[0].announcements.length === 0);
+    check("result reports 0 announcements added", commit.results[0]?.announcementsAdded === 0);
+  }
+
+  console.log("  15e. Existing announcements are preserved - even under Replace");
+  {
+    const existing: DailyLesson = {
+      id: "lesson-announce-3",
+      date: "2026-09-15",
+      classSectionId: "section-alg-p1",
+      learningTarget: "Existing",
+      agendaItems: [],
+      resources: [],
+      announcements: [
+        { id: "a1", text: "First existing announcement" },
+        { id: "a2", text: "Second existing announcement" },
+      ],
+      createdAt: "2026-08-01T00:00:00.000Z",
+      updatedAt: "2026-08-01T00:00:00.000Z",
+    };
+    const file = JSON.stringify({
+      version: 1,
+      lessons: [
+        {
+          date: "2026-09-15",
+          course: "Algebra 1",
+          learningTarget: "Replaced content",
+          announcements: ["A third, new announcement"],
+        },
+      ],
+    });
+    const p = preview(file, [existing]);
+    const commit = commitLessonImport({
+      preview: p,
+      resolutions: { 0: "replace" },
+      existingLessons: [existing],
+      generateId: genId,
+      now,
+      importAnnouncements: true,
+    });
+    const l1 = findLessonForSection(commit.lessons, "2026-09-15", "section-alg-p1");
+    check("main content was in fact replaced (Replace mode is doing its job)", l1?.learningTarget === "Replaced content");
+    check("both original announcements survive Replace mode untouched", (l1?.announcements.some((a) => a.id === "a1") && l1?.announcements.some((a) => a.id === "a2")) ?? false);
+    check("the new announcement was appended alongside them", l1?.announcements.some((a) => a.text === "A third, new announcement") ?? false);
+    check("nothing was removed - 3 total announcements, not 1", l1?.announcements.length === 3);
+  }
+
+  console.log("  15f. Skip means fully untouched - announcements included");
+  {
+    const existing: DailyLesson = {
+      id: "lesson-announce-4",
+      date: "2026-09-15",
+      classSectionId: "section-alg-p1",
+      learningTarget: "Existing",
+      agendaItems: [],
+      resources: [],
+      announcements: [{ id: "a1", text: "Existing announcement" }],
+      createdAt: "2026-08-01T00:00:00.000Z",
+      updatedAt: "2026-08-01T00:00:00.000Z",
+    };
+    const file = JSON.stringify({
+      version: 1,
+      lessons: [{ date: "2026-09-15", course: "Algebra 1", learningTarget: "y", announcements: ["Would-be new announcement"] }],
+    });
+    const p = preview(file, [existing]);
+    const commit = commitLessonImport({
+      preview: p,
+      resolutions: { 0: "skip" },
+      existingLessons: [existing],
+      generateId: genId,
+      now,
+      importAnnouncements: true,
+    });
+    const l1 = findLessonForSection(commit.lessons, "2026-09-15", "section-alg-p1");
+    check("Skip leaves announcements exactly as they were, even with importAnnouncements: true", l1?.announcements.length === 1 && l1.announcements[0].text === "Existing announcement");
+    check("result reports 0 announcements added for a skipped row", commit.results[0]?.announcementsAdded === 0);
+  }
+}
+
+console.log("\n16. Repository failure does not falsely report success");
 {
   const source = readFileSync(join(process.cwd(), "components/settings/LessonImportScreen.tsx"), "utf8");
   check(
-    "14a: wizard has a distinct save-error step, not just an optimistic success",
+    "16a: wizard has a distinct save-error step, not just an optimistic success",
     source.includes('step: "save-error"'),
   );
   check(
-    "14b: success step is only reached after persistence confirms 'saved'",
+    "16b: success step is only reached after persistence confirms 'saved'",
     /persistence\.status === "saved"[\s\S]{0,80}setState\(\{\s*step: "results"/.test(source),
   );
   check(
-    "14c: a failed save routes to save-error instead of results",
+    "16c: a failed save routes to save-error instead of results",
     /else\s*\{\s*setState\(\{\s*step: "save-error"/.test(source),
   );
   check(
-    "14d: waits for a NEW save (this import's own), not a stale/unrelated one",
+    "16d: waits for a NEW save (this import's own), not a stale/unrelated one",
     source.includes("persistence.attempt > state.saveAttemptBaseline"),
   );
 }

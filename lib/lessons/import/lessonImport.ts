@@ -1,5 +1,5 @@
 import type { Course, ClassSection } from "@/types/course";
-import type { AgendaItem, DailyLesson } from "@/types/lesson";
+import type { AgendaItem, Announcement, DailyLesson } from "@/types/lesson";
 import { LESSON_IMPORT_SCHEMA_VERSION } from "@/types/lessonImport";
 import { findLessonForSection } from "@/lib/data/lessons";
 import { formatDateKeyLong } from "@/lib/schedule/localDate";
@@ -33,11 +33,67 @@ export interface LessonImportRow {
   how: string;
   why: string;
   materials: string;
+  /**
+   * Opt-in only - parsed and previewed regardless, but never written by
+   * `commitLessonImport` unless the teacher checks "Import announcements".
+   * Trimmed, empty entries dropped, de-duplicated by exact text within the
+   * row (order of first occurrence preserved).
+   */
+  announcements: string[];
 }
 
 export type LessonImportParseResult =
   | { ok: true; version: number; rows: LessonImportRow[] }
   | { ok: false; issues: string[] };
+
+const asText = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
+
+/**
+ * A row's What/How/Why/Materials can be authored as flat string fields or
+ * as a Falcon Deck-shaped `agendaItems` array (`{title, details}` - the
+ * shape AI-generated packages tend to produce, since it mirrors
+ * `DailyLesson.agendaItems` directly rather than this deliberately
+ * flatter import schema). Flat fields win when both are present for the
+ * same slot; `agendaItems` only fills in whichever slots the flat fields
+ * left blank. Title matching is case/whitespace-insensitive.
+ */
+function extractWhatHowWhyMaterials(
+  row: Record<string, unknown>,
+): { what: string; how: string; why: string; materials: string } {
+  const flat = { what: asText(row.what), how: asText(row.how), why: asText(row.why), materials: asText(row.materials) };
+
+  const agendaItems: unknown[] = Array.isArray(row.agendaItems) ? row.agendaItems : [];
+  const fromAgendaItems = new Map<string, string>();
+  for (const entry of agendaItems) {
+    if (!entry || typeof entry !== "object") continue;
+    const item = entry as Record<string, unknown>;
+    const key = asText(item.title).toLowerCase();
+    const details = asText(item.details);
+    if ((key === "what" || key === "how" || key === "why" || key === "materials") && details && !fromAgendaItems.has(key)) {
+      fromAgendaItems.set(key, details);
+    }
+  }
+
+  return {
+    what: flat.what || fromAgendaItems.get("what") || "",
+    how: flat.how || fromAgendaItems.get("how") || "",
+    why: flat.why || fromAgendaItems.get("why") || "",
+    materials: flat.materials || fromAgendaItems.get("materials") || "",
+  };
+}
+
+function extractAnnouncements(row: Record<string, unknown>): string[] {
+  if (!Array.isArray(row.announcements)) return [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const entry of row.announcements) {
+    const text = asText(entry);
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    result.push(text);
+  }
+  return result;
+}
 
 /** Parses a Phase 1 lesson import JSON file. Never throws - malformed JSON becomes an issue. */
 export function parseLessonImportJson(raw: string): LessonImportParseResult {
@@ -74,16 +130,17 @@ export function parseLessonImportJson(raw: string): LessonImportParseResult {
 
   const rows: LessonImportRow[] = root.lessons.map((entry, index) => {
     const row = (entry ?? {}) as Record<string, unknown>;
-    const asText = (value: unknown) => (typeof value === "string" ? value.trim() : "");
+    const { what, how, why, materials } = extractWhatHowWhyMaterials(row);
     return {
       sourceRowNumber: index + 1,
       date: asText(row.date),
       course: asText(row.course),
       learningTarget: asText(row.learningTarget),
-      what: asText(row.what),
-      how: asText(row.how),
-      why: asText(row.why),
-      materials: asText(row.materials),
+      what,
+      how,
+      why,
+      materials,
+      announcements: extractAnnouncements(row),
     };
   });
 
@@ -231,6 +288,14 @@ export function buildAgendaItemsFromRow(
 
 export type LessonImportRowKind = "invalid" | "unmatched-course" | "no-active-sections" | "ready";
 
+export interface AnnouncementPreviewEntry {
+  text: string;
+  /** Section ids that do NOT already have this exact announcement text - would gain it if "Import announcements" is enabled. */
+  sectionIdsToAdd: string[];
+  /** Section ids that already have this exact text - always skipped (exact-match dedup), regardless of the "Import announcements" setting. */
+  sectionIdsAlreadyPresent: string[];
+}
+
 export interface LessonImportRowPreview {
   rowIndex: number;
   row: LessonImportRow;
@@ -243,6 +308,33 @@ export interface LessonImportRowPreview {
   /** True if any of `sectionIds` already has a lesson for this date - "ready" only. */
   conflict: boolean;
   conflictingSectionIds: string[];
+  /**
+   * One entry per distinct announcement text in `row.announcements`,
+   * broken down by which target sections would gain it vs. already have
+   * it - "ready" only. Computed regardless of the "Import announcements"
+   * checkbox, so the teacher can review exactly what would happen before
+   * ever turning it on.
+   */
+  announcementPreview: AnnouncementPreviewEntry[];
+}
+
+/** One entry per distinct announcement text, split by whether each target section already has that exact text. */
+function buildAnnouncementPreview(
+  announcements: string[],
+  sectionIds: string[],
+  date: string,
+  existingLessons: DailyLesson[],
+): AnnouncementPreviewEntry[] {
+  return announcements.map((text) => {
+    const sectionIdsToAdd: string[] = [];
+    const sectionIdsAlreadyPresent: string[] = [];
+    for (const sectionId of sectionIds) {
+      const existing = findLessonForSection(existingLessons, date, sectionId);
+      const alreadyPresent = existing?.announcements.some((announcement) => announcement.text === text) ?? false;
+      (alreadyPresent ? sectionIdsAlreadyPresent : sectionIdsToAdd).push(sectionId);
+    }
+    return { text, sectionIdsToAdd, sectionIdsAlreadyPresent };
+  });
 }
 
 export interface LessonImportPreview {
@@ -272,7 +364,16 @@ export function buildLessonImportPreview(
   const rowPreviews: LessonImportRowPreview[] = matchImportedCourses(rows, courses, courseNameOverrides).map(
     ({ row, courseId }, rowIndex) => {
       const issues = issuesByRow.get(row.sourceRowNumber) ?? [];
-      const base = { rowIndex, row, issues, courseId, sectionIds: [], conflict: false, conflictingSectionIds: [] };
+      const base = {
+        rowIndex,
+        row,
+        issues,
+        courseId,
+        sectionIds: [],
+        conflict: false,
+        conflictingSectionIds: [],
+        announcementPreview: [],
+      };
 
       if (issues.length > 0) return { ...base, kind: "invalid" as const };
       if (!courseId) return { ...base, kind: "unmatched-course" as const };
@@ -290,6 +391,7 @@ export function buildLessonImportPreview(
         sectionIds,
         conflict: conflictingSectionIds.length > 0,
         conflictingSectionIds,
+        announcementPreview: buildAnnouncementPreview(row.announcements, sectionIds, row.date, existingLessons),
       };
     },
   );
@@ -317,11 +419,29 @@ export interface LessonImportRowResult {
   rowIndex: number;
   outcome: LessonImportRowOutcome;
   sectionIds: string[];
+  /** Total announcements actually appended across every target section - 0 whenever `importAnnouncements` is false or the row was skipped. */
+  announcementsAdded: number;
 }
 
 export interface CommitLessonImportResult {
   lessons: DailyLesson[];
   results: LessonImportRowResult[];
+}
+
+/** Appends only the texts not already present (exact match); never removes or reorders existing announcements. */
+function mergeAnnouncements(
+  existingAnnouncements: Announcement[],
+  newTexts: string[],
+  generateId: (prefix: string) => string,
+): { announcements: Announcement[]; addedCount: number } {
+  const existingTexts = new Set(existingAnnouncements.map((announcement) => announcement.text));
+  const added: Announcement[] = [];
+  for (const text of newTexts) {
+    if (existingTexts.has(text)) continue;
+    existingTexts.add(text);
+    added.push({ id: generateId("announcement"), text });
+  }
+  return { announcements: [...existingAnnouncements, ...added], addedCount: added.length };
 }
 
 /**
@@ -340,10 +460,18 @@ export interface CommitLessonImportResult {
  * "merge" updates the same id in place rather than pushing a duplicate.
  *
  * Only fields the import format actually represents (learningTarget,
- * agenda items derived from what/how/why, materials) are ever written -
- * `resources`/`announcements` are always carried over from any existing
- * lesson untouched, since the import file has no way to express or intend
- * removing a teacher's manually-attached links or announcements.
+ * agenda items derived from what/how/why, materials) are ever REPLACED -
+ * `resources` are always carried over from any existing lesson untouched,
+ * since the import file has no way to express or intend removing a
+ * teacher's manually-attached links.
+ *
+ * `announcements` are handled separately and are opt-in
+ * (`importAnnouncements`): when off (the default), a row's announcements
+ * are parsed and previewable but never written. When on, they are only
+ * ever appended (exact-text de-duplicated against what's already there) -
+ * never erased or replaced, even under "replace" resolution, and never
+ * touched at all for a "skip" row (skip means the existing lesson is left
+ * fully alone).
  */
 export function commitLessonImport({
   preview,
@@ -351,6 +479,7 @@ export function commitLessonImport({
   existingLessons,
   generateId,
   now,
+  importAnnouncements,
 }: {
   preview: LessonImportPreview;
   /** Keyed by `rowIndex`; only consulted for rows where `conflict` is true. Defaults to "skip" (the required default). */
@@ -358,6 +487,8 @@ export function commitLessonImport({
   existingLessons: DailyLesson[];
   generateId: (prefix: string) => string;
   now: () => string;
+  /** Off by default - the "Import announcements" checkbox in the review step. */
+  importAnnouncements: boolean;
 }): CommitLessonImportResult {
   let lessons = existingLessons;
   const results: LessonImportRowResult[] = [];
@@ -370,13 +501,26 @@ export function commitLessonImport({
       : "replace"; // nothing exists yet anywhere for this row - a plain create, reported as "imported" below
 
     if (resolution === "skip") {
-      results.push({ rowIndex: rowPreview.rowIndex, outcome: "skipped", sectionIds: rowPreview.sectionIds });
+      // Skip means the existing lesson is left fully alone - announcements included.
+      results.push({
+        rowIndex: rowPreview.rowIndex,
+        outcome: "skipped",
+        sectionIds: rowPreview.sectionIds,
+        announcementsAdded: 0,
+      });
       continue;
     }
 
     const timestamp = now();
+    let announcementsAddedForRow = 0;
+
     for (const sectionId of rowPreview.sectionIds) {
       const existing = findLessonForSection(lessons, rowPreview.row.date, sectionId);
+      const baseAnnouncements = existing?.announcements ?? [];
+      const { announcements, addedCount } = importAnnouncements
+        ? mergeAnnouncements(baseAnnouncements, rowPreview.row.announcements, generateId)
+        : { announcements: baseAnnouncements, addedCount: 0 };
+      announcementsAddedForRow += addedCount;
 
       if (resolution === "merge" && existing) {
         const merged: DailyLesson = {
@@ -387,6 +531,7 @@ export function commitLessonImport({
               ? existing.agendaItems
               : buildAgendaItemsFromRow(rowPreview.row, generateId),
           materials: existing.materials?.trim() ? existing.materials : rowPreview.row.materials || undefined,
+          announcements,
           updatedAt: timestamp,
         };
         lessons = lessons.map((lesson) => (lesson.id === merged.id ? merged : lesson));
@@ -398,7 +543,7 @@ export function commitLessonImport({
           learningTarget: rowPreview.row.learningTarget,
           agendaItems: buildAgendaItemsFromRow(rowPreview.row, generateId),
           resources: existing?.resources ?? [],
-          announcements: existing?.announcements ?? [],
+          announcements,
           materials: rowPreview.row.materials || undefined,
           createdAt: existing ? existing.createdAt : timestamp,
           updatedAt: timestamp,
@@ -411,6 +556,7 @@ export function commitLessonImport({
       rowIndex: rowPreview.rowIndex,
       outcome: rowPreview.conflict ? (resolution === "replace" ? "replaced" : "merged") : "imported",
       sectionIds: rowPreview.sectionIds,
+      announcementsAdded: announcementsAddedForRow,
     });
   }
 

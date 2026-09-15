@@ -16,6 +16,7 @@ import {
   type LessonImportRow,
   type LessonImportRowOutcome,
   type LessonImportRowPreview,
+  type LessonImportRowResult,
 } from "@/lib/lessons/import/lessonImport";
 
 type WizardState =
@@ -27,16 +28,18 @@ type WizardState =
       resolutions: Record<number, LessonImportConflictResolution>;
       /** Keyed by `normalizeCourseNameKey` - a teacher's manual "map this unmatched name to this course" choice, applied to every row that used the same name. */
       courseMappings: Record<string, string>;
+      /** Off by default - announcements are parsed and previewable regardless, but never written unless this is checked. */
+      importAnnouncements: boolean;
     }
   | {
       step: "pending-save";
-      results: Array<{ rowIndex: number; outcome: LessonImportRowOutcome; sectionIds: string[] }>;
+      results: LessonImportRowResult[];
       preview: LessonImportPreview;
       saveAttemptBaseline: number;
     }
   | {
       step: "results";
-      results: Array<{ rowIndex: number; outcome: LessonImportRowOutcome; sectionIds: string[] }>;
+      results: LessonImportRowResult[];
       preview: LessonImportPreview;
     }
   | { step: "save-error"; message: string };
@@ -136,7 +139,7 @@ export function LessonImportScreen() {
       return;
     }
 
-    setState({ step: "review", rows: parsed.rows, resolutions: {}, courseMappings: {} });
+    setState({ step: "review", rows: parsed.rows, resolutions: {}, courseMappings: {}, importAnnouncements: false });
   }
 
   function setResolution(rowIndex: number, resolution: LessonImportConflictResolution) {
@@ -153,6 +156,11 @@ export function LessonImportScreen() {
     setState({ ...state, courseMappings: nextMappings });
   }
 
+  function setImportAnnouncements(value: boolean) {
+    if (state.step !== "review") return;
+    setState({ ...state, importAnnouncements: value });
+  }
+
   function handleImport() {
     if (state.step !== "review" || !preview) return;
 
@@ -162,6 +170,7 @@ export function LessonImportScreen() {
       existingLessons: data.lessons,
       generateId,
       now: () => new Date().toISOString(),
+      importAnnouncements: state.importAnnouncements,
     });
 
     const saveAttemptBaseline = persistence.attempt;
@@ -210,8 +219,10 @@ export function LessonImportScreen() {
           courseMappings={state.courseMappings}
           namesNeedingMapping={namesNeedingMapping}
           courses={data.courses}
+          importAnnouncements={state.importAnnouncements}
           onResolutionChange={setResolution}
           onCourseMappingChange={setCourseMapping}
+          onImportAnnouncementsChange={setImportAnnouncements}
           onImport={handleImport}
           onStartOver={() => setState({ step: "select" })}
         />
@@ -251,8 +262,10 @@ function ReviewStep({
   courseMappings,
   namesNeedingMapping,
   courses,
+  importAnnouncements,
   onResolutionChange,
   onCourseMappingChange,
+  onImportAnnouncementsChange,
   onImport,
   onStartOver,
 }: {
@@ -261,12 +274,17 @@ function ReviewStep({
   courseMappings: Record<string, string>;
   namesNeedingMapping: Array<readonly [key: string, displayName: string]>;
   courses: { id: string; name: string }[];
+  importAnnouncements: boolean;
   onResolutionChange: (rowIndex: number, resolution: LessonImportConflictResolution) => void;
   onCourseMappingChange: (unmatchedCourseName: string, courseId: string) => void;
+  onImportAnnouncementsChange: (value: boolean) => void;
   onImport: () => void;
   onStartOver: () => void;
 }) {
   const courseName = (courseId: string | null) => courses.find((c) => c.id === courseId)?.name ?? "";
+
+  const readyRows = preview.rows.filter((r) => r.kind === "ready");
+  const totalAnnouncementsInFile = readyRows.reduce((sum, r) => sum + r.announcementPreview.length, 0);
 
   return (
     <section className="rounded-xl border border-falcon-brown-700/20 bg-white/70 p-4">
@@ -284,6 +302,25 @@ function ReviewStep({
           <li className="font-semibold text-amber-800">{preview.unmatchedCourseCount} unmatched course</li>
         )}
       </ul>
+
+      {totalAnnouncementsInFile > 0 && (
+        <div className="mt-3 rounded-md border border-falcon-brown-700/20 bg-white p-3 text-sm">
+          <label className="flex items-start gap-2 font-medium text-falcon-brown-900">
+            <input
+              type="checkbox"
+              checked={importAnnouncements}
+              onChange={(e) => onImportAnnouncementsChange(e.target.checked)}
+              className="mt-0.5"
+            />
+            Import announcements
+          </label>
+          <p className="mt-1 text-xs text-falcon-brown-700/70">
+            {importAnnouncements
+              ? "New announcements will be appended to each section's existing announcements. Exact duplicates are skipped, and existing announcements are never removed or replaced - even for rows set to Replace."
+              : `${totalAnnouncementsInFile} announcement${totalAnnouncementsInFile === 1 ? "" : "s"} found in this file will not be imported. Check the box to include them.`}
+          </p>
+        </div>
+      )}
 
       {namesNeedingMapping.length > 0 && (
         <div className="mt-3 rounded-md border border-amber-600/40 bg-amber-50 p-3 text-sm text-amber-900">
@@ -368,6 +405,26 @@ function ReviewStep({
               </p>
             )}
 
+            {rowPreview.kind === "ready" && importAnnouncements && rowPreview.announcementPreview.length > 0 && (
+              <div className="mt-2 border-t border-falcon-brown-700/10 pt-2">
+                <p className="font-semibold text-falcon-brown-800">Announcements:</p>
+                <ul className="mt-1 space-y-0.5">
+                  {rowPreview.announcementPreview.map((entry, i) => (
+                    <li key={i} className="text-falcon-brown-800">
+                      {entry.sectionIdsToAdd.length > 0 ? (
+                        <span className="text-green-800">
+                          + will be added{entry.sectionIdsAlreadyPresent.length > 0 ? ` (to ${entry.sectionIdsToAdd.length} of ${entry.sectionIdsToAdd.length + entry.sectionIdsAlreadyPresent.length} sections)` : ""}:{" "}
+                        </span>
+                      ) : (
+                        <span className="text-falcon-brown-700/60">already present, will be skipped: </span>
+                      )}
+                      {entry.text}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             {rowPreview.kind === "invalid" && (
               <ul className="mt-2 list-disc space-y-0.5 pl-5 text-red-900">
                 {rowPreview.issues.map((issue, i) => (
@@ -424,12 +481,13 @@ function ResultsStep({
   preview,
   onImportAnother,
 }: {
-  results: Array<{ rowIndex: number; outcome: LessonImportRowOutcome; sectionIds: string[] }>;
+  results: LessonImportRowResult[];
   preview: LessonImportPreview;
   onImportAnother: () => void;
 }) {
   const countByOutcome = (outcome: LessonImportRowOutcome) =>
     results.filter((r) => r.outcome === outcome).length;
+  const totalAnnouncementsAdded = results.reduce((sum, r) => sum + r.announcementsAdded, 0);
 
   const notImported = preview.rows.filter(
     (r) => r.kind === "invalid" || r.kind === "unmatched-course" || r.kind === "no-active-sections",
@@ -443,6 +501,9 @@ function ResultsStep({
         <li>{countByOutcome("replaced")} lesson{countByOutcome("replaced") === 1 ? "" : "s"} replaced</li>
         <li>{countByOutcome("merged")} lesson{countByOutcome("merged") === 1 ? "" : "s"} merged</li>
         <li>{countByOutcome("skipped")} lesson{countByOutcome("skipped") === 1 ? "" : "s"} skipped</li>
+        {totalAnnouncementsAdded > 0 && (
+          <li>{totalAnnouncementsAdded} announcement{totalAnnouncementsAdded === 1 ? "" : "s"} added</li>
+        )}
         <li className={notImported.length > 0 ? "font-semibold text-red-800" : "font-semibold text-green-800"}>
           {notImported.length} error{notImported.length === 1 ? "" : "s"}
         </li>

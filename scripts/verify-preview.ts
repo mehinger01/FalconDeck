@@ -314,6 +314,7 @@ console.log("\n11. Previewing an imported lesson (agenda items built from what/h
     existingLessons: state.lessons,
     generateId: (prefix) => `${prefix}-verify-preview`,
     now: () => "2026-09-01T00:00:00.000Z",
+    importAnnouncements: false,
   });
 
   const args = { date: "2026-09-15", classSectionId: "section-algebra-1-p1", block: null, lessons: lessonsAfterImport };
