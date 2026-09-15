@@ -592,7 +592,50 @@ CREATE TABLE teacher_schedule_preferences (
 ```
 - **RLS:** strictly owner-only.
 
-### 2.20 Explicitly not part of this schema: Google Drive
+### 2.20 `bootstrap_organization` (the one privileged function)
+
+Added post-lock, for the Authentication & Organization Onboarding milestone -
+closes the gap named in migration 3's own comment ("no self-serve 'join
+school' insert path yet... until a future onboarding milestone adds a
+narrowly-scoped self-insert policy"). The resolved design is a function, not
+a weakened RLS policy.
+
+```sql
+CREATE FUNCTION bootstrap_organization(organization_name text)
+RETURNS TABLE (organization_id uuid, membership_id uuid)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $$ ... $$;
+
+REVOKE EXECUTE ON FUNCTION bootstrap_organization(text) FROM public;
+REVOKE EXECUTE ON FUNCTION bootstrap_organization(text) FROM anon;
+GRANT EXECUTE ON FUNCTION bootstrap_organization(text) TO authenticated;
+```
+
+- **The only `SECURITY DEFINER` function in this schema besides the
+  pre-existing RLS helpers** (`app_is_member`/`app_is_admin`/
+  `app_owns_membership`/`app_owns_membership_in_org`, all read-only). This
+  one *writes* — it creates one `organizations` row and one
+  `organization_memberships` row, atomically, bypassing RLS by virtue of
+  running as the tables' owning role.
+- **Callable only by a signed-in user with zero active memberships.**
+  `auth.uid()` is the only identity input trusted; the function rejects
+  outright if the caller already has any active membership anywhere — this
+  is what makes it impossible to join an existing organization, promote
+  oneself inside one, or create a second organization once already a
+  member. A `pg_advisory_xact_lock` keyed on the caller's user id closes the
+  concurrent-first-call race a bare existence check would otherwise miss.
+- **Accepts exactly one input — `organization_name`.** No caller-supplied
+  `user_id`, `organization_id`, `membership_id`, or `role` is ever accepted;
+  the new organization's id is generated internally, and the membership's
+  `role`/`status` are literal constants (`'admin'`/`'active'`), never
+  parameters.
+- **RLS:** N/A — this is a function, not a table. `EXECUTE` is granted only
+  to `authenticated`; `anon`/`PUBLIC` are explicitly revoked, matching the
+  pattern in `20260910010824_function_privilege_hardening.sql`.
+
+### 2.21 Explicitly not part of this schema: Google Drive
 No `google_drive_connections` table. Per the locked decision, today's anonymous,
 cookie-based integration remains untouched and unrepresented in Supabase until its
 own dedicated later milestone.
