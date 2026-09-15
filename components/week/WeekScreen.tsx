@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useAppData, useDefaultSchedule } from "@/lib/store/AppDataProvider";
+import { resolveActiveSectionStartTimes } from "@/lib/schedule/activeSections";
 import { getLocalDateKey } from "@/lib/schedule/localDate";
 import { DEFAULT_TIME_ZONE } from "@/lib/schedule/time";
 import { buildWeekPlanningGrid } from "@/lib/week/buildWeekPlanningGrid";
@@ -18,10 +19,10 @@ import { WeekHeader } from "./WeekHeader";
  * The teacher's weekly planning surface: Monday-Friday x active class sections,
  * projected fresh from `courses`/`classSections`/`lessons` on every render.
  *
- * "Active" means referenced by at least one non-passing block in the current
- * default schedule. Rows are ordered by the earliest assigned block start time
- * so the planning surface mirrors the teacher's actual school day rather than
- * creation/storage order.
+ * "Active" (see lib/schedule/activeSections.ts) means referenced by at least
+ * one non-passing block in the current default schedule. Rows are ordered by
+ * the earliest assigned block start time so the planning surface mirrors the
+ * teacher's actual school day rather than creation/storage order.
  */
 export function WeekScreen() {
   const searchParams = useSearchParams();
@@ -35,20 +36,10 @@ export function WeekScreen() {
   const weekStart = getWeekStart(searchParams.get("date") ?? todayDateKey);
   const courseFilter = searchParams.get("course") ?? "";
 
-  const sectionStartTimes = useMemo(() => {
-    const result = new Map<string, string>();
-    if (!schedule) return result;
-
-    for (const block of schedule.blocks) {
-      if (block.kind === "passing" || !block.classSectionId) continue;
-      const current = result.get(block.classSectionId);
-      if (!current || block.startTime < current) {
-        result.set(block.classSectionId, block.startTime);
-      }
-    }
-
-    return result;
-  }, [schedule]);
+  // See lib/schedule/activeSections.ts for "active" - shared with the
+  // lesson importer so the two can never silently disagree about which
+  // sections belong to a course.
+  const sectionStartTimes = useMemo(() => resolveActiveSectionStartTimes(schedule), [schedule]);
 
   const activeSectionIds = useMemo(
     () => new Set(sectionStartTimes.keys()),

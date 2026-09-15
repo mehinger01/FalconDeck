@@ -19,6 +19,13 @@ export function LessonsScreen() {
   const timeZone = defaultSchedule?.timeZone ?? DEFAULT_TIME_ZONE;
   const searchParams = useSearchParams();
 
+  // TECH DEBT: this "active section" definition is a narrower allowlist
+  // (kind === "instructional" || "enrichment") than the canonical one in
+  // lib/schedule/activeSections.ts (kind !== "passing", used by WeekScreen
+  // and the lesson importer) - a "lunch"/"custom"-kind block's section
+  // counts as active there but not here. Left as-is deliberately (out of
+  // scope for the Week View / importer section-targeting fix), but this
+  // screen should probably be migrated to the shared definition too.
   const activeSections = useMemo(() => {
     if (!defaultSchedule) return [];
 

@@ -307,7 +307,7 @@ console.log("\n11. Previewing an imported lesson (agenda items built from what/h
   });
   const parsed = parseLessonImportJson(importFile);
   if (!parsed.ok) throw new Error("expected the sample import file to parse");
-  const importPreview = buildLessonImportPreview(parsed.rows, state.courses, state.classSections, state.lessons);
+  const importPreview = buildLessonImportPreview(parsed.rows, state.courses, state.classSections, schedule, state.lessons);
   const { lessons: lessonsAfterImport } = commitLessonImport({
     preview: importPreview,
     resolutions: {},

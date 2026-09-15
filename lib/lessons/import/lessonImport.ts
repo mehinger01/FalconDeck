@@ -1,7 +1,9 @@
 import type { Course, ClassSection } from "@/types/course";
 import type { AgendaItem, Announcement, DailyLesson } from "@/types/lesson";
+import type { BellSchedule } from "@/types/schedule";
 import { LESSON_IMPORT_SCHEMA_VERSION } from "@/types/lessonImport";
 import { findLessonForSection } from "@/lib/data/lessons";
+import { resolveActiveSectionStartTimes } from "@/lib/schedule/activeSections";
 import { formatDateKeyLong } from "@/lib/schedule/localDate";
 
 /**
@@ -16,7 +18,10 @@ import { formatDateKeyLong } from "@/lib/schedule/localDate";
  * Only the final dispatch (outside this module) ever touches AppData. This
  * is specifically a *lesson content* importer - it never creates courses
  * or class sections, never touches schedules/calendar/resources, and never
- * fuzzy-matches a course name.
+ * fuzzy-matches a course name. The default schedule is read (never
+ * modified) purely to determine which of a course's sections are
+ * currently active - see `lib/schedule/activeSections.ts`, the same
+ * definition Week View uses.
  */
 
 // ---------------------------------------------------------------------------
@@ -350,6 +355,14 @@ export function buildLessonImportPreview(
   rows: LessonImportRow[],
   courses: Course[],
   classSections: ClassSection[],
+  /**
+   * The current default BellSchedule (or `null`) - determines which of a
+   * course's sections are actually "active" (see
+   * `lib/schedule/activeSections.ts`, the same definition Week View uses).
+   * An old/unscheduled `ClassSection` row left over under a course id is
+   * never targeted, even though its `courseId` still matches.
+   */
+  schedule: BellSchedule | null,
   existingLessons: DailyLesson[],
   /** Keyed by `normalizeCourseNameKey` - a teacher's manual "map this unmatched name to this course" choices from the review UI. */
   courseNameOverrides: Record<string, string> = {},
@@ -360,6 +373,8 @@ export function buildLessonImportPreview(
     list.push(issue.message);
     issuesByRow.set(issue.rowNumber, list);
   }
+
+  const activeSectionIds = new Set(resolveActiveSectionStartTimes(schedule).keys());
 
   const rowPreviews: LessonImportRowPreview[] = matchImportedCourses(rows, courses, courseNameOverrides).map(
     ({ row, courseId }, rowIndex) => {
@@ -378,7 +393,9 @@ export function buildLessonImportPreview(
       if (issues.length > 0) return { ...base, kind: "invalid" as const };
       if (!courseId) return { ...base, kind: "unmatched-course" as const };
 
-      const sectionIds = classSections.filter((section) => section.courseId === courseId).map((s) => s.id);
+      const sectionIds = classSections
+        .filter((section) => section.courseId === courseId && activeSectionIds.has(section.id))
+        .map((s) => s.id);
       if (sectionIds.length === 0) return { ...base, kind: "no-active-sections" as const, courseId };
 
       const conflictingSectionIds = sectionIds.filter(

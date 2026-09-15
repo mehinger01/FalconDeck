@@ -26,8 +26,10 @@ import {
   type LessonImportPreview,
 } from "@/lib/lessons/import/lessonImport";
 import { findLessonForSection } from "@/lib/data/lessons";
+import { resolveActiveSectionStartTimes } from "@/lib/schedule/activeSections";
 import type { Course, ClassSection } from "@/types/course";
 import type { DailyLesson } from "@/types/lesson";
+import type { BellSchedule } from "@/types/schedule";
 
 let failures = 0;
 function check(label: string, condition: boolean) {
@@ -51,6 +53,27 @@ const classSections: ClassSection[] = [
   { id: "section-enrichment-p7", courseId: "course-enrichment", name: "Enrichment - P7" },
 ];
 
+// Wires every section above into a default schedule as an active,
+// non-passing block - the fixture every existing scenario below was
+// written against, before `buildLessonImportPreview` took a schedule at
+// all. Scenario 17 builds its own dedicated, more realistic fixture
+// (scheduled + unscheduled-legacy sections) to test eligibility itself.
+const defaultTestSchedule: BellSchedule = {
+  id: "schedule-test-default",
+  name: "Test Schedule",
+  isDefault: true,
+  timeZone: "America/Detroit",
+  blocks: classSections.map((section, index) => ({
+    id: `block-${section.id}`,
+    label: section.name,
+    kind: "instructional",
+    startTime: `0${8 + index}:00`,
+    endTime: `0${8 + index}:50`,
+    classSectionId: section.id,
+    overrides: [],
+  })),
+};
+
 let idCounter = 0;
 function genId(prefix: string): string {
   idCounter += 1;
@@ -62,10 +85,11 @@ function preview(
   raw: string,
   existingLessons: DailyLesson[],
   courseNameOverrides: Record<string, string> = {},
+  schedule: BellSchedule | null = defaultTestSchedule,
 ): LessonImportPreview {
   const parsed = parseLessonImportJson(raw);
   if (!parsed.ok) throw new Error("expected parse to succeed in this helper");
-  return buildLessonImportPreview(parsed.rows, courses, classSections, existingLessons, courseNameOverrides);
+  return buildLessonImportPreview(parsed.rows, courses, classSections, schedule, existingLessons, courseNameOverrides);
 }
 
 console.log("1. Valid one-lesson import");
@@ -686,23 +710,169 @@ console.log("\n15. Announcements (opt-in, additive, deduplicated)");
   }
 }
 
-console.log("\n16. Repository failure does not falsely report success");
+console.log("\n17. Section eligibility matches Week View exactly (real-world course/section shape)");
+{
+  // Mirrors the actual reported structure: 3 real, scheduled Algebra
+  // sections plus 2 legacy/unscheduled leftovers under the same course;
+  // 2 real Geometry sections plus 2 legacy leftovers; 1 real Intervention
+  // section; and a Prep course whose one section was never wired into the
+  // schedule at all (a "sections exist, none active" case).
+  const eligCourses: Course[] = [
+    { id: "course-algebra", name: "Algebra 1" },
+    { id: "course-geometry", name: "Geometry" },
+    { id: "course-intervention", name: "Intervention" },
+    { id: "course-prep", name: "Prep" },
+  ];
+  const eligSections: ClassSection[] = [
+    { id: "algebra-p1", courseId: "course-algebra", name: "Algebra 1 - Period 1" },
+    { id: "algebra-p4", courseId: "course-algebra", name: "Algebra 1 - Period 4" },
+    { id: "algebra-p6", courseId: "course-algebra", name: "Algebra 1 - Period 6" },
+    { id: "algebra-legacy-1", courseId: "course-algebra", name: "Algebra 1 - Period 2 (old, unscheduled)" },
+    { id: "algebra-legacy-2", courseId: "course-algebra", name: "Algebra 1 - Period 8 (old, unscheduled)" },
+    { id: "geometry-p2", courseId: "course-geometry", name: "Geometry - Period 2" },
+    { id: "geometry-p5", courseId: "course-geometry", name: "Geometry - Period 5" },
+    { id: "geometry-legacy-1", courseId: "course-geometry", name: "Geometry - Period 7 (old, unscheduled)" },
+    { id: "geometry-legacy-2", courseId: "course-geometry", name: "Geometry - Period 9 (old, unscheduled)" },
+    { id: "intervention-p3", courseId: "course-intervention", name: "Intervention - Period 3" },
+    { id: "prep-unscheduled", courseId: "course-prep", name: "Prep - Planning Period" },
+  ];
+  const eligSchedule: BellSchedule = {
+    id: "schedule-real-shape",
+    name: "Real Schedule Shape",
+    isDefault: true,
+    timeZone: "America/Detroit",
+    blocks: [
+      { id: "b-alg-p1", label: "Period 1", kind: "instructional", startTime: "08:00", endTime: "08:50", classSectionId: "algebra-p1", overrides: [] },
+      { id: "b-int-p3", label: "Period 3", kind: "instructional", startTime: "09:50", endTime: "10:40", classSectionId: "intervention-p3", overrides: [] },
+      { id: "b-alg-p4", label: "Period 4", kind: "instructional", startTime: "10:45", endTime: "11:35", classSectionId: "algebra-p4", overrides: [] },
+      { id: "b-geo-p2", label: "Period 2", kind: "instructional", startTime: "08:55", endTime: "09:45", classSectionId: "geometry-p2", overrides: [] },
+      { id: "b-geo-p5", label: "Period 5", kind: "instructional", startTime: "11:40", endTime: "12:30", classSectionId: "geometry-p5", overrides: [] },
+      { id: "b-alg-p6", label: "Period 6", kind: "instructional", startTime: "13:00", endTime: "13:50", classSectionId: "algebra-p6", overrides: [] },
+      // A passing block referencing a section must NOT count as active -
+      // matches Week View's own `block.kind === "passing"` exclusion.
+      { id: "b-passing", label: "Passing", kind: "passing", startTime: "13:50", endTime: "13:55", classSectionId: "geometry-legacy-1", overrides: [] },
+    ],
+  };
+
+  function eligPreview(courseName: string): LessonImportPreview {
+    const file = JSON.stringify({
+      version: 1,
+      lessons: [{ date: "2026-09-15", course: courseName, learningTarget: "x" }],
+    });
+    const parsed = parseLessonImportJson(file);
+    if (!parsed.ok) throw new Error("expected parse to succeed");
+    return buildLessonImportPreview(parsed.rows, eligCourses, eligSections, eligSchedule, []);
+  }
+
+  console.log("  17a. Scheduled Algebra periods 1, 4, and 6 are targeted");
+  {
+    const p = eligPreview("Algebra 1");
+    const targeted = new Set(p.rows[0].sectionIds);
+    check("row is ready", p.rows[0].kind === "ready");
+    check("exactly 3 sections targeted", p.rows[0].sectionIds.length === 3);
+    check(
+      "targets Period 1, 4, and 6 specifically",
+      targeted.has("algebra-p1") && targeted.has("algebra-p4") && targeted.has("algebra-p6"),
+    );
+  }
+
+  console.log("  17b. Unscheduled legacy Algebra sections are excluded");
+  {
+    const p = eligPreview("Algebra 1");
+    const targeted = new Set(p.rows[0].sectionIds);
+    check("legacy Period 2 (unscheduled) is not targeted", !targeted.has("algebra-legacy-1"));
+    check("legacy Period 8 (unscheduled) is not targeted", !targeted.has("algebra-legacy-2"));
+  }
+
+  console.log("  17c. Scheduled Geometry periods 2 and 5 are targeted");
+  {
+    const p = eligPreview("Geometry");
+    const targeted = new Set(p.rows[0].sectionIds);
+    check("row is ready", p.rows[0].kind === "ready");
+    check("exactly 2 sections targeted", p.rows[0].sectionIds.length === 2);
+    check("targets Period 2 and 5 specifically", targeted.has("geometry-p2") && targeted.has("geometry-p5"));
+  }
+
+  console.log("  17d. Unscheduled legacy Geometry sections are excluded");
+  {
+    const p = eligPreview("Geometry");
+    const targeted = new Set(p.rows[0].sectionIds);
+    check("legacy Period 7 (unscheduled) is not targeted", !targeted.has("geometry-legacy-1"));
+    check("legacy Period 9 (unscheduled) is not targeted", !targeted.has("geometry-legacy-2"));
+    check(
+      "a section referenced only by a passing block is not targeted either",
+      !targeted.has("geometry-legacy-1"),
+    );
+  }
+
+  console.log("  17e. Intervention period 3 remains targeted");
+  {
+    const p = eligPreview("Intervention");
+    check("row is ready", p.rows[0].kind === "ready");
+    check("exactly 1 section targeted", p.rows[0].sectionIds.length === 1 && p.rows[0].sectionIds[0] === "intervention-p3");
+  }
+
+  console.log("  17f. A course with sections but none scheduled returns no-active-sections");
+  {
+    const p = eligPreview("Prep");
+    check(
+      "Prep has a real ClassSection record, but it's never referenced by any schedule block",
+      eligSections.some((s) => s.courseId === "course-prep"),
+    );
+    check("row kind is 'no-active-sections', not 'ready'", p.rows[0].kind === "no-active-sections");
+    check("no sections are targeted", p.rows[0].sectionIds.length === 0);
+  }
+
+  console.log("  17g. Week View and the importer compute identical eligible-section IDs");
+  {
+    // resolveActiveSectionStartTimes is the exact function WeekScreen.tsx
+    // calls - this proves the importer's per-course targets are always a
+    // subset of that same "active" set, not an independently-derived one
+    // that happens to agree by coincidence.
+    const weekViewActiveIds = new Set(resolveActiveSectionStartTimes(eligSchedule).keys());
+
+    for (const courseName of ["Algebra 1", "Geometry", "Intervention"]) {
+      const course = eligCourses.find((c) => c.name === courseName)!;
+      const p = eligPreview(courseName);
+      const expectedTargets = eligSections
+        .filter((s) => s.courseId === course.id && weekViewActiveIds.has(s.id))
+        .map((s) => s.id)
+        .sort();
+      const actualTargets = [...p.rows[0].sectionIds].sort();
+      check(
+        `${courseName}: importer's targeted sections exactly equal Week View's active sections for this course`,
+        JSON.stringify(actualTargets) === JSON.stringify(expectedTargets),
+      );
+    }
+
+    check(
+      "Week View's active set itself excludes every legacy/unscheduled/passing-only section",
+      !weekViewActiveIds.has("algebra-legacy-1") &&
+        !weekViewActiveIds.has("algebra-legacy-2") &&
+        !weekViewActiveIds.has("geometry-legacy-1") &&
+        !weekViewActiveIds.has("geometry-legacy-2") &&
+        !weekViewActiveIds.has("prep-unscheduled"),
+    );
+  }
+}
+
+console.log("\n18. Repository failure does not falsely report success");
 {
   const source = readFileSync(join(process.cwd(), "components/settings/LessonImportScreen.tsx"), "utf8");
   check(
-    "16a: wizard has a distinct save-error step, not just an optimistic success",
+    "18a: wizard has a distinct save-error step, not just an optimistic success",
     source.includes('step: "save-error"'),
   );
   check(
-    "16b: success step is only reached after persistence confirms 'saved'",
+    "18b: success step is only reached after persistence confirms 'saved'",
     /persistence\.status === "saved"[\s\S]{0,80}setState\(\{\s*step: "results"/.test(source),
   );
   check(
-    "16c: a failed save routes to save-error instead of results",
+    "18c: a failed save routes to save-error instead of results",
     /else\s*\{\s*setState\(\{\s*step: "save-error"/.test(source),
   );
   check(
-    "16d: waits for a NEW save (this import's own), not a stale/unrelated one",
+    "18d: waits for a NEW save (this import's own), not a stale/unrelated one",
     source.includes("persistence.attempt > state.saveAttemptBaseline"),
   );
 }
