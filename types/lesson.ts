@@ -66,9 +66,10 @@ export interface DailyLesson {
   announcements: Announcement[];
   /**
    * Free-text prep/materials list (e.g. "Student Edition pp. 11-12; guided
-   * notes; calculator"). Teacher-facing only - intentionally not shown in
-   * Present Mode alongside the four student-facing panels. `undefined` for
-   * any lesson created before this field existed or with nothing entered.
+   * notes; calculator"). Shown in Present Mode as its own panel (see
+   * `LessonPanels`), but only when nonblank - unlike the other panels,
+   * there's no "no materials" placeholder card. `undefined` for any lesson
+   * created before this field existed or with nothing entered.
    */
   materials?: string;
   /** ISO 8601 timestamps, informational only. */

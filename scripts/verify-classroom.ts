@@ -69,6 +69,8 @@ import {
   isAcceptedWatermarkMimeType,
 } from "@/lib/present/watermarkImage";
 import { processWatermarkUpload } from "@/lib/present/processWatermarkUpload";
+import { LessonPanels } from "@/components/present/LessonPanels";
+import type { DailyLesson } from "@/types/lesson";
 // Note: components/present/PresentWatermark.tsx is not imported here - it's
 // a React component (needs a DOM renderer, not available under plain
 // tsx/Node). Its default-asset behavior is instead confirmed with a
@@ -976,6 +978,111 @@ console.log("\n46. Watermarks render in original color; Live and Preview both re
     "12: Preview Mode renders through the exact same ClassroomView, so it resolves the same saved branding",
     previewSource.includes("<ClassroomView"),
   );
+}
+
+console.log("\n47. Materials panel: appears when populated, hidden when blank, wraps cleanly, identical in Live/Preview");
+{
+  // LessonPanels has zero hooks - a plain function of its props - so it
+  // can be called directly and its returned element tree inspected,
+  // without a DOM renderer. React elements are plain {type, props, ...}
+  // objects until actually rendered, so this is genuine behavioral
+  // verification, not a static-source guess.
+  interface ReactLikeElement {
+    type?: unknown;
+    props?: { children?: unknown; className?: unknown; [key: string]: unknown };
+  }
+
+  function collectTags(node: unknown, sink: Array<{ type: unknown; text: string; className: unknown }>): void {
+    if (node === null || node === undefined || typeof node === "boolean") return;
+    if (typeof node === "string" || typeof node === "number") return;
+    if (Array.isArray(node)) {
+      node.forEach((child) => collectTags(child, sink));
+      return;
+    }
+    if (typeof node === "object" && "props" in node) {
+      const el = node as ReactLikeElement;
+      const children = el.props?.children;
+      if (typeof children === "string") {
+        sink.push({ type: el.type, text: children, className: el.props?.className });
+      }
+      collectTags(children, sink);
+    }
+  }
+
+  function renderPanels(lesson: DailyLesson) {
+    const tags: Array<{ type: unknown; text: string; className: unknown }> = [];
+    const tree = LessonPanels({ lesson, onToggleAgendaItem: () => {} });
+    collectTags(tree, tags);
+    return tags;
+  }
+
+  const baseLesson: DailyLesson = {
+    id: "lesson-materials-test",
+    date: "2026-09-15",
+    classSectionId: "section-test",
+    learningTarget: "Test target",
+    agendaItems: [],
+    resources: [],
+    announcements: [],
+    createdAt: "2026-09-01T00:00:00.000Z",
+    updatedAt: "2026-09-01T00:00:00.000Z",
+  };
+
+  const materialsText = "HMH Into Algebra 1 Unit 1 Module 1 Lesson 2; Student Edition pp. 11-12; guided notes; whiteboard/marker; calculator as needed.";
+
+  console.log("  Populated: the card appears with the exact stored text");
+  {
+    const tags = renderPanels({ ...baseLesson, materials: materialsText });
+    check("a Materials heading (h3) is present", tags.some((t) => t.type === "h3" && t.text === "Materials"));
+    check("the exact stored materials text appears verbatim", tags.some((t) => t.text === materialsText));
+  }
+
+  console.log("  Blank variants: the card is absent in every case");
+  {
+    const undefinedCase = renderPanels({ ...baseLesson, materials: undefined });
+    check("materials: undefined -> no Materials heading", !undefinedCase.some((t) => t.type === "h3" && t.text === "Materials"));
+
+    const emptyCase = renderPanels({ ...baseLesson, materials: "" });
+    check("materials: '' -> no Materials heading", !emptyCase.some((t) => t.type === "h3" && t.text === "Materials"));
+
+    const whitespaceCase = renderPanels({ ...baseLesson, materials: "   \n\t  " });
+    check("materials: whitespace-only -> no Materials heading (trimmed before checking)", !whitespaceCase.some((t) => t.type === "h3" && t.text === "Materials"));
+  }
+
+  console.log("  A long, realistic materials entry wraps cleanly - no fixed height, truncation, overflow, or nowrap styling");
+  {
+    const longMaterials =
+      "HMH Into Algebra 1 Unit 1 Module 1 Lesson 2; Student Edition pp. 11-12; guided notes packet (front and back); " +
+      "whiteboard and dry-erase marker for each student; scientific calculator (TI-30 or equivalent) as needed; " +
+      "graph paper for the independent practice set; extra pencils at the front table; printed exit ticket for the last five minutes; " +
+      "sticky notes for the retrieval warm-up; class set of protractors in case students finish early and move to tomorrow's preview.";
+    const tags = renderPanels({ ...baseLesson, materials: longMaterials });
+    const materialsParagraph = tags.find((t) => t.text === longMaterials);
+    check("the full long text is present, untruncated (same length as the source string)", materialsParagraph?.text.length === longMaterials.length);
+
+    const className = String(materialsParagraph?.className ?? "");
+    check("no truncate/line-clamp class", !/truncate|line-clamp/.test(className));
+    check("no whitespace-nowrap class", !/whitespace-nowrap/.test(className));
+    check("no overflow-hidden class", !/overflow-hidden/.test(className));
+    check("no fixed height class (only min-h is allowed to grow, never a fixed h- cap)", !/(?<!min-)(?<!max-)\bh-\d/.test(className));
+  }
+
+  console.log("  Live Mode and Preview Mode render identically - both go through this exact same component");
+  {
+    // Already proven structurally by checks 11/12 above (both route
+    // through <ClassroomView>, which passes `lesson` straight through to
+    // this same LessonPanels) - re-confirmed here directly against the
+    // materials-populated tree so this scenario's coverage doesn't depend
+    // on reading an unrelated section.
+    const liveSource = readFileSync(join(process.cwd(), "components", "present", "LivePresentScreen.tsx"), "utf8");
+    const previewSource = readFileSync(join(process.cwd(), "components", "present", "PreviewPresentScreen.tsx"), "utf8");
+    check("Live Mode has no separate materials-rendering code of its own", !liveSource.includes("materials"));
+    check("Preview Mode has no separate materials-rendering code of its own", !previewSource.includes("materials"));
+    check(
+      "both still route through the one shared ClassroomView (proven above), so the Materials card can never diverge between modes",
+      liveSource.includes("<ClassroomView") && previewSource.includes("<ClassroomView"),
+    );
+  }
 }
 
 console.log(

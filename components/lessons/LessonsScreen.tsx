@@ -172,7 +172,7 @@ export function LessonsScreen() {
             <textarea
               value={lesson?.materials ?? ""}
               onChange={(e) => actions.updateMaterials(date, classSectionId, e.target.value)}
-              placeholder="What you'll need: textbook pages, handouts, manipulatives, etc. Teacher-facing only - not shown in Present Mode."
+              placeholder="What you'll need: textbook pages, handouts, manipulatives, etc. Shown as its own panel in Present Mode when filled in."
               rows={2}
               className="w-full rounded-md border border-falcon-brown-700/30 bg-white px-3 py-2 text-sm text-falcon-brown-900"
             />
