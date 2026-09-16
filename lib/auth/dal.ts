@@ -3,6 +3,7 @@ import { cache } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/serverClient";
+import { deriveDataAuthorityState, type DataAuthorityState } from "./dataAuthority";
 
 /**
  * Stores which of a multi-membership user's organizations is active for
@@ -46,6 +47,8 @@ export interface ActiveMembership {
   organizationId: string;
   organizationName: string;
   role: MembershipRole;
+  /** Null until this membership's one-time local-data migration has completed - see lib/data/migration/migrateLocalData.ts's markMigrationComplete. */
+  localDataMigratedAt: string | null;
 }
 
 /**
@@ -59,7 +62,7 @@ export const getActiveMemberships = cache(async (userId: string): Promise<Active
   const supabase = await createSupabaseServerClient();
   const { data, error } = await supabase
     .from("organization_memberships")
-    .select("id, organization_id, role, organizations(name)")
+    .select("id, organization_id, role, local_data_migrated_at, organizations(name)")
     .eq("user_id", userId)
     .eq("status", "active");
 
@@ -73,6 +76,7 @@ export const getActiveMemberships = cache(async (userId: string): Promise<Active
       organizationId: row.organization_id as string,
       organizationName: organizationName ?? "Unknown school",
       role: row.role as MembershipRole,
+      localDataMigratedAt: row.local_data_migrated_at as string | null,
     };
   });
 });
@@ -111,4 +115,14 @@ export async function resolveActiveOrganization(): Promise<ActiveOrganizationRes
 /** Where a request with this resolution should land once auth/org context is settled. */
 export function destinationForResolution(resolution: ActiveOrganizationResolution): string {
   return resolution.state === "resolved" ? "/setup" : "/onboarding";
+}
+
+/**
+ * The single entry point for "which DataRepository should this request's
+ * app data come from" - see lib/store/CutoverAppDataProvider.tsx. Returns a
+ * plain, serializable value (never a Supabase client or session) so it can
+ * be passed straight from a Server Component into a "use client" provider.
+ */
+export async function resolveDataAuthorityState(): Promise<DataAuthorityState> {
+  return deriveDataAuthorityState(await resolveActiveOrganization());
 }
