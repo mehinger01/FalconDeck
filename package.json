@@ -19,7 +19,8 @@
     "verify:supabase-mapping": "tsx scripts/verify-supabase-mapping.ts",
     "verify:supabase-migration": "tsx scripts/verify-supabase-migration.ts",
     "verify:cutover-provider": "tsx scripts/verify-cutover-provider.ts",
-    "verify": "npm run verify:schedule && npm run verify:lessons && npm run verify:preview && npm run verify:week && npm run verify:classroom && npm run verify:resources && npm run verify:calendar && npm run verify:demo && npm run verify:lesson-import && npm run verify:supabase-mapping && npm run verify:cutover-provider"
+    "verify:restore-backup": "tsx scripts/verify-restore-backup.ts",
+    "verify": "npm run verify:schedule && npm run verify:lessons && npm run verify:preview && npm run verify:week && npm run verify:classroom && npm run verify:resources && npm run verify:calendar && npm run verify:demo && npm run verify:lesson-import && npm run verify:supabase-mapping && npm run verify:cutover-provider && npm run verify:restore-backup"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",

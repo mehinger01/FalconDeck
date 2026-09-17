@@ -1,5 +1,6 @@
 import { OnboardingScreen } from "@/components/onboarding/OnboardingScreen";
 import { MigrationSetupCard } from "@/components/onboarding/MigrationSetupCard";
+import { RestoreBackupCard } from "@/components/onboarding/RestoreBackupCard";
 import { resolveDataAuthorityState } from "@/lib/auth/dal";
 
 /**
@@ -20,6 +21,7 @@ export default async function SetupPage() {
   return (
     <>
       <MigrationSetupCard migratedAt={migratedAt} organizationId={organizationId} membershipId={membershipId} />
+      <RestoreBackupCard authorityKind={authority.kind === "cloud-ready" ? "cloud-ready" : "local"} />
       <OnboardingScreen />
     </>
   );
