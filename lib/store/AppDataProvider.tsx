@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { createDemoAppData } from "@/lib/data/demoData";
 import { dataRepository } from "@/lib/data/localStorageRepository";
 import type { AppData, DataRepository, SaveResult } from "@/lib/data/types";
@@ -29,6 +30,7 @@ import {
   INITIAL_HYDRATION_STATE,
   shouldShowErrorScreen,
   shouldShowLoadingScreen,
+  shouldShowSessionEndedScreen,
   type HydrationState,
 } from "./hydrationState";
 
@@ -173,24 +175,47 @@ export function AppDataProvider({
     // only thing that re-runs this effect after the first mount.
   }, [repository, retryToken]);
 
-  // Rehydrates from another Falcon Deck tab's save (e.g. Settings saving a
-  // new watermark while Present Mode is open elsewhere). The reducer's own
-  // HYDRATE deep-equality check (see reducer.ts) prevents this from ever
-  // looping back and forth indefinitely between tabs.
+  // Two distinct external signals, never conflated:
+  // - "data-changed": rehydrates from another Falcon Deck tab's save (e.g.
+  //   Settings saving a new watermark while Present Mode is open
+  //   elsewhere). The reducer's own HYDRATE deep-equality check (see
+  //   reducer.ts) prevents this from ever looping back and forth
+  //   indefinitely between tabs. A failed reload here is a generic,
+  //   retry-able problem - same LOAD_FAILURE path the primary hydration
+  //   effect uses.
+  // - "session-ended": the authority itself is no longer valid (e.g. a
+  //   Supabase SIGNED_OUT event). Never attempts a reload - going straight
+  //   to a distinct, blocking "your session ended" state is the whole
+  //   point of this event being distinguishable from "data-changed" in the
+  //   first place (see DataRepository's ExternalChangeEvent doc comment).
   useEffect(() => {
     let cancelled = false;
-    const unsubscribe = repository.subscribeToExternalChanges(() => {
-      repository.load().then((loaded) => {
-        if (cancelled) return;
-        dispatch({ type: "HYDRATE", data: loaded });
-      });
+    const unsubscribe = repository.subscribeToExternalChanges((event) => {
+      if (cancelled) return;
+      if (event === "session-ended") {
+        hydrationDispatch({ type: "SESSION_ENDED" });
+        return;
+      }
+      repository.load().then(
+        (loaded) => {
+          if (cancelled) return;
+          dispatch({ type: "HYDRATE", data: loaded });
+          hydrationDispatch({ type: "LOAD_SUCCESS" });
+        },
+        (error: unknown) => {
+          if (cancelled) return;
+          hydrationDispatch({
+            type: "LOAD_FAILURE",
+            message: error instanceof Error ? error.message : "Falcon Deck couldn't load your data.",
+          });
+        },
+      );
     });
     return () => {
       cancelled = true;
       unsubscribe();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [repository]);
 
   useEffect(() => {
     if (!canSave(hydration)) return; // never save before a successful load, and never after a failed one
@@ -333,6 +358,32 @@ export function AppDataProvider({
         >
           Retry
         </button>
+      </div>
+    );
+  }
+
+  // A confirmed session end (e.g. sign-out) is NOT the same as a transient
+  // load failure - Retry would just fail again forever, since the session
+  // really is gone, so this never offers it. Previously-loaded `data` is
+  // never rendered after this point (same "children replaced entirely"
+  // rule as the error screen above), and nothing here falls back to a
+  // different repository - the only way out is signing in again, which
+  // (via a fresh navigation re-resolving DataAuthorityState) produces a
+  // brand-new CutoverAppDataProvider mount, not a resumed one.
+  if (shouldShowSessionEndedScreen(hydration)) {
+    return (
+      <div
+        role="alert"
+        className="flex min-h-screen flex-1 flex-col items-center justify-center gap-4 bg-falcon-cream-200 px-6 text-center text-falcon-brown-900"
+      >
+        <p className="text-lg font-semibold">Your Falcon Deck session ended.</p>
+        <p className="max-w-md text-sm text-falcon-brown-700/70">Sign in again to continue.</p>
+        <Link
+          href="/login"
+          className="rounded-md bg-falcon-brown-900 px-4 py-2 text-sm font-semibold text-falcon-cream-100"
+        >
+          Sign in again
+        </Link>
       </div>
     );
   }

@@ -427,8 +427,113 @@ async function main() {
     console.log(`    ${ctxB.organizationId}`);
   }
 
+  console.log("\n=== Phase B provider-level test (one persistent account, the real production runtime path) ===");
+  await runProviderLevelTest(emailA, passwordA);
+
   console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}`);
   process.exit(failures === 0 ? 0 : 1);
+}
+
+/**
+ * Exercises the exact runtime path a real migrated teacher's browser
+ * follows - not just the individual migration/validation functions in
+ * isolation (the suite above already covers that), but the actual
+ * SupabaseDataRepository class constructed the same way
+ * selectDataRepositoryPolicy does, loaded/saved/reloaded through it, and a
+ * second signed-in client standing in for a second browser/device with no
+ * localStorage at all. Uses only test account A - a fresh, separate
+ * disposable organization from the suite above (that one already marked
+ * account A's first org migrated and got cleaned up).
+ */
+async function runProviderLevelTest(email: string, password: string): Promise<void> {
+  const { client } = await signIn(email, password);
+  const ctx = await bootstrap(client, "Falcon Deck Phase B Provider Test");
+  check("provider test: got a fresh disposable organization/membership", Boolean(ctx.organizationId && ctx.membershipId));
+
+  try {
+    // B. Simulate an unmigrated local snapshot.
+    const localSnapshot = realisticAppData("providertest");
+
+    // C. Run the production migration flow - the same three calls, in the
+    // same order, MigrationSetupCard.handleMigrate makes.
+    const migrationResult = await migrateLocalData(client, ctx, localSnapshot);
+    check("provider test: migration succeeds", migrationResult.ok === true);
+    if (!migrationResult.ok) return;
+
+    // D. Validate.
+    const validationResult = await validateMigratedData(client, ctx, localSnapshot, migrationResult);
+    check("provider test: validation passes with zero mismatches", validationResult.ok === true && validationResult.mismatches.length === 0);
+    if (!validationResult.ok) return;
+
+    // E. Mark migrated - only now, after validation succeeded.
+    await markMigrationComplete(client, ctx.membershipId);
+    const { data: markedRow } = await client.from("organization_memberships").select("local_data_migrated_at").eq("id", ctx.membershipId).single();
+    check("provider test: local_data_migrated_at is set only after validation succeeded", Boolean(markedRow?.local_data_migrated_at));
+
+    // F. Resolve cloud-ready - the same fact deriveDataAuthorityState reads.
+    check("provider test: the membership now resolves as cloud-ready (migratedAt is non-null)", markedRow?.local_data_migrated_at != null);
+
+    // G. Construct a real SupabaseDataRepository - the exact class
+    // selectDataRepositoryPolicy's cloud-ready branch constructs (this
+    // script runs in Node, so an already-authenticated SupabaseClient
+    // stands in for createSupabaseBrowserClient()'s browser client - the
+    // repository class and its load/save logic are identical either way).
+    const providerRepo = new SupabaseDataRepository(client, ctx);
+
+    // H. Load through the same runtime path.
+    const loadedViaProvider = await providerRepo.load();
+    check("provider test: repository.load() returns the migrated data", loadedViaProvider.courses.length === 1 && loadedViaProvider.courses[0].name === "Algebra 1");
+
+    // I. Mutate/save.
+    const mutated: AppData = { ...loadedViaProvider, teacherSchedulePreferences: { lunchWave: "A" } };
+    const saveOutcome = await providerRepo.save(mutated);
+    check("provider test: repository.save() succeeds", saveOutcome.ok === true);
+
+    // J. Reload and verify.
+    const reloadedViaProvider = await providerRepo.load();
+    check("provider test: reload reflects the saved mutation", reloadedViaProvider.teacherSchedulePreferences.lunchWave === "A");
+
+    // K. Simulate a second browser/device with no localStorage at all: a
+    // brand-new sign-in (its own session, own client) constructs its own
+    // repository - nothing about it depends on any local seed.
+    const { client: secondBrowserClient } = await signIn(email, password);
+    const secondBrowserRepo = new SupabaseDataRepository(secondBrowserClient, ctx);
+
+    // L. Cloud load returns the same data.
+    const secondBrowserLoad = await secondBrowserRepo.load();
+    check(
+      "provider test: a second browser/device with empty localStorage loads the SAME cloud data",
+      secondBrowserLoad.courses.length === 1 && secondBrowserLoad.courses[0].name === "Algebra 1",
+    );
+    check(
+      "provider test: the second browser also sees the mutation saved from the first",
+      secondBrowserLoad.teacherSchedulePreferences.lunchWave === "A",
+    );
+
+    // M/N. Simulate SIGNED_OUT on that second session and confirm
+    // SupabaseDataRepository.subscribeToExternalChanges reports it as
+    // "session-ended" - a real onAuthStateChange event, not a source-text
+    // inspection. scope: "local" affects only this throwaway second
+    // session, never the primary `client` used for cleanup below.
+    let receivedEvent: string | null = null;
+    const unsubscribe = secondBrowserRepo.subscribeToExternalChanges((event) => {
+      receivedEvent = event;
+    });
+    await secondBrowserClient.auth.signOut({ scope: "local" });
+    // onAuthStateChange fires asynchronously, and our own handler defers
+    // via setTimeout on top of that - give it a moment to actually run.
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    check("provider test: signing out fires subscribeToExternalChanges with 'session-ended'", (receivedEvent as string | null) === "session-ended");
+    unsubscribe();
+  } finally {
+    // O. Cleanup: disposable app data + membership row, same helper the
+    // suite above uses. P. The persistent Auth account itself is never
+    // touched.
+    console.log("\nProvider test cleanup: deleting disposable application data and the membership row");
+    await deleteAllDataForMembership(client, ctx);
+    console.log("  done - persistent test account kept");
+    console.log(`  orphaned organization needing a follow-up privileged delete: ${ctx.organizationId}`);
+  }
 }
 
 main().catch((error) => {

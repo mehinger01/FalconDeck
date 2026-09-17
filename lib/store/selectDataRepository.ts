@@ -1,4 +1,6 @@
 import { dataRepository } from "@/lib/data/localStorageRepository";
+import { SupabaseDataRepository } from "@/lib/data/supabaseDataRepository";
+import { createSupabaseBrowserClient } from "@/lib/supabase/browserClient";
 import type { DataRepository } from "@/lib/data/types";
 import type { DataAuthorityState } from "@/lib/auth/dataAuthority";
 
@@ -9,21 +11,21 @@ export interface DataAuthorityRepositoryPolicy {
 }
 
 /**
- * PHASE A: every authority kind - including "cloud-ready" - resolves to the
- * local repository with blocking hydration OFF. No authenticated user
- * starts using SupabaseDataRepository, or a hydration policy that assumes
- * one, from the running app during Phase A.
+ * PHASE B: every authority kind resolves to the local repository EXCEPT
+ * "cloud-ready", which now constructs a real SupabaseDataRepository -
+ * createSupabaseBrowserClient() uses only the public publishable key
+ * (@supabase/ssr's ordinary browser client; no service-role/secret key
+ * ever reaches the browser) - and sets `blockUntilHydrated: true`, so a
+ * migrated user's app can never render demo/seed data as if it were their
+ * real cloud data while load() is pending.
  *
- * This function's `"cloud-ready"` branch is the single, deliberately
- * isolated place Phase B changes to begin real cutover: constructing a
- * SupabaseDataRepository (from createSupabaseBrowserClient() + the
- * authority's organizationId/membershipId) AND setting
- * `blockUntilHydrated: true` together, in the same edit, so a migrated
- * user's app can never render demo/seed data as if it were their real
- * cloud data while load() is pending. Nothing else in the provider/store
- * layer needs to change for that - AppDataProvider itself never inspects
- * `authority` or the repository's class, only the plain `blockUntilHydrated`
- * boolean this function hands it.
+ * No fallback to `dataRepository` exists anywhere in this branch: a
+ * cloud-ready user who fails to load gets AppDataProvider's blocking
+ * error/session-ended UI, never a silent switch to local storage.
+ *
+ * AppDataProvider itself never inspects `authority` or the repository's
+ * class, only the plain `blockUntilHydrated` boolean this function hands
+ * it - see its own doc comment.
  */
 export function selectDataRepositoryPolicy(authority: DataAuthorityState): DataAuthorityRepositoryPolicy {
   switch (authority.kind) {
@@ -33,8 +35,12 @@ export function selectDataRepositoryPolicy(authority: DataAuthorityState): DataA
     case "local":
       return { repository: dataRepository, blockUntilHydrated: false };
     case "cloud-ready":
-      // PHASE A: intentionally still local + non-blocking - see module doc
-      // comment above for exactly what Phase B changes here.
-      return { repository: dataRepository, blockUntilHydrated: false };
+      return {
+        repository: new SupabaseDataRepository(createSupabaseBrowserClient(), {
+          organizationId: authority.organizationId,
+          membershipId: authority.membershipId,
+        }),
+        blockUntilHydrated: true,
+      };
   }
 }

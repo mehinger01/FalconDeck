@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import type { ReactNode } from "react";
 import { AppDataProvider } from "./AppDataProvider";
 import { selectDataRepositoryPolicy } from "./selectDataRepository";
@@ -45,14 +46,22 @@ export function CutoverAppDataProvider({ authority, children }: { authority: Dat
     console.debug("[CutoverAppDataProvider] resolved authority:", authority);
   }
 
-  const { repository, blockUntilHydrated } = selectDataRepositoryPolicy(authority);
+  const mountKey = dataAuthorityMountKey(authority);
+
+  // Memoized on `mountKey` (the authority's semantic identity), not on the
+  // `authority` object reference. Next.js re-invokes this component's
+  // Server Component ancestors - handing this component a brand-new
+  // `authority` object - on every navigation within an authenticated route
+  // group, even between two pages where nothing about the signed-in user
+  // actually changed. Without this memoization, a cloud-ready user would
+  // get a brand-new SupabaseDataRepository (and browser client) on every
+  // navigation, forcing a full reload - and, since blockUntilHydrated is
+  // true for cloud-ready, a visible loading flash - between every page.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const { repository, blockUntilHydrated } = useMemo(() => selectDataRepositoryPolicy(authority), [mountKey]);
 
   return (
-    <AppDataProvider
-      key={dataAuthorityMountKey(authority)}
-      repository={repository}
-      blockUntilHydrated={blockUntilHydrated}
-    >
+    <AppDataProvider key={mountKey} repository={repository} blockUntilHydrated={blockUntilHydrated}>
       {children}
     </AppDataProvider>
   );

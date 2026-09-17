@@ -2,7 +2,7 @@ import { DEFAULT_CLASSROOM_EXPERIENCE_SETTINGS } from "@/types/classPresentation
 import { clampBellOffsetSeconds } from "@/lib/schedule/time";
 import { DEFAULT_TEACHER_SCHEDULE_PREFERENCES } from "@/types/teacherSchedule";
 import { createDemoAppData } from "./demoData";
-import type { AppData, DataRepository, SaveResult } from "./types";
+import type { AppData, DataRepository, ExternalChangeEvent, SaveResult } from "./types";
 
 const STORAGE_KEY = "falcon-deck:app-data:v1";
 const DEFAULT_SCHEDULE_KEY = "falcon-deck:default-schedule-id:v1";
@@ -135,17 +135,18 @@ export class LocalStorageDataRepository implements DataRepository {
     return writeStoredData(data);
   }
 
-  subscribeToExternalChanges(onChange: () => void): () => void {
+  subscribeToExternalChanges(onEvent: (event: ExternalChangeEvent) => void): () => void {
     if (typeof window === "undefined") return () => {};
 
     // The browser's `storage` event fires only in *other* tabs/windows of
     // this origin, never in the document that made the write - that's what
-    // keeps this from looping back on itself.
+    // keeps this from looping back on itself. localStorage has no concept
+    // of a session ending, so this only ever reports "data-changed".
     function handleStorageEvent(event: StorageEvent) {
       // event.key is null when localStorage.clear() was called elsewhere -
       // treat that as "something changed" too, not just our own keys.
       if (event.key !== null && event.key !== STORAGE_KEY && event.key !== DEFAULT_SCHEDULE_KEY) return;
-      onChange();
+      onEvent("data-changed");
     }
 
     window.addEventListener("storage", handleStorageEvent);

@@ -1,11 +1,11 @@
 /**
- * PHASE A: the migration action is UI/state plumbing only - flipping this
- * single flag is the entire Phase B change needed to let the "Migrate to
- * cloud" button in /setup actually call migrateLocalData/
- * validateMigratedData/markMigrationComplete. Nothing else in
- * MigrationSetupCard needs to change for that.
+ * PHASE B: the "Migrate to cloud" button in /setup now calls
+ * migrateLocalData/validateMigratedData/markMigrationComplete for real -
+ * see MigrationSetupCard's handleMigrate. This flag stays as the single,
+ * explicit kill switch: flipping it back to `false` disables the action
+ * again without touching the rest of the component.
  */
-export const MIGRATION_ACTION_ENABLED = false;
+export const MIGRATION_ACTION_ENABLED = true;
 
 export type MigrationUiState =
   | { step: "not-started" }

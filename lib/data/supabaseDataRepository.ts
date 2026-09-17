@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "./supabase.types";
-import type { AppData, DataRepository, SaveResult } from "./types";
+import type { AppData, DataRepository, ExternalChangeEvent, SaveResult } from "./types";
 import type { OwnerContext } from "./supabaseMapping";
 import * as Map_ from "./supabaseMapping";
 import type { ClassSection } from "@/types/course";
@@ -475,8 +475,29 @@ export class SupabaseDataRepository implements DataRepository {
     }
   }
 
-  /** No cross-device realtime in this milestone - see docs/V2_ARCHITECTURE.md §12.7 (locked: not required for V2). */
-  subscribeToExternalChanges(): () => void {
-    return () => {};
+  /**
+   * No cross-device realtime/data-change detection in this milestone - see
+   * docs/V2_ARCHITECTURE.md §12.7 (locked: not required for V2). This only
+   * ever reports "session-ended", narrowly on Supabase's own SIGNED_OUT
+   * event - never Postgres Realtime, never polling.
+   *
+   * The callback passed to `onAuthStateChange` does no async/Supabase work
+   * itself - per current Supabase guidance, calling other `supabase.auth.*`
+   * methods (or anything that could trigger another auth state change)
+   * synchronously inside this callback risks deadlocking GoTrueClient's
+   * internal lock. `repository.load()` (which AppDataProvider runs in
+   * response to `onEvent`) is never called here directly - only a plain,
+   * non-Supabase notification, and even that is deferred via `setTimeout`
+   * so it runs strictly after this callback's own synchronous execution
+   * finishes, not inside it.
+   */
+  subscribeToExternalChanges(onEvent: (event: ExternalChangeEvent) => void): () => void {
+    const {
+      data: { subscription },
+    } = this.client.auth.onAuthStateChange((event) => {
+      if (event !== "SIGNED_OUT") return;
+      setTimeout(() => onEvent("session-ended"), 0);
+    });
+    return () => subscription.unsubscribe();
   }
 }

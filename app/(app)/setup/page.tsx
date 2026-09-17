@@ -10,11 +10,16 @@ import { resolveDataAuthorityState } from "@/lib/auth/dal";
  */
 export default async function SetupPage() {
   const authority = await resolveDataAuthorityState();
+  // Guaranteed "local" or "cloud-ready" by the (app) layout above - both
+  // carry organizationId/membershipId.
   const migratedAt = authority.kind === "cloud-ready" ? authority.migratedAt : null;
+  const hasMembership = authority.kind === "local" || authority.kind === "cloud-ready";
+  const organizationId = hasMembership ? authority.organizationId : "";
+  const membershipId = hasMembership ? authority.membershipId : "";
 
   return (
     <>
-      <MigrationSetupCard migratedAt={migratedAt} />
+      <MigrationSetupCard migratedAt={migratedAt} organizationId={organizationId} membershipId={membershipId} />
       <OnboardingScreen />
     </>
   );
