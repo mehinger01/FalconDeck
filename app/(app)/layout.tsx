@@ -8,15 +8,24 @@ import type { ReactNode } from "react";
 /**
  * Every route under (app) requires both a signed-in user and a resolved
  * active organization (states A/B/D redirect away; only state C/resolved
- * renders here). /present and /demo are intentionally outside this group
- * and stay unauthenticated - see docs/CURRENT_STATE.md.
+ * renders here). /demo/* is intentionally outside this group and stays
+ * unauthenticated. /present is ALSO outside this group (it needs no
+ * NavBar/app-shell chrome), but is no longer unauthenticated - see
+ * app/(presentation)/present/layout.tsx, which reuses these exact same
+ * auth/DAL primitives. docs/CURRENT_STATE.md's "/present ... remain
+ * public/unauthenticated" note predates that change.
  *
- * This is the ONLY place CutoverAppDataProvider is mounted - the public
- * root layout (app/layout.tsx) deliberately stays auth-unaware and keeps
- * using the plain, local AppDataProvider for every route, this group
- * included. `resolution` is already guaranteed `{state: "resolved", ...}`
- * by the redirect above, so deriveDataAuthorityState is called directly on
- * it rather than re-resolving from scratch.
+ * This is NOT the only place CutoverAppDataProvider is mounted anymore -
+ * app/(presentation)/present/layout.tsx mounts its own, for the same
+ * reason (a sibling route group needs its own authority resolution; see
+ * that file's doc comment for why route groups can't share this logic
+ * without either duplicating it or promoting it into the auth-unaware root
+ * layout, which Correction 1 of this milestone explicitly ruled out). The
+ * public root layout (app/layout.tsx) still deliberately stays auth-unaware
+ * and keeps using the plain, local AppDataProvider for every route.
+ * `resolution` is already guaranteed `{state: "resolved", ...}` by the
+ * redirect above, so deriveDataAuthorityState is called directly on it
+ * rather than re-resolving from scratch.
  *
  * NESTED PROVIDER TOPOLOGY (inspected, not assumed):
  * app/layout.tsx's AppDataProvider wraps every route, including this

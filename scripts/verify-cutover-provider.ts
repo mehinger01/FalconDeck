@@ -15,8 +15,9 @@
  * everything else tests the real pure logic these components are built on.
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import {
   dataAuthorityMountKey,
   deriveDataAuthorityState,
@@ -30,6 +31,7 @@ import {
   hydrationReducer,
   shouldRenderChildren,
   shouldShowErrorScreen,
+  shouldShowSessionEndedScreen,
   INITIAL_HYDRATION_STATE,
   type HydrationState,
 } from "@/lib/store/hydrationState";
@@ -258,6 +260,98 @@ check(
     return unchanged && backupIsIndependent && backupUnaffectedByLaterMutation;
   })(),
 );
+
+// ---------------------------------------------------------------------------
+// 20-29 (Present Mode + Supabase authority audit's required tests 1-10):
+// the authenticated /present route group, and that Present's own component
+// tree and Demo are untouched by this change.
+// ---------------------------------------------------------------------------
+console.log("\n20-29. authenticated /present route group (Present Mode + Supabase authority audit)");
+
+const presentPageNewPath = join(process.cwd(), "app", "(presentation)", "present", "page.tsx");
+const presentLayoutPath = join(process.cwd(), "app", "(presentation)", "present", "layout.tsx");
+const presentPageOldPath = join(process.cwd(), "app", "present", "page.tsx");
+
+check("1. /present now exists inside the authenticated (presentation) route group", existsSync(presentPageNewPath));
+check("2. /present no longer exists at the old app/present/page.tsx path", !existsSync(presentPageOldPath));
+
+const presentLayoutSource = readFileSync(presentLayoutPath, "utf8");
+check(
+  "3. the /present layout requires authentication (reuses requireAuthenticatedUser, doesn't reimplement it)",
+  presentLayoutSource.includes("requireAuthenticatedUser") &&
+    presentLayoutSource.includes('from "@/lib/auth/dal"'),
+);
+check(
+  "3. the /present layout resolves organization/membership and derives DataAuthorityState, same as (app)",
+  presentLayoutSource.includes("resolveActiveOrganization") && presentLayoutSource.includes("deriveDataAuthorityState"),
+);
+check("the /present layout mounts CutoverAppDataProvider", presentLayoutSource.includes("CutoverAppDataProvider"));
+check(
+  "the /present layout renders children WITHOUT NavBar/app-shell chrome (unlike (app)/layout.tsx)",
+  !presentLayoutSource.includes('from "@/components/layout/NavBar"') &&
+    !presentLayoutSource.includes("<NavBar") &&
+    !presentLayoutSource.includes("max-w-6xl"),
+);
+check(
+  "6. requireAuthenticatedUser() is called BEFORE CutoverAppDataProvider is ever mounted - an anonymous request " +
+    "redirects away and never reaches a mounted provider (local or otherwise) as Present's operative authority",
+  presentLayoutSource.indexOf("requireAuthenticatedUser") < presentLayoutSource.indexOf("<CutoverAppDataProvider"),
+);
+
+const presentPageSource = readFileSync(presentPageNewPath, "utf8");
+check("8. the moved /present page still imports PresentScreen (content is otherwise untouched)", presentPageSource.includes("PresentScreen"));
+
+const demoPresentPagePath = join(process.cwd(), "app", "demo", "present", "page.tsx");
+const demoLayoutPath = join(process.cwd(), "app", "demo", "layout.tsx");
+check("7. /demo/present still exists, untouched", existsSync(demoPresentPagePath));
+const demoLayoutSource = readFileSync(demoLayoutPath, "utf8");
+check(
+  "7. /demo's layout has no auth/authority coupling - it stays on its own isolated DemoAppDataProvider",
+  !demoLayoutSource.includes('from "@/lib/auth/dal"') && !demoLayoutSource.includes("CutoverAppDataProvider"),
+);
+
+// Tests 8 (PresentScreen data APIs unchanged) and 10 (no components/present/*
+// files modified) are git-status facts, not something a pure function call
+// can prove - same rationale as tests 1-2's static source inspection above.
+try {
+  const presentComponentDiff = execFileSync("git", ["diff", "--name-only", "--", "components/present"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  }).trim();
+  check(
+    "8 & 10. no components/present/* files were modified by this change (PresentScreen's data APIs are exactly as they were)",
+    presentComponentDiff === "",
+  );
+} catch {
+  check("8 & 10. no components/present/* files were modified by this change (git diff check)", false);
+}
+
+const presentComponentFiles = [
+  "components/present/PresentScreen.tsx",
+  "components/present/PreviewPresentScreen.tsx",
+  "components/present/LivePresentScreen.tsx",
+];
+check(
+  "9. no direct localStorage use exists in Present's screen components",
+  presentComponentFiles
+    .filter((path) => existsSync(join(process.cwd(), path)))
+    .every((path) => !readFileSync(join(process.cwd(), path), "utf8").includes("localStorage")),
+);
+
+// ---------------------------------------------------------------------------
+// 30-33. HydrationSessionEnded - pure state logic only, per the Present
+// Mode + Supabase authority audit's "AUTH EVENT DESIGN - AUDIT/TEST ONLY"
+// requirement. NOT wired into any runtime repository or AppDataProvider
+// dispatch site yet - these checks prove the logic is correct and ready,
+// not that anything currently produces this state.
+// ---------------------------------------------------------------------------
+console.log("\n30-33. HydrationSessionEnded (pure logic only - not wired to any runtime repository yet)");
+
+const sessionEnded: HydrationState = hydrationReducer(loading, { type: "SESSION_ENDED" });
+check("SESSION_ENDED transitions to a distinct session-ended status, not a generic error", sessionEnded.status === "session-ended");
+check("a session-ended state is recognized by shouldShowSessionEndedScreen, not shouldShowErrorScreen", shouldShowSessionEndedScreen(sessionEnded) && !shouldShowErrorScreen(sessionEnded));
+check("a session-ended state always blocks children, in both blocking and non-blocking modes", !shouldRenderChildren(true, sessionEnded) && !shouldRenderChildren(false, sessionEnded));
+check("a session-ended state can never save (same guarantee as error/loading)", canSave(sessionEnded) === false);
 
 console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}`);
 console.log(
