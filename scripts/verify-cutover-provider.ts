@@ -353,6 +353,26 @@ check("a session-ended state is recognized by shouldShowSessionEndedScreen, not 
 check("a session-ended state always blocks children, in both blocking and non-blocking modes", !shouldRenderChildren(true, sessionEnded) && !shouldRenderChildren(false, sessionEnded));
 check("a session-ended state can never save (same guarantee as error/loading)", canSave(sessionEnded) === false);
 
+// ---------------------------------------------------------------------------
+// 34. Sign-out scope: the production route must scope signOut() to this
+// device ("local"), never Supabase's unscoped/global default - Falcon Deck
+// is explicitly designed for one teacher across multiple devices (home +
+// school), and a home sign-out must never revoke the school session (or
+// vice versa). Static source check - which scope string is actually passed
+// to signOut() isn't something a pure function call can prove.
+// ---------------------------------------------------------------------------
+console.log("\n34. sign-out scope (home/school multi-device correctness)");
+
+const signOutRouteSource = readFileSync(join(process.cwd(), "app", "auth", "signout", "route.ts"), "utf8");
+check(
+  'the production sign-out route explicitly scopes to this device (supabase.auth.signOut({ scope: "local" }))',
+  /supabase\.auth\.signOut\(\s*\{\s*scope:\s*["']local["']\s*\}\s*\)/.test(signOutRouteSource),
+);
+check(
+  "the production sign-out route never calls an unscoped/global supabase.auth.signOut()",
+  !/supabase\.auth\.signOut\(\s*\)/.test(signOutRouteSource),
+);
+
 console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}`);
 console.log(
   "\nNote: this repo has no React component-rendering test harness (no jsdom/@testing-library). /setup's rendered " +
