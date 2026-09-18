@@ -164,12 +164,37 @@ schedule engine (`lib/schedule/*`) is untouched by any of this.
 
 **2.7 `SchoolYearCalendar` / `SchoolCalendarException`**
 The Master Calendar exception-overlay model (no-school / no-students / special-bell
-days), unchanged in shape. Organization-scoped: a school has a canonical calendar,
-shared by every teacher, rather than each teacher owning a separate imported copy.
-For OHHS in V2, one canonical calendar per school year is sufficient; nothing here
-precludes a school having more than one calendar row over time as long as exactly
-one resolves for any given date. `SchoolCalendarException.bellScheduleId` points at
-an org-owned `BellSchedule`. `resolveSchoolDate` is untouched.
+days), unchanged in shape. Dual-owned, discriminated by `ownerType`, the same
+pattern as `Course`/`BellSchedule` (§2.5/§2.6) — added by a corrective migration
+(`20260915000000_school_year_calendars_dual_ownership.sql`) once local data
+migration surfaced a real gap: a teacher's local Master Calendar had no valid
+destination under the original organization-only design.
+
+- **Organization-owned canonical calendars remain the institutional source of
+  truth.** For OHHS in V2, one canonical calendar per school year is sufficient;
+  nothing here precludes a school having more than one calendar row over time as
+  long as exactly one resolves for any given date (`is_canonical`, per school year).
+- **Teacher-owned calendars are permitted as fallback/transition data** — the same
+  rationale as teacher-owned `BellSchedule`s (§12.3): a teacher must not be blocked
+  from having their own calendar just because their school hasn't configured a
+  canonical one yet. A database constraint (not just convention) makes it
+  structurally impossible for a teacher-owned calendar to ever be canonical.
+- **Migration never promotes a teacher's calendar to organization-owned data.** A
+  migrated calendar is always written `ownerType: "teacher"`, `isCanonical: false` —
+  exactly the same non-promotion principle already locked for courses and bell
+  schedules (§6/§7), extended here rather than special-cased.
+- **If a canonical organization calendar later exists, it takes precedence.** The
+  read path always prefers a canonical row over any teacher-owned one for the same
+  organization.
+- **Reconciliation/notification when both exist is deferred.** The moment a
+  teacher's own migrated calendar is superseded by a later-configured canonical
+  one is not yet reconciled or surfaced to the teacher — that belongs to the future
+  admin-calendar-setup milestone (§11), not this one.
+
+`SchoolCalendarException` inherits ownership through its parent `SchoolYearCalendar`
+row rather than carrying its own ownership fields — a low-volume child table, not
+worth denormalizing onto. `SchoolCalendarException.bellScheduleId` points at a
+`BellSchedule`, of either ownership. `resolveSchoolDate` is untouched.
 
 **2.8 `TeacherPeriodAssignment`** *(new entity)*
 The bridge that lets a teacher attach their own `ClassSection`s to an org-owned,
@@ -274,11 +299,12 @@ column, not two separate schemas.
 | Course catalog entries | Organization | `Course` (`ownerType=organization`) |
 | Canonical bell schedule(s) | Organization | `BellSchedule` (`ownerType=organization`) |
 | Weekday content overrides on org schedule | Organization | `ScheduleBlockOverride` |
-| Master Calendar / exceptions | Organization | `SchoolYearCalendar` |
+| Canonical Master Calendar / exceptions (institutional truth) | Organization | `SchoolYearCalendar` (`ownerType=organization`) |
 | Custom course | Teacher | `Course` (`ownerType=teacher`) |
 | Class section | Teacher (always) | `ClassSection` |
 | Which section meets which period | Teacher | `TeacherPeriodAssignment` |
 | Fully custom/duplicated bell schedule | Teacher | `BellSchedule` (`ownerType=teacher`) |
+| Fallback/transition calendar (no canonical org calendar yet) | Teacher | `SchoolYearCalendar` (`ownerType=teacher`) |
 | Lessons, agenda, resources, announcements | Teacher (via class section) | `DailyLesson` |
 | Resource library | Teacher | `LibraryResource` |
 | Arrival routines | Teacher (via class section) | `ClassPresentationSettings` |
@@ -342,7 +368,7 @@ only.
 | `schedules` where `source: "custom"`/`"imported"` | `BellSchedule` (`ownerType: "teacher"`) | Migrates unchanged |
 | `ScheduleBlock.classSectionId` on an org schedule | `TeacherPeriodAssignment` | Needs transformation — extracted into a per-teacher join row; the one real structural change in the model |
 | `ScheduleBlock.classSectionId` on a teacher schedule | Stays on `ScheduleBlock` | Migrates unchanged |
-| `schoolCalendar` | `SchoolYearCalendar` (organization-owned) | Ownership changes — becomes a shared org singleton seeded from OHHS's existing calendar; a migrating teacher's conflicting local calendar requires explicit reconciliation, never automatic merge (§7) |
+| `schoolCalendar` | `SchoolYearCalendar` (`ownerType=teacher`) | Migrates as the teacher's own calendar, never promoted to `ownerType=organization` — see §2.7. An organization's canonical calendar, once one exists, is a separate, later, admin-driven setup step (not derived from any migrating teacher's data) and takes precedence over a teacher's own copy at read time |
 | `lessons`, `libraryResources`, `classPresentationSettings` | Same types | Migrate unchanged, gain scoping columns |
 | `classroomExperienceSettings.customWatermarkDataUrl` / `.watermarkOpacity` | Teacher's personal override on `ClassroomExperienceSettings` | Migrates unchanged as the teacher's own override — never promoted to `OrganizationSettings`, which is seeded separately |
 | `classroomExperienceSettings` (remaining fields) | `ClassroomExperienceSettings` | Migrates unchanged |
