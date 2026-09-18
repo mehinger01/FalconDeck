@@ -77,7 +77,10 @@ export function PresentScreen() {
   const fullscreenRootRef = useRef<HTMLDivElement>(null);
 
   return (
-    <div ref={fullscreenRootRef} className="relative min-h-screen">
+    <div
+      ref={fullscreenRootRef}
+      className={`relative min-h-screen ${timer.isActive ? "timer-active" : ""}`}
+    >
       {mode === "live" ? (
         <LivePresentScreen onCurrentLessonChange={setCurrentLesson} effectiveNow={liveEffectiveNow} />
       ) : (

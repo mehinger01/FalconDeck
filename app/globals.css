@@ -91,6 +91,62 @@ body {
 }
 
 /*
+ * Reserves room for the top-center TimerWidget (see
+ * components/present/tools/TimerWidget.tsx and PresentScreen.tsx, which
+ * adds/removes `.timer-active` on the shared root based on
+ * `timer.isActive`) so it never floats over the centered lesson title
+ * below it - applies at every viewport size, not just the presentation
+ * tier below, since the timer and the title are both horizontally
+ * centered in the same band regardless of screen size. Switching from
+ * `justify-center` to `justify-start` makes the reserved space exact
+ * (padding-top, then content starts immediately after it) instead of
+ * only half-absorbed by centering. Unlayered, so it wins over the
+ * layered `justify-center`/`py-6` utilities already on this element,
+ * exactly like the presentation-tier rules below; a no-op when the timer
+ * isn't active.
+ */
+.timer-active .present-classroom-shell {
+  justify-content: flex-start;
+}
+
+/*
+ * The actual top-reserve padding is scoped to ONLY apply when the shell is
+ * PresentHeader's direct next sibling - i.e. Live Mode, where nothing
+ * else sits between them. In Preview Mode, PreviewPresentScreen's own
+ * "Preview · <date>" pill sits in between instead (see the rule below,
+ * which reserves space for THAT), so the shell there is the header's
+ * *second* sibling, not matched by this selector - without this
+ * distinction, Preview Mode was double-reserving (both the pill's own
+ * margin-top below AND this padding-top), overshooting the available
+ * height and reintroducing a few pixels of scroll that had otherwise
+ * been eliminated everywhere else.
+ */
+.timer-active header.present-header + .present-classroom-shell {
+  padding-top: 6.5rem;
+}
+
+/*
+ * Preview Mode's own "Preview · <date>" pill (PreviewPresentScreen.tsx)
+ * sits between PresentHeader and ClassroomView - outside
+ * .present-classroom-shell entirely, so the rule above never reaches it,
+ * and it was found sitting directly under the timer in a real screenshot
+ * (not caught by any bounding-box check, since nothing was ever measuring
+ * this specific element - see the fix in scripts/verify-present-layout.ts).
+ * Targeted structurally (the pill wrapper is always PresentHeader's very
+ * next sibling) rather than by adding a class, since this positioning
+ * change is scoped to TimerWidget.tsx/PresentScreen.tsx/globals.css only.
+ *
+ * :not(.present-classroom-shell) matters: in Live Mode, ClassroomView's
+ * own shell is ALSO PresentHeader's very next sibling (nothing else
+ * renders between them there), so without this exclusion the selector
+ * would match twice in Live Mode and stack an unwanted extra margin-top
+ * on top of the padding-top already applied to that shell above.
+ */
+.timer-active header.present-header + div:not(.present-classroom-shell) {
+  margin-top: 5.5rem;
+}
+
+/*
  * BenQ-board-first presentation tier for LessonPanels/CountdownBanner
  * (Present + Preview Mode - see components/present/LessonPanels.tsx and
  * CountdownBanner.tsx). Gated on width AND height together, not width
@@ -224,5 +280,63 @@ body {
   .present-countdown-message {
     max-width: 22rem;
     text-align: left;
+  }
+
+  /*
+   * TimerWidget at the presentation tier: horizontally compact (digits
+   * beside Pause/Resume + Dismiss, not stacked above them) rather than
+   * smaller - font-size is untouched, only the stacking direction and
+   * padding change - and the top-reserve is correspondingly shorter than
+   * the base rule above, since this compact form is shorter. Both this
+   * and the extra tightening below only ever apply together with
+   * .timer-active, so a lesson with no timer running is completely
+   * unaffected by any of it.
+   */
+  .present-timer {
+    flex-direction: row;
+    align-items: center;
+    gap: 1.25rem;
+    padding: 0.5rem 1.5rem;
+  }
+  .present-timer-controls {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.375rem;
+  }
+
+  /*
+   * With the timer's reserved top space AND the final-five countdown AND
+   * all five cards all present at once (the worst realistic case), the
+   * card grid needs a little more of the remaining budget back - never by
+   * shrinking the 36px/24px type floor (present-card-heading/body are
+   * untouched here), only by tightening padding/gaps further, exactly
+   * the same kind of lever already used to fit the non-timer worst case.
+   * See scripts/verify-present-layout.ts for the measurements that set
+   * these values.
+   */
+  .timer-active .present-classroom-shell {
+    gap: 0.375rem;
+  }
+  /* Same Live-Mode-only scoping as the base rule above, for the same
+     double-reservation reason - see the comment there. */
+  .timer-active header.present-header + .present-classroom-shell {
+    padding-top: 3.75rem;
+  }
+  /* Shorter than the base rule above, matching the compact tier timer;
+     same :not() exclusion as the base rule, for the same reason. */
+  .timer-active header.present-header + div:not(.present-classroom-shell) {
+    margin-top: 3.75rem;
+  }
+  .timer-active .present-card {
+    padding: 0.375rem;
+  }
+  .timer-active .present-grid {
+    gap: 0.5rem 1.5rem;
+  }
+  /* Only reached in the true worst case (timer + countdown together) -
+     tightens the countdown pill's own padding a little further on top of
+     its already-compact tier styling above. */
+  .timer-active .present-countdown {
+    padding: 0.25rem 1rem;
   }
 }

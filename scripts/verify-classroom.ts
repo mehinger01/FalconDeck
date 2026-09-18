@@ -1297,6 +1297,78 @@ console.log(
 }
 
 console.log(
+  "\n50. TimerWidget repositioned top-center; PresentScreen exposes .timer-active for the reserved-space CSS " +
+    "(structural/source checks - the real rendered geometry, including the Preview-date-pill fix, is verified " +
+    "with Playwright in scripts/verify-present-layout.ts, since that needs a real browser to observe).",
+);
+{
+  const timerWidgetSource = readFileSync(
+    join(process.cwd(), "components", "present", "tools", "TimerWidget.tsx"),
+    "utf8",
+  );
+  check("TimerWidget is anchored top-4, not the old bottom-6", timerWidgetSource.includes("top-4") && !timerWidgetSource.includes("bottom-6"));
+  check("TimerWidget stays horizontally centered (left-1/2 -translate-x-1/2)", timerWidgetSource.includes("left-1/2") && timerWidgetSource.includes("-translate-x-1/2"));
+  check(
+    "TimerWidget keeps the highest z-index among the floating controls (z-30, above ToolTray/Fullscreen's z-20)",
+    timerWidgetSource.includes("z-30"),
+  );
+  check(
+    "the outer pill, digits, and controls row each carry a present-timer* hook for the tier's compact layout",
+    timerWidgetSource.includes("present-timer ") &&
+      timerWidgetSource.includes("present-timer-digits") &&
+      timerWidgetSource.includes("present-timer-controls"),
+  );
+  check(
+    "still renders nothing when the timer isn't active - unchanged behavior, position-only change",
+    timerWidgetSource.includes("if (!timer.isActive) return null;"),
+  );
+  check(
+    "Pause/Resume and Dismiss controls are untouched (same handlers, same conditional Pause/Resume swap)",
+    timerWidgetSource.includes("onClick={timer.pause}") &&
+      timerWidgetSource.includes("onClick={timer.start}") &&
+      timerWidgetSource.includes("onClick={timer.reset}") &&
+      timerWidgetSource.includes("timer.isRunning ?"),
+  );
+
+  const presentScreenSource = readFileSync(join(process.cwd(), "components", "present", "PresentScreen.tsx"), "utf8");
+  check(
+    "PresentScreen's shared root carries a timer.isActive-conditional 'timer-active' class",
+    /className=\{`relative min-h-screen \$\{timer\.isActive \? "timer-active" : ""\}`\}/.test(
+      presentScreenSource.replace(/\s+/g, " "),
+    ),
+  );
+  check(
+    "the FullscreenButton mount from the earlier feature is still present and untouched by this change",
+    presentScreenSource.includes("<FullscreenButton targetRef={fullscreenRootRef} />"),
+  );
+
+  const cssSource = readFileSync(join(process.cwd(), "app", "globals.css"), "utf8");
+  check(
+    "globals.css reserves space for the timer via .timer-active, gated on the same compound width+height query as everything else",
+    cssSource.includes(".timer-active") &&
+      /@media \(min-width: 1536px\) and \(min-height: 800px\)/.test(cssSource) &&
+      !/@media\s*\(min-width:\s*1800px\)/.test(cssSource),
+  );
+  check(
+    "the Preview-date-pill fix excludes ClassroomView's own shell, so Live Mode isn't double-reserved",
+    cssSource.includes(".timer-active header.present-header + div:not(.present-classroom-shell)") &&
+      cssSource.includes(".timer-active header.present-header + .present-classroom-shell"),
+  );
+  // No selector combining .timer-active with present-card-heading/-body
+  // exists anywhere - every .timer-active rule only ever touches padding/
+  // gap on .present-card/.present-grid/.present-classroom-shell/
+  // .present-countdown, never the heading/body elements' own font-size.
+  // (The real, definitive proof that 36px/24px survive with the timer
+  // active is the getComputedStyle() assertion in
+  // scripts/verify-present-layout.ts - this is a lightweight regression
+  // guard against a future edit accidentally adding one.)
+  check(
+    "no .timer-active rule anywhere targets present-card-heading or present-card-body",
+    !cssSource.includes(".timer-active .present-card-heading") && !cssSource.includes(".timer-active .present-card-body"),
+  );
+}
+
+console.log(
   "\n(Other suites: run `npm run verify:schedule`, `verify:lessons`, `verify:preview`, `verify:week`, and " +
     "`verify:resources` - or `npm run verify` for everything together. Also run `npm run lint` and `npm run build`.)",
 );
