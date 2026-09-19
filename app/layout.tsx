@@ -18,6 +18,18 @@ export const metadata: Metadata = {
   description: "Classroom presentation and scheduling system for Ogemaw Heights High School.",
 };
 
+/**
+ * Deliberately stays auth-unaware - this is the public/root shell for every
+ * route (/, /login, /demo/*, /open-house/*, and both authenticated route
+ * groups). It never resolves cookies/auth and keeps every route's default
+ * static-rendering eligibility intact where nothing more specific overrides
+ * it. Authenticated repository selection (CutoverAppDataProvider) is
+ * resolved one level down, inside app/(app)/layout.tsx and
+ * app/(presentation)/present/layout.tsx - the two route groups that
+ * actually need it - not here. /present now lives under the latter and
+ * requires authentication; /demo/present remains the public, unauthenticated
+ * alternative. See those files' doc comments for the nested-provider design.
+ */
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html

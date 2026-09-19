@@ -28,7 +28,7 @@ export function NavBar() {
             Ogemaw Heights Falcons
           </span>
         </Link>
-        <nav className="flex gap-1">
+        <nav className="flex items-center gap-1">
           {NAV_LINKS.map((link) => {
             const isActive = pathname === link.href || pathname.startsWith(`${link.href}/`);
             return (
@@ -45,6 +45,14 @@ export function NavBar() {
               </Link>
             );
           })}
+          <form action="/auth/signout" method="post">
+            <button
+              type="submit"
+              className="ml-2 rounded-md px-3 py-2 text-sm font-medium text-falcon-brown-800 hover:bg-falcon-gold-300/40"
+            >
+              Sign out
+            </button>
+          </form>
         </nav>
       </div>
     </header>

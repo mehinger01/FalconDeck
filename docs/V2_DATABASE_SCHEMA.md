@@ -374,12 +374,14 @@ CREATE UNIQUE INDEX teacher_period_assignments_weekday
   reference a block whose parent `bell_schedules.owner_type = 'organization'`.
 - **RLS:** strictly owner-only.
 
-### 2.11 `school_year_calendars` *(Design Problem D — §6)*
+### 2.11 `school_year_calendars` *(Design Problem D — §6; dual-ownership added post-lock, see V2_ARCHITECTURE.md §2.7)*
 
 ```sql
 CREATE TABLE school_year_calendars (
   id text PRIMARY KEY,
   organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  owner_type text NOT NULL DEFAULT 'organization' CHECK (owner_type IN ('organization', 'teacher')),
+  owner_membership_id uuid REFERENCES organization_memberships(id) ON DELETE RESTRICT,
   name text NOT NULL,
   school_year text NOT NULL,
   time_zone text NOT NULL DEFAULT 'America/Detroit',
@@ -387,6 +389,13 @@ CREATE TABLE school_year_calendars (
   last_student_day date,
   is_canonical boolean NOT NULL DEFAULT false,
   default_bell_schedule_id text NOT NULL,
+  CONSTRAINT school_year_calendars_owner_matches_type CHECK (
+    (owner_type = 'organization' AND owner_membership_id IS NULL) OR
+    (owner_type = 'teacher' AND owner_membership_id IS NOT NULL)
+  ),
+  CONSTRAINT school_year_calendars_canonical_only_organization CHECK (
+    NOT is_canonical OR owner_type = 'organization'
+  ),
   FOREIGN KEY (organization_id, default_bell_schedule_id)
     REFERENCES bell_schedules (organization_id, id)
 );
@@ -395,17 +404,41 @@ CREATE UNIQUE INDEX school_year_calendars_one_canonical
   ON school_year_calendars (organization_id, school_year)
   WHERE is_canonical;
 ```
+- **Dual-owned, same pattern as `courses`/`bell_schedules` (§0.3) — added by
+  `20260915000000_school_year_calendars_dual_ownership.sql`.** The original design
+  (this section, before that migration) made calendars organization-only; building
+  the local-data migration surfaced a real incompatibility (a teacher's local
+  Master Calendar had no valid destination), and rather than promoting it to
+  canonical organization data or silently dropping it — both explicitly rejected —
+  the same dual-ownership escape valve already proven for courses and bell
+  schedules was extended here.
+- **`owner_type DEFAULT 'organization'`** makes this migration safe even against a
+  project with pre-existing rows (none exist as of this writing): every existing
+  row becomes `owner_type='organization', owner_membership_id=NULL`, its existing
+  implicit meaning, satisfying both new CHECK constraints automatically.
+- **`school_year_calendars_canonical_only_organization` (new, specific to this
+  table)** — courses/bell_schedules have no `is_canonical` concept, so this
+  guarantee needed its own constraint: a teacher-owned calendar can never set
+  `is_canonical = true`, making it a database-structural impossibility rather than
+  a convention. The existing partial unique index above is unchanged by this — it
+  never has to consider a teacher-owned row in the first place.
 - **Any number of rows may exist for a given `(organization_id, school_year)`** —
-  drafts, alternates, future per-program variants. The **partial** unique index
-  enforces only "at most one canonical calendar per organization per school year,"
-  the actual invariant that matters, without a plain `UNIQUE (organization_id,
-  school_year)` that would foreclose future flexibility. For OHHS in V2: exactly
-  one row, `is_canonical = true`.
+  drafts, alternates, teacher-owned copies, future per-program variants. The
+  **partial** unique index enforces only "at most one canonical calendar per
+  organization per school year," the actual invariant that matters. For OHHS in
+  V2: exactly one row, `is_canonical = true`, once an admin sets one up.
 - **`default_bell_schedule_id`'s composite FK (retained)** guarantees the
   calendar's default schedule belongs to the same organization; required field, so
   the default `NO ACTION` behavior (no explicit `ON DELETE` clause) correctly blocks
-  deleting a schedule a calendar still depends on.
-- **RLS:** `SELECT` for any member; admin-only writes.
+  deleting a schedule a calendar still depends on. Unchanged by this correction —
+  a teacher-owned calendar's default schedule is expected to be that same
+  teacher's own `bell_schedules` row, same as every other
+  `owner_membership_id`-adjacent relationship in this schema (the accepted
+  "organization_id-vs-owner_membership_id consistency gap," §8).
+- **RLS:** dual-owned shape, identical structure to `courses`/`bell_schedules` —
+  organization-owned: member-readable, admin-writable; teacher-owned:
+  readable/writable only by the owning membership. No self-promotion path (every
+  write policy's organization branch requires `app_is_admin`).
 
 ### 2.12 `school_calendar_exceptions`
 
@@ -433,7 +466,19 @@ CREATE TABLE school_calendar_exceptions (
 - No overlap-prevention constraint, deliberately — the app's own
   `detectCalendarConflicts` + skip/replace resolution UI already handles this; a
   DB-level exclusion constraint would fight that workflow.
-- **RLS:** `SELECT` for any member; admin-only writes.
+- **No ownership columns — inherited through the parent `school_year_calendars`
+  row.** Considered denormalizing `owner_type`/`owner_membership_id` onto this
+  table too (matching `schedule_blocks`/`schedule_block_overrides`'s pattern) and
+  rejected it: this is a low-volume child table, and a per-row join to its parent
+  in the RLS policy is negligible cost next to two more columns and another CHECK
+  constraint on a fifth/sixth table.
+- **RLS:** `EXISTS`-against-parent shape — `SELECT`/write permission is whatever
+  the parent calendar's own ownership would grant (member-read/admin-write if the
+  parent is organization-owned; owner-only if the parent is teacher-owned). An
+  `UPDATE`'s `USING` clause checks the *current* parent (pre-update); its
+  `WITH CHECK` clause checks the *resulting* parent (post-update) — these only
+  differ if `school_year_calendar_id` itself is being changed to point at a
+  different calendar.
 
 ### 2.13 `lessons` *(Design Problem C — §6, unchanged)*
 
@@ -448,10 +493,16 @@ CREATE TABLE lessons (
   agenda_items jsonb NOT NULL DEFAULT '[]',
   resources jsonb NOT NULL DEFAULT '[]',
   announcements jsonb NOT NULL DEFAULT '[]',
+  materials text,
   UNIQUE (organization_id, owner_membership_id, id),
   FOREIGN KEY (organization_id, course_id) REFERENCES courses (organization_id, id)
 );
 ```
+- **`materials`** (nullable, no default) maps to `DailyLesson.materials` — a
+  teacher-facing free-text prep/materials list, optional since older lessons
+  and any lesson with nothing entered leave it unset. This field did not
+  exist in `DailyLesson` when this section was first written; added here as
+  a compatibility-audit correction, not a design change.
 - **`course_id`'s composite FK (retained)** — same reasoning as `class_sections`
   (§2.9): a lesson wired to a different organization's course is a functional
   integrity error worth database enforcement.
@@ -560,11 +611,19 @@ CREATE TABLE classroom_experience_settings (
   transition_countdown_enabled boolean NOT NULL DEFAULT true,
   transition_arrival_instructions_enabled boolean NOT NULL DEFAULT true,
   watermark_override_storage_path text,
-  watermark_override_opacity numeric(3,2) CHECK (watermark_override_opacity IS NULL OR watermark_override_opacity BETWEEN 0 AND 1)
+  watermark_override_opacity numeric(3,2) CHECK (watermark_override_opacity IS NULL OR watermark_override_opacity BETWEEN 0 AND 1),
+  bell_offset_seconds integer NOT NULL DEFAULT 0 CHECK (bell_offset_seconds BETWEEN -120 AND 120)
 );
 ```
 - `watermark_override_storage_path`: `NULL` ⇒ render the organization's default
   (§2.4); set ⇒ the teacher's own wins.
+- **`bell_offset_seconds`** maps to `ClassroomExperienceSettings.bellOffsetSeconds`
+  — calibrates Falcon Deck's displayed/schedule-driving clock to the school's
+  actual bell system. Range (`-120` to `120`) and default (`0`) match
+  `BELL_OFFSET_MIN_SECONDS`/`BELL_OFFSET_MAX_SECONDS`/`clampBellOffsetSeconds`
+  in `lib/schedule/time.ts` exactly. This field did not exist in
+  `ClassroomExperienceSettings` when this section was first written; added
+  here as a compatibility-audit correction, not a design change.
 - **RLS:** strictly owner-only.
 
 ### 2.19 `teacher_schedule_preferences`
@@ -578,7 +637,50 @@ CREATE TABLE teacher_schedule_preferences (
 ```
 - **RLS:** strictly owner-only.
 
-### 2.20 Explicitly not part of this schema: Google Drive
+### 2.20 `bootstrap_organization` (the one privileged function)
+
+Added post-lock, for the Authentication & Organization Onboarding milestone -
+closes the gap named in migration 3's own comment ("no self-serve 'join
+school' insert path yet... until a future onboarding milestone adds a
+narrowly-scoped self-insert policy"). The resolved design is a function, not
+a weakened RLS policy.
+
+```sql
+CREATE FUNCTION bootstrap_organization(organization_name text)
+RETURNS TABLE (organization_id uuid, membership_id uuid)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $$ ... $$;
+
+REVOKE EXECUTE ON FUNCTION bootstrap_organization(text) FROM public;
+REVOKE EXECUTE ON FUNCTION bootstrap_organization(text) FROM anon;
+GRANT EXECUTE ON FUNCTION bootstrap_organization(text) TO authenticated;
+```
+
+- **The only `SECURITY DEFINER` function in this schema besides the
+  pre-existing RLS helpers** (`app_is_member`/`app_is_admin`/
+  `app_owns_membership`/`app_owns_membership_in_org`, all read-only). This
+  one *writes* — it creates one `organizations` row and one
+  `organization_memberships` row, atomically, bypassing RLS by virtue of
+  running as the tables' owning role.
+- **Callable only by a signed-in user with zero active memberships.**
+  `auth.uid()` is the only identity input trusted; the function rejects
+  outright if the caller already has any active membership anywhere — this
+  is what makes it impossible to join an existing organization, promote
+  oneself inside one, or create a second organization once already a
+  member. A `pg_advisory_xact_lock` keyed on the caller's user id closes the
+  concurrent-first-call race a bare existence check would otherwise miss.
+- **Accepts exactly one input — `organization_name`.** No caller-supplied
+  `user_id`, `organization_id`, `membership_id`, or `role` is ever accepted;
+  the new organization's id is generated internally, and the membership's
+  `role`/`status` are literal constants (`'admin'`/`'active'`), never
+  parameters.
+- **RLS:** N/A — this is a function, not a table. `EXECUTE` is granted only
+  to `authenticated`; `anon`/`PUBLIC` are explicitly revoked, matching the
+  pattern in `20260910010824_function_privilege_hardening.sql`.
+
+### 2.21 Explicitly not part of this schema: Google Drive
 No `google_drive_connections` table. Per the locked decision, today's anonymous,
 cookie-based integration remains untouched and unrepresented in Supabase until its
 own dedicated later milestone.

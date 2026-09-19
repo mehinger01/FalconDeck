@@ -3,16 +3,15 @@ import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
 
 /**
- * Server-side Supabase client for Server Components and Route Handlers -
- * reads/writes the auth session via request cookies. Uses only the public
- * publishable key (Row Level Security still applies); never the service role key.
+ * Server-side Supabase client for Server Components, Server Actions, and
+ * Route Handlers - reads/writes the auth session via request cookies. Uses
+ * only the public publishable key (Row Level Security still applies);
+ * never the service role key.
  *
- * Not wired into any route yet: no route is gated on auth in this
- * milestone, and there is no middleware.ts refreshing the session -
- * session-refresh middleware is deliberately deferred to the later
- * authentication/onboarding milestone, once the live app actually gates
- * routes on Supabase Auth. Verification scripts authenticate
- * programmatically via the Auth Admin API and don't need this file.
+ * Used by lib/auth/dal.ts and lib/auth/actions.ts (Authentication &
+ * Organization Onboarding milestone) and by the Route Handlers under
+ * app/auth/*. Session refresh across requests is handled by proxy.ts /
+ * lib/supabase/proxy.ts, not by this file.
  */
 export async function createSupabaseServerClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
