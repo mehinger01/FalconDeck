@@ -89,6 +89,13 @@ const sectionBack = Map_.rowToClassSection(withTimestamps(Map_.classSectionToRow
 check("class section round-trips exactly", Map_.deepEqual(sectionBack, section));
 
 console.log("\n3. Custom bell schedule (with blocks) round-trips");
+// needsConfiguration/isLunchWindow are deliberately OMITTED, not set to
+// `false` - that's the app's real canonical shape (see
+// lib/schedule/presets/ohhsRegular.ts), and `false`/omitted are meant to
+// be equivalent after a cloud round-trip (rowsToBellSchedule collapses
+// the DB's `not null default false` columns back to undefined) - see the
+// dedicated verify-migration-validation-boolean-defaults.ts for exactly
+// this contract, including the true-survives-as-true case.
 const schedule: BellSchedule = {
   id: "schedule-1",
   name: "My Custom Schedule",
@@ -96,10 +103,9 @@ const schedule: BellSchedule = {
   isDefault: true,
   timeZone: "America/Detroit",
   source: "custom",
-  needsConfiguration: false,
   blocks: [
-    { id: "block-1", label: "Period 1", kind: "instructional", startTime: "08:00", endTime: "08:50", classSectionId: "section-1", isLunchWindow: false, overrides: [] },
-    { id: "block-2", label: "Enrichment", kind: "enrichment", startTime: "08:55", endTime: "09:35", classSectionId: null, isLunchWindow: false, overrides: [] },
+    { id: "block-1", label: "Period 1", kind: "instructional", startTime: "08:00", endTime: "08:50", classSectionId: "section-1", overrides: [] },
+    { id: "block-2", label: "Enrichment", kind: "enrichment", startTime: "08:55", endTime: "09:35", classSectionId: null, overrides: [] },
   ],
 };
 const scheduleRow = Map_.bellScheduleToRow(schedule, ctx);

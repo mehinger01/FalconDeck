@@ -443,7 +443,14 @@ export function rowsToBellSchedule(
     isDefault: schedule.is_default,
     timeZone: schedule.time_zone,
     source: (schedule.source as BellSchedule["source"]) ?? undefined,
-    needsConfiguration: schedule.needs_configuration,
+    // needs_configuration is `not null default false` - collapse false
+    // back to the local optional-boolean convention (omitted means false),
+    // matching every other optional field here. Copying the column
+    // straight through left a real `false` where the local snapshot had
+    // no key at all, which validateMigratedData's deepEqual correctly
+    // treats as a genuine content difference (undefined-as-absent, but
+    // false is a real value) - this broke a real production migration.
+    needsConfiguration: schedule.needs_configuration || undefined,
     blocks: sortedBlocks.map((block) => {
       const classSectionId =
         schedule.owner_type === "organization"
@@ -461,7 +468,9 @@ export function rowsToBellSchedule(
         startTime: normalizeDbTime(block.start_time),
         endTime: normalizeDbTime(block.end_time),
         classSectionId,
-        isLunchWindow: block.is_lunch_window,
+        // is_lunch_window is `not null default false` - same collapse as
+        // needsConfiguration above, for the same reason.
+        isLunchWindow: block.is_lunch_window || undefined,
         overrides: (overridesByBlockId.get(block.id) ?? []).map(rowToScheduleBlockOverride),
       };
     }),
