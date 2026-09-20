@@ -140,7 +140,9 @@ export async function migrateLocalData(client: Client, ctx: OwnerContext, snapsh
 
       const allOverrides = snapshot.schedules.flatMap((schedule) =>
         schedule.blocks.flatMap((block) =>
-          block.overrides.map((override) => Map_.scheduleBlockOverrideToRow(override, block.id, ctx)),
+          block.overrides.map((override) =>
+            Map_.scheduleBlockOverrideToRow(override, Map_.scheduleBlockCloudId(schedule.id, block.id), ctx),
+          ),
         ),
       );
       if (allOverrides.length > 0) {

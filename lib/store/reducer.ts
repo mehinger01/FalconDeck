@@ -3,6 +3,7 @@ import type { AppData } from "@/lib/data/types";
 import { clampBellOffsetSeconds } from "@/lib/schedule/time";
 import type { BellSchedule } from "@/types/schedule";
 import type { AppDataAction } from "./actions";
+import { generateId } from "./id";
 
 function updateSchedule(
   data: AppData,
@@ -53,6 +54,20 @@ export function appDataReducer(state: AppData, action: AppDataAction): AppData {
         // destructive editing" only ever applies to the original.
         source: "custom",
         needsConfiguration: false,
+        // Every nested block/override gets a fresh id - a duplicate must
+        // never share a block/override id with its source. Locally these
+        // ids only ever needed to be unique within their own schedule, but
+        // Supabase's schedule_blocks/schedule_block_overrides tables key on
+        // them globally (see Map_.scheduleBlockCloudId), so reusing the
+        // source's ids here (as a plain structuredClone would) is exactly
+        // the bug that broke a real production migration. Reading from
+        // `source` (not the clone) and building new objects via spread
+        // means `source` itself is never mutated.
+        blocks: source.blocks.map((block) => ({
+          ...block,
+          id: generateId("block"),
+          overrides: block.overrides.map((override) => ({ ...override, id: generateId("override") })),
+        })),
       };
       return { ...state, schedules: [...state.schedules, duplicate] };
     }

@@ -196,7 +196,16 @@ export async function applyDiff(client: Client, ctx: OwnerContext, prev: AppData
   // (name/isDefault/etc.) didn't change.
   const prevSchedulesById = new Map(prev.schedules.map((s) => [s.id, s]));
   const blockDiffsBySchedule = new Map<string, ReturnType<typeof diffById<BellSchedule["blocks"][number]>>>();
-  const overrideDiffsByBlock = new Map<string, ReturnType<typeof diffById<BellSchedule["blocks"][number]["overrides"][number]>>>();
+  // Keyed by the CLOUD (schedule-scoped) block id, not the raw local
+  // block.id - a local block id is only unique within its own schedule
+  // (see Map_.scheduleBlockCloudId's doc comment), so keying this map on
+  // the raw local id could silently conflate two different schedules'
+  // blocks that happen to share one, overwriting one's override diff with
+  // the other's.
+  const overrideDiffsByCloudBlockId = new Map<
+    string,
+    ReturnType<typeof diffById<BellSchedule["blocks"][number]["overrides"][number]>>
+  >();
   for (const schedule of next.schedules) {
     const priorSchedule = prevSchedulesById.get(schedule.id);
     const priorBlocks = priorSchedule?.blocks ?? [];
@@ -204,7 +213,10 @@ export async function applyDiff(client: Client, ctx: OwnerContext, prev: AppData
     const priorBlocksById = new Map(priorBlocks.map((b) => [b.id, b]));
     for (const block of schedule.blocks) {
       const priorOverrides = priorBlocksById.get(block.id)?.overrides ?? [];
-      overrideDiffsByBlock.set(block.id, diffById(priorOverrides, block.overrides));
+      overrideDiffsByCloudBlockId.set(
+        Map_.scheduleBlockCloudId(schedule.id, block.id),
+        diffById(priorOverrides, block.overrides),
+      );
     }
   }
   // Schedules removed entirely still need their blocks/overrides deleted -
@@ -258,17 +270,24 @@ export async function applyDiff(client: Client, ctx: OwnerContext, prev: AppData
     unwrap(await client.from("lesson_class_sections").delete().eq("lesson_id", id), "delete lesson_class_sections");
     unwrap(await client.from("lessons").delete().eq("id", id), "delete lessons");
   }
-  for (const [blockId, diff] of overrideDiffsByBlock) {
+  for (const [cloudBlockId, diff] of overrideDiffsByCloudBlockId) {
     for (const id of diff.removedIds) {
       unwrap(
-        await client.from("schedule_block_overrides").delete().eq("id", id).eq("schedule_block_id", blockId),
+        await client
+          .from("schedule_block_overrides")
+          .delete()
+          .eq("id", Map_.scheduleBlockOverrideCloudId(cloudBlockId, id))
+          .eq("schedule_block_id", cloudBlockId),
         "delete schedule_block_overrides",
       );
     }
   }
-  for (const [, diff] of blockDiffsBySchedule) {
+  for (const [scheduleId, diff] of blockDiffsBySchedule) {
     for (const id of diff.removedIds) {
-      unwrap(await client.from("schedule_blocks").delete().eq("id", id), "delete schedule_blocks");
+      unwrap(
+        await client.from("schedule_blocks").delete().eq("id", Map_.scheduleBlockCloudId(scheduleId, id)),
+        "delete schedule_blocks",
+      );
     }
   }
   for (const id of scheduleDiff.removedIds) {
@@ -320,14 +339,15 @@ export async function applyDiff(client: Client, ctx: OwnerContext, prev: AppData
       );
     }
     for (const block of schedule.blocks) {
-      const overrideDiff = overrideDiffsByBlock.get(block.id);
+      const cloudBlockId = Map_.scheduleBlockCloudId(schedule.id, block.id);
+      const overrideDiff = overrideDiffsByCloudBlockId.get(cloudBlockId);
       if (!overrideDiff) continue;
       const overridesToWrite = [...overrideDiff.added, ...overrideDiff.updated];
       if (overridesToWrite.length > 0) {
         unwrap(
           await client
             .from("schedule_block_overrides")
-            .upsert(overridesToWrite.map((o) => Map_.scheduleBlockOverrideToRow(o, block.id, ctx))),
+            .upsert(overridesToWrite.map((o) => Map_.scheduleBlockOverrideToRow(o, cloudBlockId, ctx))),
           "upsert schedule_block_overrides",
         );
       }

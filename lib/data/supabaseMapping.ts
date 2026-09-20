@@ -1,4 +1,5 @@
 import type { Database } from "./supabase.types";
+import { scopedCloudId, parseScopedCloudId } from "./scopedCloudId";
 import type { AppData } from "./types";
 import type { ClassSection, Course } from "@/types/course";
 import type { BellSchedule, ScheduleBlock, ScheduleBlockOverride } from "@/types/schedule";
@@ -109,6 +110,22 @@ export function bellScheduleToRow(schedule: BellSchedule, ctx: OwnerContext): Be
   };
 }
 
+/**
+ * A local ScheduleBlock's id is only unique within its own BellSchedule's
+ * `blocks` array - nothing locally requires it to be unique across a
+ * teacher's other schedules (see reducer.ts's DUPLICATE_SCHEDULE, which
+ * used to carry a source schedule's block ids over unchanged into its
+ * duplicate; a fixed-id built-in preset like OHHS_REGULAR compounds this).
+ * schedule_blocks.id is a single global primary key, so every caller that
+ * writes or looks up a block's cloud id must scope it to its owning
+ * schedule's cloud id via this function - never `block.id` directly. Both
+ * migrateLocalData.ts and supabaseDataRepository.ts call this so they
+ * always derive the exact same cloud id for the same local object.
+ */
+export function scheduleBlockCloudId(bellScheduleId: string, blockId: string): string {
+  return scopedCloudId(bellScheduleId, blockId);
+}
+
 export function scheduleBlockToRow(
   block: ScheduleBlock,
   position: number,
@@ -116,7 +133,7 @@ export function scheduleBlockToRow(
   ctx: OwnerContext,
 ): ScheduleBlocksInsert {
   return {
-    id: block.id,
+    id: scheduleBlockCloudId(bellScheduleId, block.id),
     bell_schedule_id: bellScheduleId,
     organization_id: ctx.organizationId,
     owner_type: "teacher",
@@ -132,13 +149,27 @@ export function scheduleBlockToRow(
   };
 }
 
+/**
+ * Same reasoning as scheduleBlockCloudId, one level down: a local
+ * ScheduleBlockOverride's id is only unique within its own block's
+ * `overrides` array. `cloudBlockId` must already be a value returned by
+ * scheduleBlockCloudId() - never the raw local ScheduleBlock.id - so an
+ * override's cloud id and its schedule_block_id FK both agree with
+ * whatever scheduleBlockToRow actually wrote as that block's id. Used by
+ * both the forward mapper below and by applyDiff's delete/lookup paths in
+ * supabaseDataRepository.ts, so they all derive the same id.
+ */
+export function scheduleBlockOverrideCloudId(cloudBlockId: string, overrideId: string): string {
+  return scopedCloudId(cloudBlockId, overrideId);
+}
+
 export function scheduleBlockOverrideToRow(
   override: ScheduleBlockOverride,
   scheduleBlockId: string,
   ctx: OwnerContext,
 ): ScheduleBlockOverridesInsert {
   return {
-    id: override.id,
+    id: scheduleBlockOverrideCloudId(scheduleBlockId, override.id),
     schedule_block_id: scheduleBlockId,
     organization_id: ctx.organizationId,
     owner_type: "teacher",
@@ -373,7 +404,10 @@ export function rowToClassSection(row: ClassSectionsRow): ClassSection {
 
 export function rowToScheduleBlockOverride(row: ScheduleBlockOverridesRow): ScheduleBlockOverride {
   return {
-    id: row.id,
+    // row.id is scopedCloudId(scheduleBlockCloudId, localOverrideId) - the
+    // app's local ScheduleBlockOverride.id must be the original localId,
+    // not the cloud-scoped composite.
+    id: parseScopedCloudId(row.id).localId,
     weekday: row.weekday as ScheduleBlockOverride["weekday"],
     label: row.label ?? undefined,
     kind: (row.kind as ScheduleBlockOverride["kind"]) ?? undefined,
@@ -416,7 +450,11 @@ export function rowsToBellSchedule(
           ? (assignedSectionByBlockId.get(block.id) ?? null)
           : block.class_section_id;
       return {
-        id: block.id,
+        // block.id is scheduleBlockCloudId(schedule.id, localBlockId) - see
+        // that function's doc comment. Map lookups above stay keyed on the
+        // raw cloud id (matching other tables' FK columns); only the local
+        // ScheduleBlock.id returned to the app needs the original localId.
+        id: parseScopedCloudId(block.id).localId,
         label: block.label,
         kind: block.kind as ScheduleBlock["kind"],
         customKindLabel: block.custom_kind_label ?? undefined,
