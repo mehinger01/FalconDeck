@@ -24,8 +24,18 @@ function sortById<T extends { id: string }>(items: T[]): T[] {
 /**
  * Deep-clones and sorts every array-of-objects field by a stable key, so
  * two AppData objects that differ only in fetch/array ordering compare
- * equal. Nothing here changes any *value* - only the order comparisons
- * are performed in.
+ * equal. Also canonicalizes exactly two fields - BellSchedule.needsConfiguration
+ * and ScheduleBlock.isLunchWindow - to treat `false`/omitted as equivalent
+ * on BOTH sides of the comparison (this function runs on `expected` and
+ * `actual` identically). Both columns are `not null default false` in
+ * Postgres, so the forward mapper's `?? false` is inherently lossy: a
+ * local value that was genuinely omitted and one that was explicitly
+ * `false` (e.g. DUPLICATE_SCHEDULE's own object literal - see reducer.ts)
+ * both write the same `false` to the DB, so no single reverse-mapping
+ * direction can correctly recover which one it originally was. Rather
+ * than guess in the reverse mapper, the comparison itself treats them as
+ * equivalent here, for exactly these two fields - `true` is untouched and
+ * still must survive as `true`, and no other field is affected.
  */
 function normalize(data: AppData): AppData {
   const clone = structuredClone(data);
@@ -33,8 +43,10 @@ function normalize(data: AppData): AppData {
   clone.classSections = sortById(clone.classSections);
   clone.schedules = sortById(clone.schedules).map((schedule) => ({
     ...schedule,
+    needsConfiguration: schedule.needsConfiguration || undefined,
     blocks: sortById(schedule.blocks).map((block) => ({
       ...block,
+      isLunchWindow: block.isLunchWindow || undefined,
       overrides: [...block.overrides].sort((a, b) => a.weekday.localeCompare(b.weekday)),
     })),
   }));

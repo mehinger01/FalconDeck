@@ -51,9 +51,14 @@ export function appDataReducer(state: AppData, action: AppDataAction): AppData {
         isDefault: false,
         // A duplicate of a built-in/needs-configuration schedule is a
         // teacher's own editable copy from this point on - "avoid
-        // destructive editing" only ever applies to the original.
+        // destructive editing" only ever applies to the original. Cleared
+        // to `undefined`, not `false` - the local canonical convention for
+        // this optional field is to omit it when it doesn't apply, never
+        // to store an explicit `false` (see validateMigratedData.ts's
+        // normalize(), which exists because a duplicate that manufactured
+        // an explicit false here broke a real production migration).
         source: "custom",
-        needsConfiguration: false,
+        needsConfiguration: undefined,
         // Every nested block/override gets a fresh id - a duplicate must
         // never share a block/override id with its source. Locally these
         // ids only ever needed to be unique within their own schedule, but

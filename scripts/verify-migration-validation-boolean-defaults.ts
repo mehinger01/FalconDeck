@@ -1,46 +1,58 @@
 /**
- * Regression coverage for a SECOND, distinct real production migration
- * failure - discovered only after the schedule_blocks id-scoping fix
- * (see verify-migration-schedule-block-conflict.ts) let migration reach
- * validateMigratedData for the first time ever on this account:
+ * Regression coverage for TWO related real production migration
+ * failures, both discovered only after the schedule_blocks id-scoping
+ * fix (see verify-migration-schedule-block-conflict.ts) let migration
+ * reach validateMigratedData for the first time ever on this account:
  *
  *   "Migration ran, but the cloud data doesn't match your local data
  *   yet, so nothing was marked complete. Your local data is untouched -
  *   safe to try again."
  *
- * This was UNRELATED to schedule-block id scoping. Root cause:
+ * Both were UNRELATED to schedule-block id scoping. Root cause:
  * `bell_schedules.needs_configuration` and `schedule_blocks.is_lunch_window`
  * are `not null default false` columns. The forward mappers correctly
  * collapse the local optional boolean's `undefined` to `false` for that
  * NOT NULL column (`schedule.needsConfiguration ?? false`,
- * `block.isLunchWindow ?? false` - lib/data/supabaseMapping.ts). But the
- * REVERSE mapper (rowsToBellSchedule) used to copy the DB's boolean
- * straight back (`needsConfiguration: schedule.needs_configuration`,
- * `isLunchWindow: block.is_lunch_window`) instead of collapsing `false`
- * back to `undefined` - unlike every other optional field in this file
- * (e.g. `customKindLabel: block.custom_kind_label ?? undefined`).
+ * `block.isLunchWindow ?? false` - lib/data/supabaseMapping.ts). That
+ * write is inherently LOSSY: a local value that was genuinely omitted
+ * and one that was explicitly `false` both collapse to the exact same
+ * DB value, so no single reverse-mapping direction can correctly
+ * reconstruct which one it originally was.
  *
- * validateMigratedData's deepEqual treats an omitted key and the same key
- * explicitly set to `undefined` as equal, but a key present with `false`
- * is a real, different value from "absent" (see deepEqual's own key
- * filtering: `Object.keys(obj).filter((k) => obj[k] !== undefined)`).
- * Since almost every real schedule/block never sets isLunchWindow/
- * needsConfiguration true, this fired for nearly every schedule on a
- * teacher's very first successful migration - which is exactly why it
- * was never seen before this account's schedule_blocks fix finally let
- * migrateLocalData succeed and validateMigratedData actually run.
+ * FAILURE 1 (fixed first): the reverse mapper (rowsToBellSchedule) used
+ * to copy the DB boolean straight back, so an omitted local value came
+ * back as an explicit `false` - a real, different value from "absent"
+ * under validateMigratedData's deepEqual (which filters out
+ * `undefined`-valued keys, but `false` is real). Almost every real
+ * schedule/block omits these fields, so this fired on nearly every
+ * schedule.
  *
- * FIX: rowsToBellSchedule now writes
- *   needsConfiguration: schedule.needs_configuration || undefined
- *   isLunchWindow: block.is_lunch_window || undefined
- * so `false` collapses back to the local canonical "omitted" form, while
- * `true` survives unchanged. This file proves that fix - and that the
- * already-written cloud rows (correct all along; this was read-side only)
- * need no cleanup and are safe to validate directly.
+ * FAILURE 2 (this account's actual remaining case): reducer.ts's
+ * DUPLICATE_SCHEDULE case used to write an EXPLICIT `needsConfiguration:
+ * false` literal onto every duplicated schedule, not just ones that
+ * genuinely needed it cleared. Fixing FAILURE 1 by coercing the reverse
+ * mapper toward `undefined` then broke THIS shape: a real, deliberate
+ * local `false` now read back as `undefined`, a mismatch in the other
+ * direction. Since the forward write is lossy, no reverse-mapping choice
+ * can satisfy both an omitted-local and a false-local origin.
+ *
+ * FINAL FIX: validateMigratedData's own normalize() now canonicalizes
+ * needsConfiguration/isLunchWindow identically on BOTH the expected
+ * (local) and actual (reloaded) sides before comparing - `false` and
+ * omitted are treated as equivalent for exactly these two fields, on
+ * both sides, so it no longer matters which shape either side has.
+ * `true` is untouched and still must survive as `true`. No other field
+ * is affected - deepEqual itself is NOT changed, and false/undefined are
+ * NOT treated as equivalent anywhere else. reducer.ts's DUPLICATE_SCHEDULE
+ * also now clears the field to `undefined` instead of `false`, so future
+ * duplicates stop manufacturing this shape in the first place (this does
+ * not, and cannot, retroactively fix already-saved local data - that's
+ * what the symmetric normalize() fix is for).
  *
  *   npx tsx scripts/verify-migration-validation-boolean-defaults.ts
  */
 
+import { appDataReducer } from "@/lib/store/reducer";
 import { createOhhsRegularSchedule, OHHS_REGULAR_ID } from "@/lib/schedule/presets/ohhsRegular";
 import { createOhhsEarlyRelease1124Schedule } from "@/lib/schedule/presets/needsConfigurationSchedules";
 import { migrateLocalData, markMigrationComplete } from "@/lib/data/migration/migrateLocalData";
@@ -154,6 +166,10 @@ class FakeSupabaseClient {
 
   rowCount(table: string): number {
     return this.tables.get(table)?.size ?? 0;
+  }
+
+  allRows(table: string): FakeRow[] {
+    return [...(this.tables.get(table)?.values() ?? [])];
   }
 
   private tableFor(name: string): Map<string, FakeRow> {
@@ -270,6 +286,49 @@ async function main() {
       "4b: FIXED - deepEqual now treats the truly-omitted local key and the reloaded undefined key as equal (this is exactly what validateMigratedData relies on)",
       Map_.deepEqual(nonLunchBlockLocal, nonLunchBlockReloaded),
     );
+
+    const reMigrate = await migrateLocalData(mainClient as Client, FAKE_CTX, mainSnapshot); // idempotent re-run, just to get a fresh MigrationResult for validation
+    if (reMigrate.ok) {
+      const validateOmittedResult = await validateMigratedData(mainClient as Client, FAKE_CTX, mainSnapshot, reMigrate);
+      check("5: omitted local isLunchWindow validates successfully end to end", validateOmittedResult.ok === true);
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // 4c/6. isLunchWindow: EXPLICIT local false (not omitted) also
+  //       validates successfully - the mirror case to needsConfiguration
+  //       below, proven with the actual validateMigratedData pipeline,
+  //       not just fetchAppData.
+  // -------------------------------------------------------------------
+  console.log("\n4c/6. isLunchWindow: EXPLICIT local false (not omitted) validates successfully; true still survives as true");
+  {
+    const scheduleWithExplicitFalse: BellSchedule = {
+      id: "schedule-explicit-lunch-false",
+      name: "Explicit isLunchWindow false",
+      isDefault: false,
+      timeZone: "America/Detroit",
+      source: "custom",
+      blocks: [
+        { id: "block-explicit-false", label: "Period 1", kind: "instructional", startTime: "08:00", endTime: "08:50", classSectionId: null, isLunchWindow: false, overrides: [] },
+        { id: "block-true", label: "Lunch Period", kind: "instructional", startTime: "12:00", endTime: "12:50", classSectionId: null, isLunchWindow: true, overrides: [] },
+      ],
+    };
+    const snapshot: AppData = { ...createDemoAppData(), schedules: [scheduleWithExplicitFalse] };
+    const client = new FakeSupabaseClient();
+    const migrateResult = await migrateLocalData(client as Client, FAKE_CTX, snapshot);
+    if (!migrateResult.ok) throw new Error("setup failure: expected migrateLocalData to succeed");
+
+    const reloaded = await fetchAppData(client as Client, FAKE_CTX);
+    const reloadedSchedule = reloaded.schedules.find((s) => s.id === scheduleWithExplicitFalse.id)!;
+    const reloadedTrueBlock = reloadedSchedule.blocks.find((b) => b.id === "block-true")!;
+    check("6: FIXED - a block with explicit local isLunchWindow: true still survives and validates as true", reloadedTrueBlock.isLunchWindow === true);
+
+    const validateResult = await validateMigratedData(client as Client, FAKE_CTX, snapshot, migrateResult);
+    check(
+      "4c: FIXED - a block with EXPLICIT local isLunchWindow: false (not omitted) now validates successfully against cloud reload undefined",
+      validateResult.ok === true,
+    );
+    if (!validateResult.ok) console.log("    mismatches:", JSON.stringify(validateResult.mismatches));
   }
 
   // -------------------------------------------------------------------
@@ -385,6 +444,144 @@ async function main() {
       const afterMark = await client.from("organization_memberships").select("local_data_migrated_at").eq("id", FAKE_CTX.membershipId).single();
       check("10d: set only after the explicit markMigrationComplete call", (afterMark as { data: { local_data_migrated_at: string | null } }).data.local_data_migrated_at !== null);
     }
+  }
+
+  // -------------------------------------------------------------------
+  // 11. The real teacher's actual remaining shape (FAILURE 2, see header):
+  //     a schedule where DUPLICATE_SCHEDULE's OLD object literal
+  //     explicitly wrote `needsConfiguration: false` on the duplicate.
+  //     FIXED by validateMigratedData's symmetric normalize().
+  // -------------------------------------------------------------------
+  console.log("\n11. FIXED: a schedule with EXPLICIT needsConfiguration: false (not omitted) - the real teacher's exact remaining shape");
+  {
+    // Minimal, synthetic - not the real teacher's schedule/course/section
+    // names or ids, just the smallest shape that reproduces the mismatch:
+    // a schedule whose local needsConfiguration is a real `false`, exactly
+    // as DUPLICATE_SCHEDULE's reducer literal still produces today.
+    const sourceSchedule: BellSchedule = {
+      id: "schedule-source",
+      name: "Source Schedule",
+      isDefault: false,
+      timeZone: "America/Detroit",
+      source: "built-in",
+      // classSectionId: null (not omitted) matches the real app's own
+      // convention (see lib/schedule/presets/ohhsRegular.ts) - keeps this
+      // fixture isolated to the one field under test.
+      blocks: [{ id: "block-a", label: "Period A", kind: "instructional", startTime: "08:00", endTime: "08:50", classSectionId: null, overrides: [] }],
+    };
+    // Exactly reducer.ts's DUPLICATE_SCHEDULE object literal, including
+    // its still-present `needsConfiguration: false` - not a hypothetical.
+    const duplicatedSchedule: BellSchedule = {
+      ...structuredClone(sourceSchedule),
+      id: "schedule-duplicate",
+      name: "Source Schedule (Copy)",
+      isDefault: false,
+      source: "custom",
+      needsConfiguration: false,
+      blocks: sourceSchedule.blocks.map((b) => ({ ...b, id: `${b.id}-copy` })),
+    };
+
+    check("11a: sanity - the fixture's duplicate really does have an EXPLICIT needsConfiguration: false, not omitted", duplicatedSchedule.needsConfiguration === false);
+
+    const snapshot: AppData = { ...createDemoAppData(), schedules: [sourceSchedule, duplicatedSchedule] };
+    const client = new FakeSupabaseClient();
+    const migrateResult = await migrateLocalData(client as Client, FAKE_CTX, snapshot);
+    check("11b: migration itself still succeeds (this is a validation-only defect)", migrateResult.ok === true);
+
+    if (migrateResult.ok) {
+      const validateResult = await validateMigratedData(client as Client, FAKE_CTX, snapshot, migrateResult);
+      check(
+        "11c: FIXED - explicit local needsConfiguration: false now validates successfully against cloud reload undefined",
+        validateResult.ok === true,
+      );
+      if (!validateResult.ok) console.log("    mismatches:", JSON.stringify(validateResult.mismatches));
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // 12. Reducer hygiene fix: DUPLICATE_SCHEDULE no longer manufactures an
+  //     explicit needsConfiguration: false on ordinary duplicates, but
+  //     still clears a genuine needs-configuration source's flag - and
+  //     preserves every other property, the new schedule id, and
+  //     regenerated nested block/override ids.
+  // -------------------------------------------------------------------
+  console.log("\n12. FIXED: DUPLICATE_SCHEDULE stops manufacturing explicit needsConfiguration: false");
+  {
+    const ohhs = createOhhsRegularSchedule();
+    const base = { ...createDemoAppData(), schedules: [ohhs] };
+    const withDuplicate = appDataReducer(base, {
+      type: "DUPLICATE_SCHEDULE",
+      scheduleId: OHHS_REGULAR_ID,
+      newId: "schedule-fresh-duplicate",
+      newName: "OHHS Regular Day (Copy)",
+    });
+    const duplicate = withDuplicate.schedules.find((s) => s.id === "schedule-fresh-duplicate")!;
+    check("12a: FIXED - duplicating an ordinary schedule no longer sets needsConfiguration to a literal false", duplicate.needsConfiguration !== false);
+    check("12b: needsConfiguration is undefined (omitted), matching the local canonical convention", duplicate.needsConfiguration === undefined);
+    check("12c: the new schedule gets a fresh id, distinct from the source", duplicate.id === "schedule-fresh-duplicate" && duplicate.id !== ohhs.id);
+    check(
+      "12d: every nested block/override still gets a fresh id (the earlier hygiene fix is untouched)",
+      duplicate.blocks.every((b) => !ohhs.blocks.some((ob) => ob.id === b.id)),
+    );
+    check(
+      "12e: all other properties (name/timeZone/blocks content) are preserved from the source",
+      duplicate.timeZone === ohhs.timeZone &&
+        duplicate.blocks.length === ohhs.blocks.length &&
+        duplicate.blocks.every((b, i) => b.label === ohhs.blocks[i].label && b.startTime === ohhs.blocks[i].startTime),
+    );
+    check("12f: the source itself is untouched (still has its own original id/needsConfiguration state)", ohhs.id === OHHS_REGULAR_ID && !("needsConfiguration" in ohhs));
+
+    // Duplicating a GENUINE needs-configuration placeholder must still clear the flag - that part of the original behavior is preserved.
+    const needsConfigSource = createOhhsEarlyRelease1124Schedule();
+    const baseWithNeedsConfig = { ...createDemoAppData(), schedules: [needsConfigSource] };
+    const withNeedsConfigDuplicate = appDataReducer(baseWithNeedsConfig, {
+      type: "DUPLICATE_SCHEDULE",
+      scheduleId: needsConfigSource.id,
+      newId: "schedule-needs-config-duplicate",
+      newName: "Early Release (Copy)",
+    });
+    const needsConfigDuplicate = withNeedsConfigDuplicate.schedules.find((s) => s.id === "schedule-needs-config-duplicate")!;
+    check(
+      "12g: duplicating a genuine needs-configuration schedule still clears the flag (undefined, not true, not a manufactured false)",
+      needsConfigDuplicate.needsConfiguration === undefined,
+    );
+    check("12h: the needs-configuration source itself is untouched (still true)", needsConfigSource.needsConfiguration === true);
+  }
+
+  // -------------------------------------------------------------------
+  // 13. No unrelated false/undefined field is normalized - the
+  //     validateMigratedData fix is scoped to exactly needsConfiguration/
+  //     isLunchWindow, nothing else.
+  // -------------------------------------------------------------------
+  console.log("\n13. No unrelated field is normalized - a genuine, unrelated divergence is still caught");
+  {
+    const ohhs = createOhhsRegularSchedule();
+    const snapshot: AppData = { ...createDemoAppData(), schedules: [ohhs] };
+    const client = new FakeSupabaseClient();
+    const migrateResult = await migrateLocalData(client as Client, FAKE_CTX, snapshot);
+    if (!migrateResult.ok) throw new Error("setup failure: expected migrateLocalData to succeed");
+
+    // Directly corrupt an UNRELATED field on one already-written row -
+    // simulating any real divergence that has nothing to do with
+    // needsConfiguration/isLunchWindow - and confirm validation still
+    // reports it, proving the fix did not weaken validation generally.
+    const rows = [...client.allRows("schedule_blocks")];
+    const target = rows.find((r) => (r.id as string).endsWith("period-1"))!;
+    client.seed("schedule_blocks", [{ ...target, label: "TAMPERED LABEL" }]);
+
+    const validateResult = await validateMigratedData(client as Client, FAKE_CTX, snapshot, migrateResult);
+    check("13a: an unrelated field divergence (label) is still detected, not silently swallowed", validateResult.ok === false);
+    check(
+      "13b: the reported mismatch is on the schedule containing the tampered block, not a false negative",
+      !validateResult.ok && validateResult.mismatches.some((m) => m.entity === "schedules" && m.detail.includes(OHHS_REGULAR_ID)),
+    );
+
+    // Restore and confirm a clean re-migrate/validate still passes -
+    // proves the corruption check above wasn't itself a false positive
+    // from some other cause.
+    client.seed("schedule_blocks", [target]);
+    const revalidated = await validateMigratedData(client as Client, FAKE_CTX, snapshot, migrateResult);
+    check("13c: sanity - restoring the tampered field makes validation pass again", revalidated.ok === true);
   }
 
   console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}`);
