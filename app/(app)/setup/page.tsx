@@ -12,15 +12,19 @@ import { resolveDataAuthorityState } from "@/lib/auth/dal";
 export default async function SetupPage() {
   const authority = await resolveDataAuthorityState();
   // Guaranteed "local" or "cloud-ready" by the (app) layout above - both
-  // carry organizationId/membershipId.
-  const migratedAt = authority.kind === "cloud-ready" ? authority.migratedAt : null;
+  // carry organizationId/membershipId. "local" is now reserved exclusively
+  // for a legacy_import membership whose migration hasn't completed yet
+  // (see deriveDataAuthorityState) - so it alone means "migration pending,"
+  // with no need to inspect a (possibly-null, possibly-fabricated)
+  // migratedAt value to decide.
+  const migrationPending = authority.kind === "local";
   const hasMembership = authority.kind === "local" || authority.kind === "cloud-ready";
   const organizationId = hasMembership ? authority.organizationId : "";
   const membershipId = hasMembership ? authority.membershipId : "";
 
   return (
     <>
-      <MigrationSetupCard migratedAt={migratedAt} organizationId={organizationId} membershipId={membershipId} />
+      <MigrationSetupCard migrationPending={migrationPending} organizationId={organizationId} membershipId={membershipId} />
       <RestoreBackupCard authorityKind={authority.kind === "cloud-ready" ? "cloud-ready" : "local"} />
       <OnboardingScreen />
     </>

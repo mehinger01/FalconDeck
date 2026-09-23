@@ -42,12 +42,24 @@ export async function requireAuthenticatedUser(): Promise<AuthenticatedClaims> {
 
 export type MembershipRole = "teacher" | "admin";
 
+/**
+ * Whether this membership has a legacy-migration concept at all -
+ * see lib/auth/dataAuthority.ts's doc comment for the full state model.
+ * 'cloud_native': no local data was ever authoritative for this
+ * membership; always cloud-ready regardless of localDataMigratedAt.
+ * 'legacy_import': has (or had) real local browser data to migrate;
+ * localDataMigratedAt alone decides whether that migration is still
+ * pending or already complete.
+ */
+export type AccountOrigin = "cloud_native" | "legacy_import";
+
 export interface ActiveMembership {
   membershipId: string;
   organizationId: string;
   organizationName: string;
   role: MembershipRole;
-  /** Null until this membership's one-time local-data migration has completed - see lib/data/migration/migrateLocalData.ts's markMigrationComplete. */
+  accountOrigin: AccountOrigin;
+  /** Null until this membership's one-time local-data migration has completed - see lib/data/migration/migrateLocalData.ts's markMigrationComplete. Only meaningful when accountOrigin is 'legacy_import'; never fabricated for 'cloud_native'. */
   localDataMigratedAt: string | null;
 }
 
@@ -62,7 +74,7 @@ export const getActiveMemberships = cache(async (userId: string): Promise<Active
   const supabase = await createSupabaseServerClient();
   const { data, error } = await supabase
     .from("organization_memberships")
-    .select("id, organization_id, role, local_data_migrated_at, organizations(name)")
+    .select("id, organization_id, role, account_origin, local_data_migrated_at, organizations(name)")
     .eq("user_id", userId)
     .eq("status", "active");
 
@@ -76,6 +88,7 @@ export const getActiveMemberships = cache(async (userId: string): Promise<Active
       organizationId: row.organization_id as string,
       organizationName: organizationName ?? "Unknown school",
       role: row.role as MembershipRole,
+      accountOrigin: row.account_origin as AccountOrigin,
       localDataMigratedAt: row.local_data_migrated_at as string | null,
     };
   });

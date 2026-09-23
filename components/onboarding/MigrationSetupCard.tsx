@@ -33,11 +33,20 @@ import {
  * authority" requirement.
  */
 export function MigrationSetupCard({
-  migratedAt,
+  migrationPending,
   organizationId,
   membershipId,
 }: {
-  migratedAt: string | null;
+  /**
+   * True only when this membership's authority is "local" - i.e. legacy
+   * migration both applies to this account AND hasn't completed yet (see
+   * lib/auth/dataAuthority.ts). Deliberately not a migratedAt timestamp:
+   * a cloud-native account also has no migratedAt value, but migration
+   * never applies to it, so gating on "migratedAt === null" alone would
+   * wrongly show this card for one. This flag encodes applicability, not
+   * just completion.
+   */
+  migrationPending: boolean;
   organizationId: string;
   membershipId: string;
 }) {
@@ -54,8 +63,9 @@ export function MigrationSetupCard({
   // action, not something that needs to survive a repository remount.
   const client = useMemo(() => createSupabaseBrowserClient(), []);
 
-  // Already migrated - no prompt at all, not even a dismissed/collapsed one.
-  if (migratedAt !== null) return null;
+  // Migration inapplicable (cloud-native) or already complete - no prompt
+  // at all, not even a dismissed/collapsed one.
+  if (!migrationPending) return null;
 
   const handleDownloadBackup = () => {
     triggerBrowserDownload(buildLocalDataBackup(data));

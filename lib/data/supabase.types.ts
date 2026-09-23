@@ -555,6 +555,7 @@ export type Database = {
       }
       organization_memberships: {
         Row: {
+          account_origin: string
           created_at: string
           id: string
           local_data_migrated_at: string | null
@@ -566,6 +567,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          account_origin?: string
           created_at?: string
           id?: string
           local_data_migrated_at?: string | null
@@ -577,6 +579,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          account_origin?: string
           created_at?: string
           id?: string
           local_data_migrated_at?: string | null

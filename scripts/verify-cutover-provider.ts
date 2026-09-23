@@ -114,14 +114,16 @@ const none: ActiveOrganizationResolution = { state: "none" };
 const needsSelection: ActiveOrganizationResolution = {
   state: "needs-selection",
   memberships: [
-    { membershipId: "m-1", organizationId: "org-1", organizationName: "School A", role: "teacher", localDataMigratedAt: null },
-    { membershipId: "m-2", organizationId: "org-2", organizationName: "School B", role: "teacher", localDataMigratedAt: null },
+    { membershipId: "m-1", organizationId: "org-1", organizationName: "School A", role: "teacher", accountOrigin: "legacy_import", localDataMigratedAt: null },
+    { membershipId: "m-2", organizationId: "org-2", organizationName: "School B", role: "teacher", accountOrigin: "legacy_import", localDataMigratedAt: null },
   ],
 };
+// legacy_import + null -> "local" (migration pending).
 const resolvedUnmigrated: ActiveOrganizationResolution = {
   state: "resolved",
-  membership: { membershipId: "m-1", organizationId: "org-1", organizationName: "School A", role: "teacher", localDataMigratedAt: null },
+  membership: { membershipId: "m-1", organizationId: "org-1", organizationName: "School A", role: "teacher", accountOrigin: "legacy_import", localDataMigratedAt: null },
 };
+// legacy_import + timestamp -> "cloud-ready" (migration complete).
 const resolvedMigrated: ActiveOrganizationResolution = {
   state: "resolved",
   membership: {
@@ -129,7 +131,22 @@ const resolvedMigrated: ActiveOrganizationResolution = {
     organizationId: "org-1",
     organizationName: "School A",
     role: "teacher",
+    accountOrigin: "legacy_import",
     localDataMigratedAt: "2026-09-16T00:00:00.000Z",
+  },
+};
+// cloud_native + null -> "cloud-ready" (never touches migration at all) -
+// the exact case the account-origin fix exists to get right: a null
+// migration timestamp must not, by itself, mean "local."
+const resolvedCloudNative: ActiveOrganizationResolution = {
+  state: "resolved",
+  membership: {
+    membershipId: "m-3",
+    organizationId: "org-3",
+    organizationName: "School C",
+    role: "admin",
+    accountOrigin: "cloud_native",
+    localDataMigratedAt: null,
   },
 };
 
@@ -137,18 +154,24 @@ check("3. unauthenticated -> anonymous", deriveDataAuthorityState(unauthenticate
 check("4. zero memberships -> no-membership", deriveDataAuthorityState(none).kind === "no-membership");
 check("5. needs-selection -> its OWN distinct kind, not folded into no-membership", deriveDataAuthorityState(needsSelection).kind === "needs-selection");
 check("5. no-membership and needs-selection are different kinds", deriveDataAuthorityState(none).kind !== deriveDataAuthorityState(needsSelection).kind);
-check("6. resolved + migratedAt null -> local", deriveDataAuthorityState(resolvedUnmigrated).kind === "local");
-check("7. resolved + migratedAt set -> cloud-ready", deriveDataAuthorityState(resolvedMigrated).kind === "cloud-ready");
+check("6. legacy_import + null -> local", deriveDataAuthorityState(resolvedUnmigrated).kind === "local");
+check("7. legacy_import + timestamp -> cloud-ready", deriveDataAuthorityState(resolvedMigrated).kind === "cloud-ready");
+check("7b. cloud_native + null -> cloud-ready (account_origin decides, not the timestamp)", deriveDataAuthorityState(resolvedCloudNative).kind === "cloud-ready");
 
 const localState = deriveDataAuthorityState(resolvedUnmigrated);
 const cloudState = deriveDataAuthorityState(resolvedMigrated);
+const cloudNativeState = deriveDataAuthorityState(resolvedCloudNative);
 check(
   "6. local state carries organizationId/membershipId, migratedAt null",
   localState.kind === "local" && localState.organizationId === "org-1" && localState.membershipId === "m-1" && localState.migratedAt === null,
 );
 check(
-  "7. cloud-ready state carries organizationId/membershipId and the real migratedAt timestamp",
+  "7. cloud-ready (legacy_import, migrated) state carries the real migratedAt timestamp",
   cloudState.kind === "cloud-ready" && cloudState.migratedAt === "2026-09-16T00:00:00.000Z",
+);
+check(
+  "7b. cloud-ready (cloud_native) state's migratedAt is null, not fabricated - no migration ever happened for this account",
+  cloudNativeState.kind === "cloud-ready" && cloudNativeState.migratedAt === null,
 );
 
 // ---------------------------------------------------------------------------
@@ -164,6 +187,11 @@ const noMembership: DataAuthorityState = { kind: "no-membership" };
 const needsSelectionAuthority: DataAuthorityState = { kind: "needs-selection" };
 const local: DataAuthorityState = { kind: "local", organizationId: "org-1", membershipId: "m-1", migratedAt: null };
 const cloudReady: DataAuthorityState = { kind: "cloud-ready", organizationId: "org-1", membershipId: "m-1", migratedAt: "2026-09-16T00:00:00.000Z" };
+// cloud_native's derived authority: kind "cloud-ready" with a null
+// migratedAt (never fabricated) - must route the same as any other
+// cloud-ready authority, never falling back to LocalStorageDataRepository
+// just because migratedAt happens to be null.
+const cloudReadyNoTimestamp: DataAuthorityState = { kind: "cloud-ready", organizationId: "org-3", membershipId: "m-3", migratedAt: null };
 
 for (const [label, authority] of [
   ["anonymous", anonymous],
@@ -180,6 +208,13 @@ const cloudPolicy = selectDataRepositoryPolicy(cloudReady);
 check("1. cloud-ready authority selects a real SupabaseDataRepository instance", cloudPolicy.repository instanceof SupabaseDataRepository);
 check("1. cloud-ready authority does NOT select the local repository singleton", cloudPolicy.repository !== dataRepository);
 check("2. cloud-ready authority sets blockUntilHydrated: true", cloudPolicy.blockUntilHydrated === true);
+
+const cloudNativePolicy = selectDataRepositoryPolicy(cloudReadyNoTimestamp);
+check(
+  "9. cloud-ready with a null migratedAt (cloud_native) STILL selects SupabaseDataRepository, never local",
+  cloudNativePolicy.repository instanceof SupabaseDataRepository && cloudNativePolicy.repository !== dataRepository,
+);
+check("9. cloud-ready with a null migratedAt still sets blockUntilHydrated: true", cloudNativePolicy.blockUntilHydrated === true);
 
 // ---------------------------------------------------------------------------
 // 9-10. authority identity -> mount key (the mechanism CutoverAppDataProvider
@@ -521,7 +556,7 @@ console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) F
 console.log(
   "\nNote: this repo has no React component-rendering test harness (no jsdom/@testing-library). /setup's rendered " +
     "migration-prompt visibility for unmigrated vs. migrated memberships, and demo/login/onboarding regression, are " +
-    "verified by code inspection instead: MigrationSetupCard's `if (migratedAt !== null) return null;` guard, and " +
+    "verified by code inspection instead: MigrationSetupCard's `if (!migrationPending) return null;` guard, and " +
     "confirmation that app/demo/layout.tsx's isolated DemoAppDataProvider, app/login/page.tsx, and " +
     "app/onboarding/page.tsx are untouched by this milestone's changes. Required tests 14 (SESSION_ENDED blocks " +
     "children), 15 (SESSION_ENDED cannot save), 18/19 (/present and /demo/present authority), 20/21 (sign-out scope, " +
