@@ -64,7 +64,7 @@ export default async function AppSectionLayout({ children }: { children: ReactNo
   return (
     <CutoverAppDataProvider authority={authority}>
       <div className="flex min-h-full flex-1 flex-col bg-falcon-cream-200 text-falcon-brown-900">
-        <NavBar />
+        <NavBar organizationName={resolution.membership.organizationName} />
         <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">{children}</main>
       </div>
     </CutoverAppDataProvider>

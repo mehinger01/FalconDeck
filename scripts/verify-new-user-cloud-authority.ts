@@ -55,11 +55,15 @@
  * authority never resolves to "local," so its session never constructs
  * LocalStorageDataRepository at all - see section 2/8 below.
  *
- * Separately, "Ogemaw Heights Falcons" (components/layout/NavBar.tsx) is
+ * Separately, "Ogemaw Heights Falcons" (components/layout/NavBar.tsx) was
  * a plain hardcoded string, shown to every user unconditionally,
  * regardless of authority or organization - a distinct, purely cosmetic
  * single-tenant/branding leftover explicitly deferred, not touched by any
- * stage of this fix.
+ * stage of this (data-authority) fix. It was subsequently fixed as its own
+ * later task (NavBar now renders the resolved organization name) - see
+ * scripts/verify-navbar-organization.ts for that fix's own coverage;
+ * section 7 below is updated to match rather than left asserting the
+ * since-fixed hardcode.
  *
  *   npx tsx scripts/verify-new-user-cloud-authority.ts
  */
@@ -241,12 +245,12 @@ console.log("\n6. RestoreBackupCard's ONLY gate is authorityKind === 'cloud-read
   check("6a: the only branch point is `authorityKind === \"cloud-ready\"`", /authorityKind === ["']cloud-ready["']/.test(cardSource));
 }
 
-console.log("\n7. NavBar's 'Ogemaw Heights Falcons' is an unconditional hardcoded string - a separate, cosmetic single-tenant leftover, explicitly out of scope for this fix");
+console.log("\n7. NavBar's 'Ogemaw Heights Falcons' hardcode - was a separate, cosmetic single-tenant leftover, explicitly out of scope for THIS (data-authority) fix; since fixed as its own later task - see scripts/verify-navbar-organization.ts");
 {
   const navSource = source("components/layout/NavBar.tsx");
   check(
-    "7a: the string is a plain JSX literal, not derived from any organization/props/data",
-    navSource.includes("Ogemaw Heights Falcons") && !/props\.|organization\.|data\./.test(navSource),
+    "7a: NavBar no longer hardcodes 'Ogemaw Heights Falcons' - it now renders a resolved organizationName prop instead (fixed separately; full coverage in verify-navbar-organization.ts)",
+    !navSource.includes("Ogemaw Heights Falcons") && /organizationName/.test(navSource),
   );
 }
 

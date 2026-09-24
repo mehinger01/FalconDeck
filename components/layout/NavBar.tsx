@@ -14,7 +14,7 @@ const NAV_LINKS = [
   { href: "/settings", label: "Settings" },
 ] as const;
 
-export function NavBar() {
+export function NavBar({ organizationName }: { organizationName: string }) {
   const pathname = usePathname();
 
   return (
@@ -25,7 +25,7 @@ export function NavBar() {
             Falcon Deck
           </span>
           <span className="text-xs font-medium uppercase tracking-widest text-falcon-gold-600">
-            Ogemaw Heights Falcons
+            {organizationName}
           </span>
         </Link>
         <nav className="flex items-center gap-1">
