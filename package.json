@@ -16,6 +16,7 @@
     "verify:calendar": "tsx scripts/verify-calendar.ts",
     "verify:new-user-cloud-authority": "tsx scripts/verify-new-user-cloud-authority.ts",
     "verify:navbar-organization": "tsx scripts/verify-navbar-organization.ts",
+    "verify:join-existing-school-stage-b": "tsx scripts/verify-join-existing-school-stage-b.ts",
     "verify:demo": "tsx scripts/verify-demo.ts",
     "verify:lesson-import": "tsx scripts/verify-lesson-import.ts",
     "verify:clockstore": "tsx scripts/verify-clockstore.ts",
@@ -24,7 +25,7 @@
     "verify:supabase-migration": "tsx scripts/verify-supabase-migration.ts",
     "verify:cutover-provider": "tsx scripts/verify-cutover-provider.ts",
     "verify:restore-backup": "tsx scripts/verify-restore-backup.ts",
-    "verify": "npm run verify:schedule && npm run verify:lessons && npm run verify:preview && npm run verify:week && npm run verify:classroom && npm run verify:resources && npm run verify:calendar && npm run verify:new-user-cloud-authority && npm run verify:navbar-organization && npm run verify:demo && npm run verify:lesson-import && npm run verify:clockstore && npm run verify:present-layout && npm run verify:supabase-mapping && npm run verify:cutover-provider && npm run verify:restore-backup"
+    "verify": "npm run verify:schedule && npm run verify:lessons && npm run verify:preview && npm run verify:week && npm run verify:classroom && npm run verify:resources && npm run verify:calendar && npm run verify:new-user-cloud-authority && npm run verify:navbar-organization && npm run verify:join-existing-school-stage-b && npm run verify:demo && npm run verify:lesson-import && npm run verify:clockstore && npm run verify:present-layout && npm run verify:supabase-mapping && npm run verify:cutover-provider && npm run verify:restore-backup"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",
