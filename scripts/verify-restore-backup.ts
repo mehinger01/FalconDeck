@@ -69,6 +69,7 @@ function realisticFixture(): AppData {
       {
         id: "schedule-custom",
         name: "My Custom Schedule",
+        ownerType: "teacher",
         isDefault: true,
         timeZone: "America/Detroit",
         source: "custom",
@@ -99,6 +100,7 @@ function realisticFixture(): AppData {
       {
         id: "schedule-builtin",
         name: "OHHS Regular Day",
+        ownerType: "teacher",
         isDefault: false,
         timeZone: "America/Detroit",
         source: "built-in",
@@ -168,7 +170,7 @@ function realisticFixture(): AppData {
         updatedAt: "2026-09-01T00:00:00.000Z",
       },
     ],
-    teacherSchedulePreferences: { lunchWave: "B" },
+    teacherSchedulePreferences: { lunchWave: "B", activeBellScheduleId: null },
     schoolCalendar: {
       id: "calendar-1",
       name: "2026-27 School Year",

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useAppData } from "@/lib/store/AppDataProvider";
+import { useAppData, useActiveSchedule } from "@/lib/store/AppDataProvider";
 import { useNow } from "@/lib/hooks/useNow";
 import {
   applyBellOffset,
@@ -30,9 +30,9 @@ function formatSignedOffset(seconds: number): string {
  */
 export function BellClockOffsetSection() {
   const { data, actions } = useAppData();
+  const activeSchedule = useActiveSchedule();
   const bellOffsetSeconds = data.classroomExperienceSettings.bellOffsetSeconds;
-  const timeZone =
-    data.schoolCalendar?.timeZone ?? data.schedules.find((s) => s.isDefault)?.timeZone ?? DEFAULT_TIME_ZONE;
+  const timeZone = data.schoolCalendar?.timeZone ?? activeSchedule?.timeZone ?? DEFAULT_TIME_ZONE;
 
   const computerTime = useNow(1000);
   const falconDeckTime = computerTime ? applyBellOffset(computerTime, bellOffsetSeconds) : null;

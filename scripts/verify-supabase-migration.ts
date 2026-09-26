@@ -181,6 +181,7 @@ function realisticAppData(prefix: string): AppData {
       {
         id: `${prefix}-schedule-custom`,
         name: "My Custom Schedule",
+        ownerType: "teacher",
         isDefault: true,
         timeZone: "America/Detroit",
         source: "custom",
@@ -201,6 +202,7 @@ function realisticAppData(prefix: string): AppData {
       {
         id: `${prefix}-schedule-builtin`,
         name: "OHHS Regular Day",
+        ownerType: "teacher",
         isDefault: false,
         timeZone: "America/Detroit",
         source: "built-in",
@@ -259,7 +261,7 @@ function realisticAppData(prefix: string): AppData {
         updatedAt: "2026-09-01T00:00:00.000Z",
       },
     ],
-    teacherSchedulePreferences: { lunchWave: "B" },
+    teacherSchedulePreferences: { lunchWave: "B", activeBellScheduleId: null },
     schoolCalendar: {
       id: `${prefix}-calendar-1`,
       name: "2026-27 School Year",
@@ -366,6 +368,7 @@ async function main() {
       {
         id: "bad-schedule-invalid",
         name: "Invalid Times",
+        ownerType: "teacher",
         isDefault: true,
         timeZone: "America/Detroit",
         source: "custom",
@@ -409,7 +412,7 @@ async function main() {
   console.log("\nSupabaseDataRepository end-to-end: load() then save() then load() again reflects a real change");
   const repo = new SupabaseDataRepository(clientA, ctxA);
   const loaded = await repo.load();
-  const updated: AppData = { ...loaded, teacherSchedulePreferences: { lunchWave: "C" } };
+  const updated: AppData = { ...loaded, teacherSchedulePreferences: { lunchWave: "C", activeBellScheduleId: null } };
   const saveResult = await repo.save(updated);
   check("repository save() succeeds", saveResult.ok === true);
   const reloadedViaRepo = await repo.load();
@@ -485,7 +488,7 @@ async function runProviderLevelTest(email: string, password: string): Promise<vo
     check("provider test: repository.load() returns the migrated data", loadedViaProvider.courses.length === 1 && loadedViaProvider.courses[0].name === "Algebra 1");
 
     // I. Mutate/save.
-    const mutated: AppData = { ...loadedViaProvider, teacherSchedulePreferences: { lunchWave: "A" } };
+    const mutated: AppData = { ...loadedViaProvider, teacherSchedulePreferences: { lunchWave: "A", activeBellScheduleId: null } };
     const saveOutcome = await providerRepo.save(mutated);
     check("provider test: repository.save() succeeds", saveOutcome.ok === true);
 

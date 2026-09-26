@@ -1,4 +1,5 @@
 import type { AppData } from "@/lib/data/types";
+import { resolveActiveSchedule } from "@/lib/schedule/resolveActiveSchedule";
 import { getLessonPlanningStatus } from "@/lib/week/getLessonPlanningStatus";
 
 export interface OnboardingStatus {
@@ -9,7 +10,7 @@ export interface OnboardingStatus {
   libraryResourceComplete: boolean;
   /** Optional - a teacher without a shared lunch structure shouldn't be blocked by this. */
   lunchWaveComplete: boolean;
-  /** Optional - Present Mode works fine on just a default BellSchedule; the calendar is what makes it automatic across the whole year. */
+  /** Optional - Present Mode works fine on just an active BellSchedule; the calendar is what makes it automatic across the whole year. */
   masterCalendarComplete: boolean;
   /** Bell schedules referenced by the Master Calendar (or duplicated presets) that still have no block times - see BellSchedule.needsConfiguration. */
   unresolvedScheduleCount: number;
@@ -25,8 +26,8 @@ export interface OnboardingStatus {
 export function getOnboardingStatus(data: AppData): OnboardingStatus {
   const classesComplete = data.classSections.length > 0;
 
-  const defaultSchedule = data.schedules.find((schedule) => schedule.isDefault) ?? data.schedules[0] ?? null;
-  const scheduleComplete = (defaultSchedule?.blocks.length ?? 0) > 0;
+  const activeSchedule = resolveActiveSchedule(data.schedules, data.teacherSchedulePreferences);
+  const scheduleComplete = (activeSchedule?.blocks.length ?? 0) > 0;
 
   const firstLessonComplete = data.lessons.some((lesson) => getLessonPlanningStatus(lesson) === "prepared");
 

@@ -49,6 +49,7 @@ const STANDARD_DAY_SCHEDULE: BellSchedule = {
   name: "Demo Standard Day (Placeholder)",
   description:
     "Placeholder demo schedule — not the official OHHS bell schedule. Used to exercise the schedule engine.",
+  ownerType: "teacher",
   isDefault: true,
   timeZone: DEFAULT_TIME_ZONE,
   blocks: [
@@ -140,6 +141,7 @@ const HALF_DAY_SCHEDULE: BellSchedule = {
   name: "Demo Half Day (Placeholder)",
   description:
     "Placeholder demo schedule — a second example schedule to demonstrate duplicating schedules and switching the default.",
+  ownerType: "teacher",
   isDefault: false,
   timeZone: DEFAULT_TIME_ZONE,
   blocks: [
@@ -355,7 +357,13 @@ export function createDemoAppData(): AppData {
     classPresentationSettings: DEMO_CLASS_PRESENTATION_SETTINGS,
     classroomExperienceSettings: DEFAULT_CLASSROOM_EXPERIENCE_SETTINGS,
     libraryResources: DEMO_LIBRARY_RESOURCES,
-    teacherSchedulePreferences: DEFAULT_TEACHER_SCHEDULE_PREFERENCES,
+    // Starter/seed data ships pre-configured, same as it always has (the
+    // reason STANDARD_DAY_SCHEDULE carries isDefault: true) - explicit here
+    // per Stage D (no auto-resolution from isDefault at read time), not a
+    // violation of "no hidden auto-adoption" (that rule governs a REAL
+    // account's active-schedule selection UX, not what a starter dataset
+    // ships already chosen).
+    teacherSchedulePreferences: { ...DEFAULT_TEACHER_SCHEDULE_PREFERENCES, activeBellScheduleId: STANDARD_DAY_SCHEDULE.id },
     schoolCalendar: null,
   });
 }

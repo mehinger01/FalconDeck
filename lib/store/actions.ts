@@ -14,7 +14,6 @@ export type AppDataAction =
   | { type: "DUPLICATE_SCHEDULE"; scheduleId: string; newId: string; newName: string }
   | { type: "DELETE_SCHEDULE"; scheduleId: string }
   | { type: "RENAME_SCHEDULE"; scheduleId: string; name: string }
-  | { type: "SET_DEFAULT_SCHEDULE"; scheduleId: string }
   | { type: "ADD_BLOCK"; scheduleId: string; block: ScheduleBlock }
   | {
       type: "UPDATE_BLOCK";

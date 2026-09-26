@@ -100,6 +100,7 @@ const schedule: BellSchedule = {
   id: "schedule-1",
   name: "My Custom Schedule",
   description: "Second semester",
+  ownerType: "teacher",
   isDefault: true,
   timeZone: "America/Detroit",
   source: "custom",
@@ -225,7 +226,7 @@ check("customWatermarkDataUrl comes back undefined (expected, documented gap)", 
 check("rowToClassroomExperienceSettings falls back to defaults when no row exists yet", Map_.deepEqual(Map_.rowToClassroomExperienceSettings(null).bellOffsetSeconds, 0));
 
 console.log("\n10. Teacher schedule preferences round-trip");
-const prefs: TeacherSchedulePreferences = { lunchWave: "B" };
+const prefs: TeacherSchedulePreferences = { lunchWave: "B", activeBellScheduleId: null };
 check("teacher schedule preferences round-trip exactly", Map_.deepEqual(Map_.rowToTeacherSchedulePreferences(withTimestamps(Map_.teacherSchedulePreferencesToRow(prefs, ctx))), prefs));
 check("missing row falls back to the documented default (none)", Map_.rowToTeacherSchedulePreferences(null).lunchWave === "none");
 

@@ -61,6 +61,7 @@ const classSections: ClassSection[] = [
 const defaultTestSchedule: BellSchedule = {
   id: "schedule-test-default",
   name: "Test Schedule",
+  ownerType: "teacher",
   isDefault: true,
   timeZone: "America/Detroit",
   blocks: classSections.map((section, index) => ({
@@ -739,6 +740,7 @@ console.log("\n17. Section eligibility matches Week View exactly (real-world cou
   const eligSchedule: BellSchedule = {
     id: "schedule-real-shape",
     name: "Real Schedule Shape",
+    ownerType: "teacher",
     isDefault: true,
     timeZone: "America/Detroit",
     blocks: [

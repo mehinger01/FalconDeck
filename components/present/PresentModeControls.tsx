@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useAppData, useDefaultSchedule } from "@/lib/store/AppDataProvider";
+import { useAppData, useActiveSchedule } from "@/lib/store/AppDataProvider";
 import type { ResolvedScheduleBlock } from "@/types/schedule";
 
 export type PresentMode = "live" | "preview";
@@ -43,14 +43,14 @@ export function PresentModeControls({
 }) {
   const router = useRouter();
   const { data } = useAppData();
-  const defaultSchedule = useDefaultSchedule();
+  const activeSchedule = useActiveSchedule();
   const [expanded, setExpanded] = useState(false);
 
   const scheduledSections = useMemo(() => {
-    if (!defaultSchedule) return [];
+    if (!activeSchedule) return [];
 
     const firstTeachingStartBySection = new Map<string, string>();
-    for (const block of defaultSchedule.blocks) {
+    for (const block of activeSchedule.blocks) {
       const isTeachingBlock = block.kind === "instructional" || block.kind === "enrichment";
       if (!isTeachingBlock || !block.classSectionId) continue;
 
@@ -67,7 +67,7 @@ export function PresentModeControls({
         const bStart = firstTeachingStartBySection.get(b.id) ?? "99:99";
         return aStart.localeCompare(bStart) || a.name.localeCompare(b.name);
       });
-  }, [data.classSections, defaultSchedule]);
+  }, [data.classSections, activeSchedule]);
 
   function go(next: Partial<{ mode: PresentMode; date: string; classSectionId: string | null; blockId: string | null }>) {
     router.replace(

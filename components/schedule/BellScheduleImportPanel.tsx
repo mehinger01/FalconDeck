@@ -63,6 +63,7 @@ export function BellScheduleImportPanel() {
     const schedule: BellSchedule = {
       id: scheduleId,
       name: state.name.trim() || "Imported Schedule",
+      ownerType: "teacher",
       isDefault: false,
       timeZone: "America/Detroit",
       source: "imported",

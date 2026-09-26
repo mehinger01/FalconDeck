@@ -77,7 +77,7 @@ export function MasterCalendarScreen() {
           <SummaryStat label="First Student Day" value={calendar.firstStudentDay || "—"} />
           <SummaryStat label="Last Student Day" value={calendar.lastStudentDay || "—"} />
           <SummaryStat
-            label="Default Bell Schedule"
+            label="Calendar's Mapped Schedule"
             value={data.schedules.find((s) => s.id === calendar.defaultBellScheduleId)?.name ?? "Not mapped"}
           />
           <SummaryStat label="Exceptions" value={String(calendar.exceptions.length)} />
@@ -85,7 +85,7 @@ export function MasterCalendarScreen() {
         </div>
       ) : (
         <p className="mb-6 rounded-lg border border-dashed border-falcon-brown-700/30 bg-white/50 p-6 text-center text-sm text-falcon-brown-700/60">
-          No Master Calendar imported yet. Present Mode will use your default Bell Schedule every school
+          No Master Calendar imported yet. Present Mode will use your active bell schedule every school
           day until you import one.
         </p>
       )}

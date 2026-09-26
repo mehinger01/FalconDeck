@@ -305,6 +305,7 @@ async function main() {
     const scheduleWithExplicitFalse: BellSchedule = {
       id: "schedule-explicit-lunch-false",
       name: "Explicit isLunchWindow false",
+      ownerType: "teacher",
       isDefault: false,
       timeZone: "America/Detroit",
       source: "custom",
@@ -461,6 +462,7 @@ async function main() {
     const sourceSchedule: BellSchedule = {
       id: "schedule-source",
       name: "Source Schedule",
+      ownerType: "teacher",
       isDefault: false,
       timeZone: "America/Detroit",
       source: "built-in",
@@ -475,6 +477,7 @@ async function main() {
       ...structuredClone(sourceSchedule),
       id: "schedule-duplicate",
       name: "Source Schedule (Copy)",
+      ownerType: "teacher",
       isDefault: false,
       source: "custom",
       needsConfiguration: false,

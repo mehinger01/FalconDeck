@@ -13,6 +13,7 @@ function needsConfigurationSchedule(id: string, name: string, description: strin
     id,
     name,
     description,
+    ownerType: "teacher",
     isDefault: false,
     timeZone: "America/Detroit",
     source: "built-in",

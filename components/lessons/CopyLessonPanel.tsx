@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useAppData } from "@/lib/store/AppDataProvider";
+import { useAppData, useActiveSchedule } from "@/lib/store/AppDataProvider";
 import { addDaysToDateKey } from "@/lib/schedule/localDate";
 import type { DailyLesson } from "@/types/lesson";
 
@@ -25,7 +25,7 @@ function confirmAndCopy(
 export function CopyLessonPanel({ lesson }: { lesson: DailyLesson }) {
   const { data } = useAppData();
   const { actions } = useAppData();
-  const schedule = data.schedules.find((s) => s.isDefault) ?? data.schedules[0] ?? null;
+  const schedule = useActiveSchedule();
 
   const destinationSections = useMemo(() => {
     const source = data.classSections.find((section) => section.id === lesson.classSectionId);

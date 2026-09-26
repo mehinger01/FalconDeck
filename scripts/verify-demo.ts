@@ -73,7 +73,7 @@ console.log("\n95-98. Demo data isolation");
     },
   };
   const demoRepo = new DemoDataRepository();
-  await demoRepo.save({ ...demoData, teacherSchedulePreferences: { lunchWave: "A" } });
+  await demoRepo.save({ ...demoData, teacherSchedulePreferences: { lunchWave: "A", activeBellScheduleId: null } });
   check("96: saving through DemoDataRepository never writes to localStorage - real AppData is untouched", fakeStore.size === 0);
   delete (globalThis as Record<string, unknown>).window;
 
@@ -162,9 +162,9 @@ console.log("\n110-119. Demo Present Simulator scenarios (real engine, not a sli
     justOverFiveState.mode === "student-facing" && justOverFiveState.showCountdown === false,
   );
 
-  const bResolved = resolveTeacherSchedule(ohhsRegular, { lunchWave: "B" });
+  const bResolved = resolveTeacherSchedule(ohhsRegular, { lunchWave: "B", activeBellScheduleId: null });
   check("114: Demo B Lunch at 11:30 shows Lunch", getCurrentBlock(bResolved, atLocalTime(DEMO_REGULAR_DATE, "11:30"))?.kind === "lunch");
-  const cResolved = resolveTeacherSchedule(ohhsRegular, { lunchWave: "C" });
+  const cResolved = resolveTeacherSchedule(ohhsRegular, { lunchWave: "C", activeBellScheduleId: null });
   check(
     "115: Demo C Lunch at 11:30 shows Period 5 (C Lunch begins at 11:48)",
     getCurrentBlock(cResolved, atLocalTime(DEMO_REGULAR_DATE, "11:30"))?.kind === "instructional",

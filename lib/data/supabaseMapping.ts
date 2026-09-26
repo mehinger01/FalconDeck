@@ -342,13 +342,15 @@ export function teacherSchedulePreferencesToRow(
     owner_membership_id: ctx.membershipId,
     organization_id: ctx.organizationId,
     lunch_wave: prefs.lunchWave,
-    // active_bell_schedule_id has no local TeacherSchedulePreferences field
-    // yet (bell-schedule selection is a later stage's client plumbing) -
-    // same precedent as classroomExperienceSettingsToRow's own
-    // watermark_override_storage_path: null below: this mapper owns every
-    // column of its row, so an unmodeled column is written explicitly
-    // rather than silently omitted.
-    active_bell_schedule_id: null,
+    // Stage D: active_bell_schedule_id is now a real local field (see
+    // TeacherSchedulePreferences.activeBellScheduleId) - the Stage C
+    // placeholder that hardcoded null here (before the client-side concept
+    // existed) is gone. Cross-organization and cross-teacher-private
+    // invariants for this value are enforced at the RLS boundary (see
+    // supabase/migrations/20260926013603_join_existing_school_stage_d_active_schedule_rls.sql),
+    // not re-validated here - this mapper only ever forwards what the
+    // active-schedule selection UI already offered from data.schedules.
+    active_bell_schedule_id: prefs.activeBellScheduleId,
   };
 }
 
@@ -447,6 +449,7 @@ export function rowsToBellSchedule(
     id: schedule.id,
     name: schedule.name,
     description: schedule.description ?? undefined,
+    ownerType: schedule.owner_type as BellSchedule["ownerType"],
     isDefault: schedule.is_default,
     timeZone: schedule.time_zone,
     source: (schedule.source as BellSchedule["source"]) ?? undefined,
@@ -574,7 +577,10 @@ export function rowToClassroomExperienceSettings(row: ClassroomExperienceSetting
 
 export function rowToTeacherSchedulePreferences(row: TeacherSchedulePreferencesRow | null): TeacherSchedulePreferences {
   if (!row) return DEFAULT_TEACHER_SCHEDULE_PREFERENCES;
-  return { lunchWave: row.lunch_wave as TeacherSchedulePreferences["lunchWave"] };
+  return {
+    lunchWave: row.lunch_wave as TeacherSchedulePreferences["lunchWave"],
+    activeBellScheduleId: row.active_bell_schedule_id,
+  };
 }
 
 /**

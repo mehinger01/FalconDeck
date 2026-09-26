@@ -2,7 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { useAppData, useDefaultSchedule } from "@/lib/store/AppDataProvider";
+import { useAppData, useActiveSchedule } from "@/lib/store/AppDataProvider";
 import { useEffectiveNow } from "@/lib/hooks/useEffectiveNow";
 import { getLocalDateKey, weekdayForDateKey } from "@/lib/schedule/localDate";
 import { resolveScheduleForWeekday } from "@/lib/schedule/resolveBlockOverride";
@@ -35,7 +35,7 @@ import { usePresentModeTools } from "./tools/usePresentModeTools";
 export function PresentScreen() {
   const searchParams = useSearchParams();
   const { data } = useAppData();
-  const schedule = useDefaultSchedule();
+  const schedule = useActiveSchedule();
   const timeZone = schedule?.timeZone ?? DEFAULT_TIME_ZONE;
   const settings = data.classroomExperienceSettings;
 

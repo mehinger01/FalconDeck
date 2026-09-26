@@ -5,11 +5,22 @@ import type { BellSchedule } from "@/types/schedule";
 import type { AppDataAction } from "./actions";
 import { generateId } from "./id";
 
+/**
+ * Shared by every schedule-editing action (rename, block add/update/
+ * delete/move, block overrides). A single choke point for the Stage D
+ * invariant "ordinary teacher actions must never mutate an
+ * organization-owned schedule" - no per-call-site UI trust required: even
+ * if some future control were ever mistakenly rendered for a shared
+ * schedule, dispatching against it here is a no-op, and RLS would reject
+ * the actual write regardless if this guard were ever bypassed.
+ */
 function updateSchedule(
   data: AppData,
   scheduleId: string,
   update: (schedule: BellSchedule) => BellSchedule,
 ): AppData {
+  const target = data.schedules.find((schedule) => schedule.id === scheduleId);
+  if (target?.ownerType === "organization") return data;
   return {
     ...data,
     schedules: data.schedules.map((schedule) =>
@@ -48,6 +59,13 @@ export function appDataReducer(state: AppData, action: AppDataAction): AppData {
         ...structuredClone(source),
         id: action.newId,
         name: action.newName,
+        // A duplicate is always teacher-owned going forward, even if its
+        // source was organization-owned - duplicating a shared schedule
+        // creates the teacher's own private copy, never another shared
+        // row. No Stage D UI calls this against an org-owned source yet
+        // ("Copy shared schedule" is explicitly deferred), but the
+        // reducer's own correctness shouldn't depend on that.
+        ownerType: "teacher",
         isDefault: false,
         // A duplicate of a built-in/needs-configuration schedule is a
         // teacher's own editable copy from this point on - "avoid
@@ -79,10 +97,36 @@ export function appDataReducer(state: AppData, action: AppDataAction): AppData {
 
     case "DELETE_SCHEDULE": {
       if (state.schedules.length <= 1) return state; // always keep at least one schedule
-      const wasDefault = state.schedules.find((s) => s.id === action.scheduleId)?.isDefault;
+      const target = state.schedules.find((s) => s.id === action.scheduleId);
+      // Organization-owned schedules are never deletable from teacher UI -
+      // ScheduleList never renders a delete control for them, and RLS would
+      // reject the actual write regardless (bell_schedules_delete requires
+      // app_is_admin for owner_type='organization'). Refusing here too is
+      // defense-in-depth: a shared row must never disappear from local
+      // state even if this action were somehow dispatched against one.
+      if (target?.ownerType === "organization") return state;
+      // Architecture Decision #3 (Stage D): a schedule referenced by
+      // activeBellScheduleId must never be silently unselected or
+      // reassigned by deleting it out from under the teacher - Supabase's
+      // own FK (no ON DELETE clause = NO ACTION) already blocks this at the
+      // database level for a cloud-native account; this mirrors that same
+      // refusal locally (including for the local/legacy repository, which
+      // has no FK to fall back on) so both paths behave identically. The
+      // teacher must explicitly choose a different active schedule (or
+      // clear the selection) first - see ScheduleList.tsx's own pre-dispatch
+      // check for the user-facing message this produces.
+      if (action.scheduleId === state.teacherSchedulePreferences.activeBellScheduleId) return state;
+
+      const wasDefault = target?.isDefault;
       const remaining = state.schedules.filter((s) => s.id !== action.scheduleId);
-      if (wasDefault && !remaining.some((s) => s.isDefault)) {
-        remaining[0] = { ...remaining[0], isDefault: true };
+      // Only ever promote another TEACHER-OWNED schedule to isDefault - an
+      // organization-owned row's isDefault is admin-controlled shared
+      // metadata, never something a teacher's own delete action may flip.
+      if (wasDefault && !remaining.some((s) => s.ownerType === "teacher" && s.isDefault)) {
+        const promotionIndex = remaining.findIndex((s) => s.ownerType === "teacher");
+        if (promotionIndex !== -1) {
+          remaining[promotionIndex] = { ...remaining[promotionIndex], isDefault: true };
+        }
       }
       const nextDefaultId = remaining.find((s) => s.isDefault)?.id ?? remaining[0]?.id;
       return {
@@ -100,21 +144,6 @@ export function appDataReducer(state: AppData, action: AppDataAction): AppData {
         ...schedule,
         name: action.name,
       }));
-
-    case "SET_DEFAULT_SCHEDULE":
-      return {
-        ...state,
-        schedules: state.schedules.map((schedule) => ({
-          ...schedule,
-          isDefault: schedule.id === action.scheduleId,
-        })),
-        // There is one canonical normal-day schedule. The Master Calendar
-        // follows the teacher's selected default so Week, Present, Demo and
-        // lesson-copy workflows cannot silently drift onto different copies.
-        schoolCalendar: state.schoolCalendar
-          ? { ...state.schoolCalendar, defaultBellScheduleId: action.scheduleId }
-          : state.schoolCalendar,
-      };
 
     case "ADD_BLOCK":
       return updateSchedule(state, action.scheduleId, (schedule) => ({

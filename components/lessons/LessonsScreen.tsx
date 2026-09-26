@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { useAppData, useDefaultSchedule } from "@/lib/store/AppDataProvider";
+import { useAppData, useActiveSchedule } from "@/lib/store/AppDataProvider";
 import { findLessonForSection } from "@/lib/data/lessons";
 import { resolveCourseForSection } from "@/lib/data/resolve";
 import { addDaysToDateKey, formatDateKeyLong, getLocalDateKey } from "@/lib/schedule/localDate";
@@ -15,8 +15,8 @@ import { LessonResourceEditor } from "./LessonResourceEditor";
 
 export function LessonsScreen() {
   const { data, actions } = useAppData();
-  const defaultSchedule = useDefaultSchedule();
-  const timeZone = defaultSchedule?.timeZone ?? DEFAULT_TIME_ZONE;
+  const activeSchedule = useActiveSchedule();
+  const timeZone = activeSchedule?.timeZone ?? DEFAULT_TIME_ZONE;
   const searchParams = useSearchParams();
 
   // TECH DEBT: this "active section" definition is a narrower allowlist
@@ -27,10 +27,10 @@ export function LessonsScreen() {
   // scope for the Week View / importer section-targeting fix), but this
   // screen should probably be migrated to the shared definition too.
   const activeSections = useMemo(() => {
-    if (!defaultSchedule) return [];
+    if (!activeSchedule) return [];
 
     const sectionStartTimes = new Map<string, string>();
-    for (const block of defaultSchedule.blocks) {
+    for (const block of activeSchedule.blocks) {
       const isTeachingBlock = block.kind === "instructional" || block.kind === "enrichment";
       if (!isTeachingBlock || !block.classSectionId) continue;
 
@@ -48,7 +48,7 @@ export function LessonsScreen() {
         const timeCompare = aStart.localeCompare(bStart);
         return timeCompare !== 0 ? timeCompare : a.name.localeCompare(b.name);
       });
-  }, [data.classSections, defaultSchedule]);
+  }, [data.classSections, activeSchedule]);
 
   const [date, setDate] = useState(() => searchParams.get("date") ?? getLocalDateKey(new Date(), timeZone));
   const [classSectionId, setClassSectionId] = useState<string | null>(

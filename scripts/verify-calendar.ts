@@ -129,15 +129,15 @@ console.log("\n4-20. Official OHHS bell times");
 
 console.log("\n21-33. Lunch wave resolution");
 {
-  const aResolved = resolveTeacherSchedule(ohhs, { lunchWave: "A" });
+  const aResolved = resolveTeacherSchedule(ohhs, { lunchWave: "A", activeBellScheduleId: null });
   const aLunch = aResolved.blocks.find((b) => b.kind === "lunch");
   check("21: A Lunch resolves 10:48-11:18", aLunch?.startTime === "10:48" && aLunch?.endTime === "11:18");
 
-  const bResolved = resolveTeacherSchedule(ohhs, { lunchWave: "B" });
+  const bResolved = resolveTeacherSchedule(ohhs, { lunchWave: "B", activeBellScheduleId: null });
   const bLunch = bResolved.blocks.find((b) => b.kind === "lunch");
   check("22: B Lunch resolves 11:18-11:48", bLunch?.startTime === "11:18" && bLunch?.endTime === "11:48");
 
-  const cResolved = resolveTeacherSchedule(ohhs, { lunchWave: "C" });
+  const cResolved = resolveTeacherSchedule(ohhs, { lunchWave: "C", activeBellScheduleId: null });
   const cLunch = cResolved.blocks.find((b) => b.kind === "lunch");
   check("23: C Lunch resolves 11:48-12:18", cLunch?.startTime === "11:48" && cLunch?.endTime === "12:18");
 
@@ -166,7 +166,7 @@ console.log("\n21-33. Lunch wave resolution");
     getCurrentBlock(cResolved, atLocalTime(MONDAY, "11:48"))?.kind === "lunch",
   );
 
-  const noneResolved = resolveTeacherSchedule(ohhs, { lunchWave: "none" });
+  const noneResolved = resolveTeacherSchedule(ohhs, { lunchWave: "none", activeBellScheduleId: null });
   const nonePeriod5 = noneResolved.blocks.find((b) => b.isLunchWindow);
   check(
     "30: 'none' keeps Period 5 active 10:48-12:18",
@@ -180,9 +180,9 @@ console.log("\n21-33. Lunch wave resolution");
   );
 
   const beforeJson = JSON.stringify(ohhs);
-  resolveTeacherSchedule(ohhs, { lunchWave: "A" });
-  resolveTeacherSchedule(ohhs, { lunchWave: "B" });
-  resolveTeacherSchedule(ohhs, { lunchWave: "C" });
+  resolveTeacherSchedule(ohhs, { lunchWave: "A", activeBellScheduleId: null });
+  resolveTeacherSchedule(ohhs, { lunchWave: "B", activeBellScheduleId: null });
+  resolveTeacherSchedule(ohhs, { lunchWave: "C", activeBellScheduleId: null });
   check("31: changing lunch does not mutate OHHS_REGULAR", JSON.stringify(ohhs) === beforeJson);
 
   const fakeStore = new Map<string, string>();
@@ -198,7 +198,7 @@ console.log("\n21-33. Lunch wave resolution");
     },
   };
   const repo = new LocalStorageDataRepository();
-  const withLunch: AppData = { ...createDemoAppData(), teacherSchedulePreferences: { lunchWave: "C" } };
+  const withLunch: AppData = { ...createDemoAppData(), teacherSchedulePreferences: { lunchWave: "C", activeBellScheduleId: null } };
   await repo.save(withLunch);
   const reloaded = await repo.load();
   check("32: lunch preference persists through DataRepository", reloaded.teacherSchedulePreferences.lunchWave === "C");
@@ -266,7 +266,12 @@ console.log("\n41-60. Master Calendar resolution");
   });
   const calendar = commit.calendar;
   const bellSchedules = [ohhs, ...commit.newBellSchedules];
-  const teacherPreferences = DEFAULT_TEACHER_SCHEDULE_PREFERENCES;
+  // A real teacher resolving "normal day" has explicitly chosen an active
+  // schedule (Stage D: calendar.defaultBellScheduleId is never consulted
+  // for ordinary-day resolution - only activeBellScheduleId is) - so this
+  // fixture must set one, matching real usage, rather than leaving it null
+  // and getting "unconfigured-schedule" for every ordinary day below.
+  const teacherPreferences = { ...DEFAULT_TEACHER_SCHEDULE_PREFERENCES, activeBellScheduleId: OHHS_REGULAR_ID };
 
   function resolve(dateKey: string) {
     return resolveSchoolDate({ dateKey, calendar, bellSchedules, teacherPreferences });
@@ -486,7 +491,7 @@ console.log("\n76-84. Bell Schedule import (CSV/paste)");
 
   if (csvResult.ok) {
     const blocks = buildScheduleBlocksFromRows(csvResult.rows, "imported-test");
-    const newSchedule: BellSchedule = { id: "imported-test", name: "Imported", isDefault: false, timeZone: "America/Detroit", source: "imported", blocks };
+    const newSchedule: BellSchedule = { id: "imported-test", name: "Imported", ownerType: "teacher", isDefault: false, timeZone: "America/Detroit", source: "imported", blocks };
     let state: AppData = createDemoAppData();
     const beforeCount = state.schedules.length;
     const priorDefault = state.schedules.find((s) => s.isDefault)?.id;

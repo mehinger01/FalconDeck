@@ -2,6 +2,7 @@ import type { BellSchedule } from "@/types/schedule";
 import type { SchoolCalendarException, SchoolDateResolution, SchoolYearCalendar } from "@/types/calendar";
 import type { TeacherSchedulePreferences } from "@/types/teacherSchedule";
 import { weekdayForDateKey } from "@/lib/schedule/localDate";
+import { resolveActiveSchedule } from "@/lib/schedule/resolveActiveSchedule";
 import { resolveTeacherSchedule } from "@/lib/schedule/resolveTeacherSchedule";
 
 function findExceptionsForDate(calendar: SchoolYearCalendar, dateKey: string): SchoolCalendarException[] {
@@ -35,9 +36,28 @@ function resolveRegular(
  * existing schedule engine (getPresentationState et al. still take a plain
  * BellSchedule and know nothing about calendars). Deterministic precedence
  * regardless of exception array order: NO_SCHOOL > NO_STUDENTS >
- * SPECIAL_BELL > (weekend | regular). A `calendar` of `null` is a fully
- * supported "no Master Calendar configured yet" state - Master Calendar is
- * optional, so this falls back to whichever BellSchedule is marked default.
+ * SPECIAL_BELL > (weekend | regular).
+ *
+ * Both "regular" branches below - no Master Calendar configured at all, and
+ * an ordinary instructional day within a configured calendar - resolve
+ * through the SAME single call to resolveActiveSchedule(), computed once,
+ * up front, and reused everywhere a "regular" day needs a schedule. This is
+ * deliberate, not incidental: teacherSchedulePreferences.activeBellScheduleId
+ * is the only source of truth for "which schedule does this teacher use on
+ * an ordinary day," calendar-configured or not - never a schedule's own
+ * `isDefault` flag, and never calendar.defaultBellScheduleId (that field
+ * stays in the schema/type for legacy/calendar-metadata purposes only - see
+ * MasterCalendarScreen's own summary display - but must never become a
+ * second, competing source of truth for the teacher's ordinary active
+ * schedule). A date-specific SPECIAL_BELL exception is the one legitimate
+ * way a specific date resolves a DIFFERENT schedule than the teacher's
+ * active one - that's an explicit calendar exception for that date, not a
+ * competing default, and is resolved independently below, unchanged. A null
+ * active schedule (no explicit selection made yet) correctly produces
+ * `unconfigured-schedule` with a null `bellSchedule`, the same status a
+ * schedule with no block times produces - both mean "nothing usable to
+ * show," and downstream UI (see LivePresentScreen.tsx) already handles that
+ * status.
  */
 export function resolveSchoolDate({
   dateKey,
@@ -50,12 +70,13 @@ export function resolveSchoolDate({
   bellSchedules: BellSchedule[];
   teacherPreferences: TeacherSchedulePreferences;
 }): SchoolDateResolution {
+  const activeSchedule = resolveActiveSchedule(bellSchedules, teacherPreferences);
+
   if (!calendar) {
-    const defaultSchedule = bellSchedules.find((s) => s.isDefault) ?? bellSchedules[0] ?? null;
-    if (!isUsableSchedule(defaultSchedule)) {
-      return { dateKey, status: "unconfigured-schedule", bellSchedule: defaultSchedule ?? null };
+    if (!isUsableSchedule(activeSchedule)) {
+      return { dateKey, status: "unconfigured-schedule", bellSchedule: activeSchedule ?? null };
     }
-    return resolveRegular(dateKey, "regular", defaultSchedule, teacherPreferences);
+    return resolveRegular(dateKey, "regular", activeSchedule, teacherPreferences);
   }
 
   // An empty bound means "not known yet" (e.g. a calendar built purely
@@ -102,9 +123,12 @@ export function resolveSchoolDate({
     return { dateKey, status: "weekend", bellSchedule: null };
   }
 
-  const defaultSchedule = bellSchedules.find((s) => s.id === calendar.defaultBellScheduleId) ?? null;
-  if (!isUsableSchedule(defaultSchedule)) {
-    return { dateKey, status: "unconfigured-schedule", bellSchedule: defaultSchedule ?? null };
+  // An ordinary instructional day (configured calendar, no matching
+  // exception) - resolves through the SAME activeSchedule computed once at
+  // the top of this function. calendar.defaultBellScheduleId is
+  // deliberately never read here (see this function's own doc comment).
+  if (!isUsableSchedule(activeSchedule)) {
+    return { dateKey, status: "unconfigured-schedule", bellSchedule: activeSchedule ?? null };
   }
-  return resolveRegular(dateKey, "regular", defaultSchedule, teacherPreferences);
+  return resolveRegular(dateKey, "regular", activeSchedule, teacherPreferences);
 }

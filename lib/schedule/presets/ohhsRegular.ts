@@ -25,6 +25,7 @@ export function createOhhsRegularSchedule(): BellSchedule {
     id: OHHS_REGULAR_ID,
     name: "OHHS Regular Day",
     description: "Ogemaw Heights High School's standard bell schedule.",
+    ownerType: "teacher",
     isDefault: false,
     timeZone: "America/Detroit",
     source: "built-in",

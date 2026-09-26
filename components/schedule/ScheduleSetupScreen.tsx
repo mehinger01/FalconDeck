@@ -1,9 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { usePathname } from "next/navigation";
-import { useAppData } from "@/lib/store/AppDataProvider";
-import { dataRepository, saveDefaultScheduleSelection } from "@/lib/data/localStorageRepository";
+import { useAppData, useActiveSchedule } from "@/lib/store/AppDataProvider";
 import { validateSchedule } from "@/lib/schedule/validateSchedule";
 import { BellScheduleImportPanel } from "./BellScheduleImportPanel";
 import { BlockList } from "./BlockList";
@@ -14,156 +12,32 @@ import { ScheduleSectionTabs } from "./ScheduleSectionTabs";
 import { ValidationBanner } from "./ValidationBanner";
 
 export function ScheduleSetupScreen() {
-  const { data, actions, persistence } = useAppData();
-  const pathname = usePathname();
-  const isDemo = pathname.startsWith("/demo");
-  const defaultId = data.schedules.find((s) => s.isDefault)?.id ?? data.schedules[0]?.id ?? null;
-  const [selectedScheduleId, setSelectedScheduleId] = useState<string | null>(defaultId);
-  const [manualSaveState, setManualSaveState] = useState<
-    { status: "idle" | "saving" | "saved" | "error"; message: string }
-  >({ status: "idle", message: "" });
+  const { data, actions } = useAppData();
+  const activeSchedule = useActiveSchedule();
+  // The right-hand panel's "which schedule am I looking at" state - a
+  // teacher may browse any schedule they can see (including a shared one,
+  // read-only) without that changing which schedule is active. Defaults to
+  // the active schedule when one exists, purely as a starting point for
+  // this local view-state - never re-derived from isDefault/schedules[0].
+  const [selectedScheduleId, setSelectedScheduleId] = useState<string | null>(
+    activeSchedule?.id ?? data.schedules[0]?.id ?? null,
+  );
 
   const selectedSchedule =
     data.schedules.find((s) => s.id === selectedScheduleId) ?? data.schedules[0] ?? null;
-  const isEditable = selectedSchedule ? selectedSchedule.source !== "built-in" : false;
-
-  async function saveScheduleNow() {
-    if (isDemo) return;
-
-    if (!selectedSchedule) {
-      setManualSaveState({ status: "error", message: "Select a schedule before saving." });
-      return;
-    }
-
-    setManualSaveState({ status: "saving", message: "Saving schedule…" });
-
-    // The schedule currently selected in the left-hand list is the teacher's
-    // explicit choice. Persist a snapshot that makes that schedule the one
-    // and only default instead of relying on a separate, easy-to-miss action.
-    const dataToSave = {
-      ...data,
-      schedules: data.schedules.map((schedule) => ({
-        ...schedule,
-        isDefault: schedule.id === selectedSchedule.id,
-      })),
-    };
-
-    const appDataResult = await dataRepository.save(dataToSave);
-    if (!appDataResult.ok) {
-      setManualSaveState({
-        status: "error",
-        message: appDataResult.message || "Schedule could not be saved.",
-      });
-      return;
-    }
-
-    const defaultResult = saveDefaultScheduleSelection(selectedSchedule.id);
-    if (!defaultResult.ok) {
-      setManualSaveState({
-        status: "error",
-        message: defaultResult.message || "Default schedule choice could not be saved.",
-      });
-      return;
-    }
-
-    const verification = await dataRepository.load();
-    const verifiedDefault = verification.schedules.find((schedule) => schedule.isDefault);
-    if (verifiedDefault?.id !== selectedSchedule.id) {
-      setManualSaveState({
-        status: "error",
-        message: "Falcon Deck could not verify the selected schedule as default. Please try again.",
-      });
-      return;
-    }
-
-    // Keep the live React state aligned with the verified persisted state so
-    // the Default badge and My Daily Schedule panel update immediately too.
-    actions.setDefaultSchedule(selectedSchedule.id);
-
-    setManualSaveState({
-      status: "saved",
-      message: `${selectedSchedule.name} saved as your default.`,
-    });
-  }
+  const isEditable = selectedSchedule
+    ? selectedSchedule.ownerType === "teacher" && selectedSchedule.source !== "built-in"
+    : false;
 
   return (
     <div>
       <div className="mb-6">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h1 className="text-3xl font-bold text-falcon-brown-900">Schedule Setup</h1>
-            <p className="mt-1 text-sm text-falcon-brown-700/70">
-              Bell schedules define when each block happens. The Master Calendar (separate tab) decides
-              which schedule applies on which date.
-            </p>
-          </div>
-
-          <div className="flex flex-col items-end gap-2">
-            {!isDemo && (
-              <button
-                type="button"
-                onClick={saveScheduleNow}
-                disabled={manualSaveState.status === "saving" || !selectedSchedule}
-                className="rounded-md bg-falcon-brown-900 px-4 py-2 text-sm font-bold text-falcon-cream-100 shadow-sm hover:bg-falcon-brown-800 disabled:cursor-wait disabled:opacity-60"
-              >
-                {manualSaveState.status === "saving" ? "Saving…" : "Save Schedule"}
-              </button>
-            )}
-
-            {manualSaveState.status !== "idle" ? (
-              <div
-                role="status"
-                className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${
-                  manualSaveState.status === "error"
-                    ? "border-red-700/30 bg-red-50 text-red-900"
-                    : manualSaveState.status === "saving"
-                      ? "border-amber-600/30 bg-amber-50 text-amber-900"
-                      : "border-green-700/25 bg-green-50 text-green-900"
-                }`}
-              >
-                {manualSaveState.message}
-              </div>
-            ) : (
-              <div
-                role="status"
-                className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${
-                  persistence.status === "error"
-                    ? "border-red-700/30 bg-red-50 text-red-900"
-                    : persistence.status === "saving"
-                      ? "border-amber-600/30 bg-amber-50 text-amber-900"
-                      : persistence.status === "saved"
-                        ? "border-green-700/25 bg-green-50 text-green-900"
-                        : "border-falcon-brown-700/20 bg-white/50 text-falcon-brown-700/70"
-                }`}
-              >
-                {persistence.status === "error"
-                  ? `Autosave failed: ${persistence.error ?? "browser storage rejected the change"}`
-                  : persistence.status === "saving"
-                    ? "Autosaving…"
-                    : persistence.status === "saved"
-                      ? "Autosaved"
-                      : "Ready"}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {!isDemo && selectedSchedule && manualSaveState.status === "idle" && (
-          <p className="mt-2 text-xs text-falcon-brown-700/65">
-            Save Schedule will make <strong>{selectedSchedule.name}</strong> your default schedule and save your current setup.
-          </p>
-        )}
-
-        {manualSaveState.status === "error" && (
-          <p className="mt-2 rounded-lg border border-red-700/20 bg-red-50 p-3 text-sm text-red-900">
-            Manual save failed: {manualSaveState.message}
-          </p>
-        )}
-        {manualSaveState.status === "saved" && (
-          <p className="mt-2 rounded-lg border border-green-700/20 bg-green-50 p-3 text-sm text-green-900">
-            The selected schedule was saved as your default and verified by reloading it from browser storage.
-          </p>
-        )}
+        <h1 className="text-3xl font-bold text-falcon-brown-900">Schedule Setup</h1>
+        <p className="mt-1 text-sm text-falcon-brown-700/70">
+          Bell schedules define when each block happens. The Master Calendar (separate tab) decides
+          which schedule applies on which date. Use the list on the left to choose your active
+          schedule - shared school schedules are read-only; your own schedules are fully editable.
+        </p>
       </div>
 
       <ScheduleSectionTabs />
@@ -179,10 +53,7 @@ export function ScheduleSetupScreen() {
       <div className="flex flex-col gap-6 sm:flex-row">
         <ScheduleList
           selectedScheduleId={selectedSchedule?.id ?? null}
-          onSelect={(scheduleId) => {
-            setSelectedScheduleId(scheduleId);
-            setManualSaveState({ status: "idle", message: "" });
-          }}
+          onSelect={(scheduleId) => setSelectedScheduleId(scheduleId)}
         />
 
         <div className="min-w-0 flex-1">
@@ -200,6 +71,11 @@ export function ScheduleSetupScreen() {
                   </label>
                 ) : (
                   <h2 className="text-lg font-bold text-falcon-brown-900">{selectedSchedule.name}</h2>
+                )}
+                {selectedSchedule.ownerType === "organization" && (
+                  <span className="rounded-full bg-falcon-brown-700/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-falcon-brown-800">
+                    Shared - read only
+                  </span>
                 )}
                 {selectedSchedule.description && (
                   <p className="text-xs italic text-falcon-brown-700/60">{selectedSchedule.description}</p>

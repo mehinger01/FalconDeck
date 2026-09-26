@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useMemo, useState, type ChangeEvent } from "react";
-import { useAppData, useDefaultSchedule } from "@/lib/store/AppDataProvider";
+import { useAppData, useActiveSchedule } from "@/lib/store/AppDataProvider";
 import { generateId } from "@/lib/store/id";
 import { formatDateKeyLong } from "@/lib/schedule/localDate";
 import {
@@ -76,13 +76,13 @@ function sectionCountLabel(count: number): string {
  */
 export function LessonImportScreen() {
   const { data, actions, persistence } = useAppData();
-  const defaultSchedule = useDefaultSchedule();
+  const activeSchedule = useActiveSchedule();
   const [state, setState] = useState<WizardState>({ step: "select" });
 
   // Recomputed whenever the teacher maps an unmatched course name or
   // changes a conflict resolution - mapping one name applies to every row
   // that used it, since this rebuilds the whole preview from the original
-  // rows rather than patching one row in place. `defaultSchedule` decides
+  // rows rather than patching one row in place. `activeSchedule` decides
   // which of a course's sections are "active" (see
   // lib/schedule/activeSections.ts) - the same schedule Week View reads,
   // never modified here.
@@ -92,11 +92,11 @@ export function LessonImportScreen() {
       state.rows,
       data.courses,
       data.classSections,
-      defaultSchedule,
+      activeSchedule,
       data.lessons,
       state.courseMappings,
     );
-  }, [state, data.courses, data.classSections, defaultSchedule, data.lessons]);
+  }, [state, data.courses, data.classSections, activeSchedule, data.lessons]);
 
   // Every course name the file used that Falcon Deck can't auto-match,
   // independent of `state.courseMappings` - so a name's mapping dropdown

@@ -10,6 +10,7 @@ import type { BellSchedule, ScheduleBlock, ScheduleBlockOverride, Weekday } from
 import type { ClassroomExperienceSettings } from "@/types/classPresentation";
 import type { TeacherSchedulePreferences } from "@/types/teacherSchedule";
 import type { SchoolCalendarException, SchoolYearCalendar } from "@/types/calendar";
+import { resolveActiveSchedule } from "@/lib/schedule/resolveActiveSchedule";
 import {
   createContext,
   useCallback,
@@ -41,7 +42,18 @@ export interface AppDataActions extends LessonActions, LibraryResourceActions {
   duplicateSchedule: (scheduleId: string) => void;
   deleteSchedule: (scheduleId: string) => void;
   renameSchedule: (scheduleId: string, name: string) => void;
-  setDefaultSchedule: (scheduleId: string) => void;
+  /**
+   * The SOLE way to change which schedule is active - updates only
+   * teacherSchedulePreferences.activeBellScheduleId, through the normal
+   * reducer/save() path (repository-agnostic; never imports
+   * localStorageRepository directly). Never mutates any BellSchedule's own
+   * isDefault, and never copies a shared schedule - passing an
+   * organization-owned schedule's id simply references it. `null` clears
+   * the selection back to "no active schedule chosen." See
+   * lib/schedule/resolveActiveSchedule.ts for the read side of this same
+   * invariant.
+   */
+  setActiveBellSchedule: (scheduleId: string | null) => void;
   addBlock: (scheduleId: string) => void;
   updateBlock: (
     scheduleId: string,
@@ -247,6 +259,7 @@ export function AppDataProvider({
           schedule: {
             id: generateId("schedule"),
             name,
+            ownerType: "teacher",
             isDefault: false,
             timeZone: "America/Detroit",
             blocks: [],
@@ -268,7 +281,11 @@ export function AppDataProvider({
 
       deleteSchedule: (scheduleId) => dispatch({ type: "DELETE_SCHEDULE", scheduleId }),
       renameSchedule: (scheduleId, name) => dispatch({ type: "RENAME_SCHEDULE", scheduleId, name }),
-      setDefaultSchedule: (scheduleId) => dispatch({ type: "SET_DEFAULT_SCHEDULE", scheduleId }),
+      setActiveBellSchedule: (scheduleId) =>
+        dispatch({
+          type: "UPDATE_TEACHER_SCHEDULE_PREFERENCES",
+          patch: { activeBellScheduleId: scheduleId },
+        }),
 
       addBlock: (scheduleId) => {
         const schedule = data.schedules.find((s) => s.id === scheduleId);
@@ -414,8 +431,14 @@ export function useAppData(): AppDataContextValue {
   return ctx;
 }
 
-/** Convenience selector for the schedule currently marked as default. */
-export function useDefaultSchedule(): BellSchedule | null {
+/**
+ * Convenience selector for the teacher's active schedule - resolves purely
+ * via teacherSchedulePreferences.activeBellScheduleId (see
+ * lib/schedule/resolveActiveSchedule.ts), never isDefault/schedules[0]. May
+ * return `null` (no explicit selection made yet); callers must handle that
+ * state explicitly rather than assume a schedule always exists.
+ */
+export function useActiveSchedule(): BellSchedule | null {
   const { data } = useAppData();
-  return data.schedules.find((s) => s.isDefault) ?? data.schedules[0] ?? null;
+  return resolveActiveSchedule(data.schedules, data.teacherSchedulePreferences);
 }

@@ -3,10 +3,10 @@ import type { BellSchedule } from "./schedule";
 /**
  * The Master Calendar: what kind of school day a given date is, and which
  * BellSchedule (if any) applies. Deliberately an "exception overlay" - most
- * dates within the school year are implicitly regular days using
- * `defaultBellScheduleId`; only exceptions to that (no school, no students,
- * a special bell schedule) get their own record. This is what keeps a
- * whole school year from requiring hundreds of normal-day rows.
+ * dates within the school year are implicitly regular days; only exceptions
+ * to that (no school, no students, a special bell schedule) get their own
+ * record. This is what keeps a whole school year from requiring hundreds of
+ * normal-day rows.
  */
 export type SchoolDayExceptionType = "no-school" | "no-students" | "special-bell";
 
@@ -36,6 +36,15 @@ export interface SchoolYearCalendar {
   firstStudentDay: string;
   /** "YYYY-MM-DD" */
   lastStudentDay: string;
+  /**
+   * Legacy/calendar-metadata only (e.g. shown on MasterCalendarScreen's own
+   * summary, and reconciled during Master Calendar import/re-import) - NOT
+   * consulted by resolveSchoolDate.ts to pick the teacher's ordinary-day
+   * schedule. teacherSchedulePreferences.activeBellScheduleId is the only
+   * source of truth for that, calendar-configured or not - see
+   * lib/schedule/resolveActiveSchedule.ts and resolveSchoolDate.ts's own
+   * doc comment for the full rationale.
+   */
   defaultBellScheduleId: string;
   exceptions: SchoolCalendarException[];
 }

@@ -15,7 +15,7 @@ export interface AppData {
   classroomExperienceSettings: ClassroomExperienceSettings;
   libraryResources: LibraryResource[];
   teacherSchedulePreferences: TeacherSchedulePreferences;
-  /** `null` = no Master Calendar imported yet - fully supported; Live Present Mode falls back to whichever BellSchedule is marked default. */
+  /** `null` = no Master Calendar imported yet - fully supported; Live Present Mode resolves against the teacher's active schedule (see lib/schedule/resolveActiveSchedule.ts), never a schedule's own `isDefault` flag. */
   schoolCalendar: SchoolYearCalendar | null;
 }
 

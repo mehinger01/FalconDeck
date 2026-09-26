@@ -484,7 +484,7 @@ console.log("\n32-35. Onboarding detection");
   const empty: AppData = {
     courses: [],
     classSections: [],
-    schedules: [{ id: "s1", name: "Empty", isDefault: true, timeZone: "America/Detroit", blocks: [] }],
+    schedules: [{ id: "s1", name: "Empty", ownerType: "teacher", isDefault: true, timeZone: "America/Detroit", blocks: [] }],
     lessons: [],
     classPresentationSettings: [],
     classroomExperienceSettings: state.classroomExperienceSettings,
@@ -518,6 +518,7 @@ console.log("\n36-37. No hard-coded period assumptions or Thursday/SAT-specific 
   const customSchedule: BellSchedule = {
     id: "schedule-custom-verify",
     name: "Custom Verify Schedule",
+    ownerType: "teacher",
     isDefault: true,
     timeZone: "America/Detroit",
     blocks: [

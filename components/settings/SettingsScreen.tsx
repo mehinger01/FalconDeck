@@ -1,13 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useAppData, useDefaultSchedule } from "@/lib/store/AppDataProvider";
+import { useAppData, useActiveSchedule } from "@/lib/store/AppDataProvider";
 import { PresentModeBrandingSection } from "@/components/settings/PresentModeBrandingSection";
 import { BellClockOffsetSection } from "@/components/settings/BellClockOffsetSection";
 
 export function SettingsScreen() {
   const { data, actions } = useAppData();
-  const defaultSchedule = useDefaultSchedule();
+  const activeSchedule = useActiveSchedule();
   const classroomExperience = data.classroomExperienceSettings;
 
   return (
@@ -22,25 +22,30 @@ export function SettingsScreen() {
 
       <section className="rounded-xl border border-falcon-brown-700/15 bg-white/60 p-4">
         <h2 className="text-sm font-bold uppercase tracking-wide text-falcon-brown-700/70">
-          Default Schedule
+          Active Schedule
         </h2>
         <p className="mt-1 text-sm text-falcon-brown-700/70">
-          Present Mode always follows the schedule marked default.
+          Present Mode and Week View always follow your active schedule. Shared school schedules are
+          read-only; your own schedules can be edited in Schedule Setup.
         </p>
         <select
-          value={defaultSchedule?.id ?? ""}
-          onChange={(e) => actions.setDefaultSchedule(e.target.value)}
+          value={activeSchedule?.id ?? ""}
+          onChange={(e) => actions.setActiveBellSchedule(e.target.value || null)}
           className="mt-3 w-full rounded-md border border-falcon-brown-700/30 bg-white px-2 py-2 text-sm text-falcon-brown-900"
         >
+          <option value="" disabled>
+            Choose a schedule…
+          </option>
           {data.schedules.map((schedule) => (
             <option key={schedule.id} value={schedule.id}>
               {schedule.name}
+              {schedule.ownerType === "organization" ? " (Shared)" : ""}
             </option>
           ))}
         </select>
-        {defaultSchedule && (
+        {activeSchedule && (
           <p className="mt-2 text-xs text-falcon-brown-700/60">
-            Time zone: {defaultSchedule.timeZone}
+            Time zone: {activeSchedule.timeZone}
           </p>
         )}
       </section>

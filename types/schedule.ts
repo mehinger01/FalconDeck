@@ -84,6 +84,27 @@ export interface BellSchedule {
   id: string;
   name: string;
   description?: string;
+  /**
+   * "organization" = school-shared, read-only for an ordinary teacher;
+   * "teacher" = owned by the current teacher (RLS/bell_schedules_select
+   * already guarantees any "teacher"-owned row reaching this app is always
+   * the CALLER's own - another teacher's private schedule is never
+   * fetchable at all - so no separate ownerMembershipId is carried here;
+   * ownerType alone fully answers "can I edit this"). See Stage D's
+   * architecture review (join-existing-school initiative) for the full
+   * ownership model this mirrors (courses.owner_type, bell_schedules.owner_type
+   * in Supabase).
+   */
+  ownerType: "organization" | "teacher";
+  /**
+   * NOT the teacher's active schedule - see
+   * TeacherSchedulePreferences.activeBellScheduleId for that. Meaning
+   * depends on ownerType: for an organization-owned schedule, the school
+   * admin's designated recommended/default shared schedule (shown as a
+   * "Recommended" badge, never auto-selected); for a teacher-owned
+   * schedule, legacy/non-authoritative bookkeeping only - never consulted
+   * to resolve which schedule is active.
+   */
   isDefault: boolean;
   /** IANA time zone this schedule's start/end times are expressed in. */
   timeZone: string;

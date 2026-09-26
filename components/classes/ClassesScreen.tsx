@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { useAppData, useDefaultSchedule } from "@/lib/store/AppDataProvider";
+import { useAppData, useActiveSchedule } from "@/lib/store/AppDataProvider";
 import { getLocalDateKey } from "@/lib/schedule/localDate";
 import { DEFAULT_TIME_ZONE } from "@/lib/schedule/time";
 import { findClassPresentationSettings } from "@/lib/data/classPresentation";
@@ -10,21 +10,21 @@ import { ArrivalRoutineEditor } from "./ArrivalRoutineEditor";
 
 export function ClassesScreen() {
   const { data, actions } = useAppData();
-  const defaultSchedule = useDefaultSchedule();
-  const todayKey = getLocalDateKey(new Date(), defaultSchedule?.timeZone ?? DEFAULT_TIME_ZONE);
+  const activeSchedule = useActiveSchedule();
+  const todayKey = getLocalDateKey(new Date(), activeSchedule?.timeZone ?? DEFAULT_TIME_ZONE);
   const [newCourseName, setNewCourseName] = useState("");
   const [newSectionName, setNewSectionName] = useState("");
   const [newSectionCourseId, setNewSectionCourseId] = useState("");
   const [expandedRoutineSectionId, setExpandedRoutineSectionId] = useState<string | null>(null);
 
   const scheduledSectionIds = useMemo(() => {
-    if (!defaultSchedule) return new Set<string>();
+    if (!activeSchedule) return new Set<string>();
     return new Set(
-      defaultSchedule.blocks
+      activeSchedule.blocks
         .filter((block) => block.kind !== "passing" && block.classSectionId)
         .map((block) => block.classSectionId as string),
     );
-  }, [defaultSchedule]);
+  }, [activeSchedule]);
 
   const scheduledSections = data.classSections.filter((section) => scheduledSectionIds.has(section.id));
   const unscheduledSections = data.classSections.filter((section) => !scheduledSectionIds.has(section.id));

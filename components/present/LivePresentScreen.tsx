@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { useAppData } from "@/lib/store/AppDataProvider";
 import { getPresentationState } from "@/lib/schedule/getPresentationState";
 import { getLocalDateKey, weekdayForDateKey } from "@/lib/schedule/localDate";
+import { resolveActiveSchedule } from "@/lib/schedule/resolveActiveSchedule";
 import { DEFAULT_TIME_ZONE } from "@/lib/schedule/time";
 import { resolveSchoolDate } from "@/lib/calendar/resolveSchoolDate";
 import { findLessonForSection } from "@/lib/data/lessons";
@@ -14,6 +15,7 @@ import { ClassroomView } from "./ClassroomView";
 import { NoScheduleView } from "./NoScheduleView";
 import { PresentHeader } from "./PresentHeader";
 import { PrepView } from "./PrepView";
+import { SelectScheduleNeededScreen } from "./SelectScheduleNeededScreen";
 import { NoSchoolScreen } from "./calendar/NoSchoolScreen";
 import { NoStudentsScreen } from "./calendar/NoStudentsScreen";
 import { UnconfiguredScheduleScreen } from "./calendar/UnconfiguredScheduleScreen";
@@ -116,7 +118,9 @@ export function LivePresentScreen({
   const now = effectiveNow;
 
   const timeZone =
-    data.schoolCalendar?.timeZone ?? data.schedules.find((s) => s.isDefault)?.timeZone ?? DEFAULT_TIME_ZONE;
+    data.schoolCalendar?.timeZone ??
+    resolveActiveSchedule(data.schedules, data.teacherSchedulePreferences)?.timeZone ??
+    DEFAULT_TIME_ZONE;
   const dateKey = now ? getLocalDateKey(now, timeZone) : null;
 
   const dateResolution = dateKey
@@ -153,9 +157,17 @@ export function LivePresentScreen({
 
       {dateResolution.status === "no-school" && <NoSchoolScreen title={dateResolution.title} />}
       {dateResolution.status === "no-students" && <NoStudentsScreen title={dateResolution.title} />}
-      {dateResolution.status === "unconfigured-schedule" && (
-        <UnconfiguredScheduleScreen title={dateResolution.title} />
-      )}
+      {dateResolution.status === "unconfigured-schedule" &&
+        (dateResolution.bellSchedule === null ? (
+          // Distinct from an actual schedule missing block times: no
+          // explicit active-schedule selection has been made at all (see
+          // lib/schedule/resolveActiveSchedule.ts - deliberately no
+          // fallback to isDefault/schedules[0]/an organization default).
+          // Never silently choose one - send the teacher to pick.
+          <SelectScheduleNeededScreen />
+        ) : (
+          <UnconfiguredScheduleScreen title={dateResolution.title} />
+        ))}
       {(dateResolution.status === "weekend" || dateResolution.status === "outside-school-year") && (
         <NoScheduleView weekday={weekdayForDateKey(dateResolution.dateKey)} />
       )}

@@ -21,6 +21,19 @@ import { BACKUP_FORMAT_VERSION } from "./downloadBackup";
  * Never restores into Supabase, never mutates local_data_migrated_at, and
  * never triggers a migration - restoring only ever writes to the same
  * localStorage key regular local saves already use.
+ *
+ * Stage D note (join-existing-school initiative): this module's own
+ * isDefault-based repair logic and saveDefaultScheduleSelection() call
+ * below are intentionally UNTOUCHED and exempt from the
+ * activeBellScheduleId-only resolution rule (lib/schedule/resolveActiveSchedule.ts).
+ * They exist to keep localStorageRepository's own legacy
+ * DEFAULT_SCHEDULE_KEY quirk (see that file) consistent after a restore -
+ * a mechanism scoped entirely to accounts still on the "local" authority
+ * (a legacy_import membership whose migration hasn't completed - see
+ * RestoreBackupCard's own gate), which can never be a Stage D
+ * teacher_schedule_preferences.active_bell_schedule_id-resolving account by
+ * construction. This is the one deliberate, isolated legacy-compatibility
+ * exception Stage D's design allows for.
  */
 
 // ---------------------------------------------------------------------------

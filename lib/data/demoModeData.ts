@@ -283,7 +283,12 @@ export function createDemoModeAppData(): AppData {
     classPresentationSettings: DEMO_ARRIVAL_ROUTINES,
     classroomExperienceSettings: DEMO_CLASSROOM_EXPERIENCE_SETTINGS,
     libraryResources: DEMO_LIBRARY_RESOURCES,
-    teacherSchedulePreferences: { lunchWave: "B" },
+    // Demo Mode is a "fully configured sample classroom" by design - an
+    // explicit activeBellScheduleId here (not left null) is what makes
+    // Present Mode/Week View resolve a real schedule immediately, matching
+    // that promise; resolveActiveSchedule.ts makes zero exception for Demo
+    // Mode, so this must be set explicitly like any other teacher's choice.
+    teacherSchedulePreferences: { lunchWave: "B", activeBellScheduleId: ohhsRegular.id },
     schoolCalendar: calendar,
   });
 }

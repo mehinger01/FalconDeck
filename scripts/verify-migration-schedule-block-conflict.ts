@@ -262,6 +262,7 @@ async function main() {
     const scheduleWithOverride: BellSchedule = {
       id: "schedule-with-override",
       name: "Has An Override",
+      ownerType: "teacher",
       isDefault: false,
       timeZone: "America/Detroit",
       blocks: [
@@ -336,6 +337,7 @@ async function main() {
     const scheduleWithOverride: BellSchedule = {
       id: "schedule-legacy-with-override",
       name: "Legacy With Override",
+      ownerType: "teacher",
       isDefault: false,
       timeZone: "America/Detroit",
       blocks: [
@@ -483,6 +485,7 @@ async function main() {
     const scheduleA: BellSchedule = {
       id: "schedule-A",
       name: "Schedule A",
+      ownerType: "teacher",
       isDefault: true,
       timeZone: "America/Detroit",
       blocks: [{ id: "block-1", label: "Old A", kind: "instructional", startTime: "08:00", endTime: "08:45", overrides: [] }],
@@ -490,6 +493,7 @@ async function main() {
     const scheduleB: BellSchedule = {
       id: "schedule-B",
       name: "Schedule B (legacy duplicate, shares block-1's raw id)",
+      ownerType: "teacher",
       isDefault: false,
       timeZone: "America/Detroit",
       blocks: [{ id: "block-1", label: "Old B", kind: "instructional", startTime: "09:00", endTime: "09:45", overrides: [] }],

@@ -366,6 +366,7 @@ function createPlaceholderForProfileKey(profileKey: string, exceptionTitle: stri
   return {
     id: profileKey,
     name: exceptionTitle || profileKey,
+    ownerType: "teacher",
     isDefault: false,
     timeZone: "America/Detroit",
     source: "imported",

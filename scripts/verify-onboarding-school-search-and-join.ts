@@ -336,8 +336,8 @@ console.log("\n12. supabase.types.ts was actually regenerated to include the new
 console.log("\n13. supabaseMapping.ts's pre-existing write path was not silently broken by the type regeneration");
 {
   check(
-    "13a: teacherSchedulePreferencesToRow explicitly sets active_bell_schedule_id (the new required Insert field), rather than leaving it to accidentally type-check some other way",
-    /active_bell_schedule_id: null,/.test(supabaseMapping),
+    "13a: teacherSchedulePreferencesToRow forwards prefs.activeBellScheduleId (Stage D's real local field) - the Stage C placeholder that hardcoded null here (written before the client-side concept existed) is gone by design, not a regression",
+    /active_bell_schedule_id: prefs\.activeBellScheduleId,/.test(supabaseMapping),
   );
 }
 

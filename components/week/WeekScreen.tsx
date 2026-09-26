@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { useAppData, useDefaultSchedule } from "@/lib/store/AppDataProvider";
+import { useAppData, useActiveSchedule } from "@/lib/store/AppDataProvider";
 import { resolveActiveSectionStartTimes } from "@/lib/schedule/activeSections";
 import { getLocalDateKey } from "@/lib/schedule/localDate";
 import { DEFAULT_TIME_ZONE } from "@/lib/schedule/time";
@@ -20,14 +20,14 @@ import { WeekHeader } from "./WeekHeader";
  * projected fresh from `courses`/`classSections`/`lessons` on every render.
  *
  * "Active" (see lib/schedule/activeSections.ts) means referenced by at least
- * one non-passing block in the current default schedule. Rows are ordered by
+ * one non-passing block in the current active schedule. Rows are ordered by
  * the earliest assigned block start time so the planning surface mirrors the
  * teacher's actual school day rather than creation/storage order.
  */
 export function WeekScreen() {
   const searchParams = useSearchParams();
   const { data } = useAppData();
-  const schedule = useDefaultSchedule();
+  const schedule = useActiveSchedule();
   const timeZone = schedule?.timeZone ?? DEFAULT_TIME_ZONE;
 
   const todayDateKey = getLocalDateKey(new Date(), timeZone);
@@ -110,7 +110,7 @@ export function WeekScreen() {
 
       {activeSections.length === 0 ? (
         <p className="rounded-lg border border-dashed border-falcon-brown-700/30 p-6 text-center text-sm text-falcon-brown-700/60">
-          No active class sections are assigned to your default schedule yet. Map sections in Schedule Setup to start planning a week.
+          No active class sections are assigned to your active schedule yet. Choose or map a schedule in Schedule Setup to start planning a week.
         </p>
       ) : (
         <>
