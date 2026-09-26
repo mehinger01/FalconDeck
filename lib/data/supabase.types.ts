@@ -647,24 +647,30 @@ export type Database = {
       }
       organizations: {
         Row: {
+          city: string | null
           created_at: string
           id: string
           name: string
           slug: string
+          state: string | null
           updated_at: string
         }
         Insert: {
+          city?: string | null
           created_at?: string
           id?: string
           name: string
           slug: string
+          state?: string | null
           updated_at?: string
         }
         Update: {
+          city?: string | null
           created_at?: string
           id?: string
           name?: string
           slug?: string
+          state?: string | null
           updated_at?: string
         }
         Relationships: []
@@ -1067,6 +1073,7 @@ export type Database = {
       }
       teacher_schedule_preferences: {
         Row: {
+          active_bell_schedule_id: string | null
           created_at: string
           lunch_wave: string
           organization_id: string
@@ -1074,6 +1081,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          active_bell_schedule_id?: string | null
           created_at?: string
           lunch_wave?: string
           organization_id: string
@@ -1081,6 +1089,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          active_bell_schedule_id?: string | null
           created_at?: string
           lunch_wave?: string
           organization_id?: string
@@ -1088,6 +1097,13 @@ export type Database = {
           updated_at?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "active_bell_schedule_id_same_org_fkey"
+            columns: ["organization_id", "active_bell_schedule_id"]
+            isOneToOne: false
+            referencedRelation: "bell_schedules"
+            referencedColumns: ["organization_id", "id"]
+          },
           {
             foreignKeyName: "teacher_schedule_preferences_organization_id_fkey"
             columns: ["organization_id"]
@@ -1118,6 +1134,13 @@ export type Database = {
       }
       bootstrap_organization: {
         Args: { organization_name: string }
+        Returns: {
+          membership_id: string
+          organization_id: string
+        }[]
+      }
+      join_existing_school: {
+        Args: { target_organization_id: string }
         Returns: {
           membership_id: string
           organization_id: string

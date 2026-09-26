@@ -139,3 +139,67 @@ export function destinationForResolution(resolution: ActiveOrganizationResolutio
 export async function resolveDataAuthorityState(): Promise<DataAuthorityState> {
   return deriveDataAuthorityState(await resolveActiveOrganization());
 }
+
+export interface SchoolSearchResult {
+  id: string;
+  name: string;
+  city: string | null;
+  state: string | null;
+}
+
+/** A search term shorter than this never queries organizations at all - avoids a full-table scan on every keystroke-equivalent request. */
+export const SCHOOL_SEARCH_MIN_LENGTH = 2;
+const SCHOOL_SEARCH_RESULT_LIMIT = 20;
+
+/**
+ * Escapes ILIKE's own wildcard characters (`%`, `_`) and its escape
+ * character itself (`\`) so user-entered text is matched literally, never
+ * as a pattern - a search for "50%" or "under_grad" must not silently widen
+ * to an unintended match. Postgres ILIKE's default ESCAPE character is `\`,
+ * so escaping is exactly "prefix any of \ % _ with an extra \", in that
+ * order (the backslash itself must be escaped first, or a literal `%` in
+ * the input would double-escape into something else).
+ */
+function escapeLikePattern(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+}
+
+export interface SchoolSearchOutcome {
+  schools: SchoolSearchResult[];
+  /** A user-safe, generic message - never the raw Supabase/database error text. Null means no error occurred (including the "query too short to search" case, which is not an error). */
+  error: string | null;
+}
+
+/** Shown for any search-query failure - deliberately generic so raw database/Supabase error text never reaches the user. */
+const SCHOOL_SEARCH_GENERIC_ERROR = "We couldn't search schools. Try again.";
+
+/**
+ * Server-rendered school search for onboarding's "Find your school" screen
+ * (Stage C design: a plain GET `?q=` query param re-rendered by the Server
+ * Component itself - deliberately no client-side fetch/debounce/API-route
+ * infrastructure). Selects only id/name/city/state - organizations' existing
+ * `organizations_select_any_authenticated` policy (SELECT, `qual = true`)
+ * already permits this for any authenticated user; not broadened for this.
+ * A query shorter than SCHOOL_SEARCH_MIN_LENGTH never reaches the database
+ * and is NOT an error - it's the page's own "nothing searched yet" state.
+ *
+ * Returns `{ schools, error }` rather than throwing or returning `[]` for
+ * both cases, so the caller can distinguish "searched, zero matches" from
+ * "the search itself failed" - the two must never look the same to a user
+ * (a failed query must not silently read as "your school doesn't exist").
+ */
+export async function searchOrganizations(rawQuery: string): Promise<SchoolSearchOutcome> {
+  const trimmed = rawQuery.trim();
+  if (trimmed.length < SCHOOL_SEARCH_MIN_LENGTH) return { schools: [], error: null };
+
+  const supabase = await createSupabaseServerClient();
+  const { data, error } = await supabase
+    .from("organizations")
+    .select("id, name, city, state")
+    .ilike("name", `%${escapeLikePattern(trimmed)}%`)
+    .order("name")
+    .limit(SCHOOL_SEARCH_RESULT_LIMIT);
+
+  if (error) return { schools: [], error: SCHOOL_SEARCH_GENERIC_ERROR };
+  return { schools: data ?? [], error: null };
+}

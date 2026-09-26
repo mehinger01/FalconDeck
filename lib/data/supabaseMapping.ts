@@ -342,6 +342,13 @@ export function teacherSchedulePreferencesToRow(
     owner_membership_id: ctx.membershipId,
     organization_id: ctx.organizationId,
     lunch_wave: prefs.lunchWave,
+    // active_bell_schedule_id has no local TeacherSchedulePreferences field
+    // yet (bell-schedule selection is a later stage's client plumbing) -
+    // same precedent as classroomExperienceSettingsToRow's own
+    // watermark_override_storage_path: null below: this mapper owns every
+    // column of its row, so an unmodeled column is written explicitly
+    // rather than silently omitted.
+    active_bell_schedule_id: null,
   };
 }
 
