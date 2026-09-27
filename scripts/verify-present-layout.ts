@@ -170,6 +170,7 @@ function buildAppData(finalFiveMessage: string): AppData {
     teacherSchedulePreferences: DEFAULT_TEACHER_SCHEDULE_PREFERENCES,
     schoolCalendar: DEMO_SCHOOL_CALENDAR,
     teacherPeriodAssignments: [],
+    transitionOverrides: [],
   };
 }
 

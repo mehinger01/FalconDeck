@@ -129,6 +129,7 @@ export class LocalStorageDataRepository implements DataRepository {
       },
       schoolCalendar: normalizedCalendar,
       teacherPeriodAssignments: stored.teacherPeriodAssignments ?? [],
+      transitionOverrides: stored.transitionOverrides ?? [],
     };
   }
 

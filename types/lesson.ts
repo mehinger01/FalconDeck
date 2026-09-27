@@ -72,6 +72,18 @@ export interface DailyLesson {
    * created before this field existed or with nothing entered.
    */
   materials?: string;
+  /**
+   * Free-text warm-up / bell-ringer for this lesson (e.g. "1. Find the
+   * midpoint of... 2. Name the angle pair..."). Same optionality and
+   * rendering convention as `materials` - `undefined` for any lesson
+   * created before this field existed or with nothing entered, no "no
+   * warm-up" placeholder card. This is the sole canonical warm-up source;
+   * it is never derived from `agendaItems` (a lesson's agenda may still
+   * contain an item titled "Warm-up: ..." by convention, but that is
+   * unstructured agenda text, not this field, and the two are never
+   * cross-populated).
+   */
+  warmup?: string;
   /** ISO 8601 timestamps, informational only. */
   createdAt: string;
   updatedAt: string;

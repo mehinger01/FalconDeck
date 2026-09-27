@@ -194,6 +194,16 @@ function validateAppDataShape(value: Record<string, unknown>): string | null {
     }
   }
 
+  const transitionOverrides = value.transitionOverrides;
+  if (transitionOverrides !== undefined) {
+    if (!Array.isArray(transitionOverrides)) return "This backup's transition overrides are the wrong shape.";
+    for (const override of transitionOverrides) {
+      if (!isPlainObject(override) || !isNonEmptyString(override.id) || !isNonEmptyString(override.date) || !isNonEmptyString(override.classSectionId)) {
+        return "This backup contains a transition override with a missing or invalid id/date/class section.";
+      }
+    }
+  }
+
   const schoolCalendar = value.schoolCalendar;
   if (schoolCalendar !== undefined && schoolCalendar !== null) {
     if (!isPlainObject(schoolCalendar) || !isNonEmptyString(schoolCalendar.id) || !isNonEmptyString(schoolCalendar.defaultBellScheduleId)) {
@@ -242,6 +252,7 @@ function normalizeParsedAppData(value: Record<string, unknown>): AppData {
     },
     schoolCalendar: (value.schoolCalendar as AppData["schoolCalendar"] | undefined) ?? null,
     teacherPeriodAssignments: (value.teacherPeriodAssignments as AppData["teacherPeriodAssignments"] | undefined) ?? [],
+    transitionOverrides: (value.transitionOverrides as AppData["transitionOverrides"] | undefined) ?? [],
   };
 }
 

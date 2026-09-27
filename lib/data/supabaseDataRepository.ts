@@ -155,6 +155,12 @@ export async function fetchAppData(client: Client, ctx: OwnerContext): Promise<A
     teacherSchedulePreferences: Map_.rowToTeacherSchedulePreferences(unwrap(prefsRes, "load teacher_schedule_preferences")),
     schoolCalendar,
     teacherPeriodAssignments,
+    // No `transition_overrides` table exists yet (Stage A of the
+    // transition-content initiative is model-only) - always empty until
+    // that Stage B schema/mapping work ships. Same pattern as
+    // `customWatermarkDataUrl: undefined` in rowToClassroomExperienceSettings
+    // for a known field with no Supabase-backed source yet.
+    transitionOverrides: [],
   };
 }
 

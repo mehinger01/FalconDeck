@@ -368,5 +368,8 @@ export function createDemoAppData(): AppData {
     // No organization-owned schedule exists in demo data (Stage E scope) -
     // nothing to bridge a class section onto yet.
     teacherPeriodAssignments: [],
+    // No transition overrides in demo data - the transition screen falls
+    // back to each day's live DailyLesson materials/warmup by default.
+    transitionOverrides: [],
   });
 }

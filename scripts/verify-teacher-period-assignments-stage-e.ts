@@ -92,6 +92,7 @@ function baseAppData(): AppData {
     teacherSchedulePreferences: DEFAULT_TEACHER_SCHEDULE_PREFERENCES,
     schoolCalendar: null,
     teacherPeriodAssignments: [],
+    transitionOverrides: [],
   };
 }
 

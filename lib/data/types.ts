@@ -6,6 +6,7 @@ import type { LibraryResource } from "@/types/resource";
 import type { TeacherSchedulePreferences } from "@/types/teacherSchedule";
 import type { SchoolYearCalendar } from "@/types/calendar";
 import type { TeacherPeriodAssignment } from "@/types/teacherPeriodAssignment";
+import type { TransitionOverride } from "@/types/transitionOverride";
 
 export interface AppData {
   courses: Course[];
@@ -26,6 +27,15 @@ export interface AppData {
    * alike; Stage E's own UI only ever creates/edits the former.
    */
   teacherPeriodAssignments: TeacherPeriodAssignment[];
+  /**
+   * Teacher-owned overlays for Present Mode's automatic transition screen -
+   * see TransitionOverride's own doc comment. Sparse: at most one entry per
+   * `(date, classSectionId)` pair, only entries a teacher has actually
+   * customized. Independent of `lessons` - an override may exist for a
+   * date/section with no DailyLesson at all, and a DailyLesson may exist
+   * with no override.
+   */
+  transitionOverrides: TransitionOverride[];
 }
 
 /** A reason code callers can use to tailor messaging (e.g. "try a smaller image" only makes sense for quota-exceeded). */
