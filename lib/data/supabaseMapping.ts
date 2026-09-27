@@ -421,8 +421,17 @@ export function rowToScheduleBlockOverride(row: ScheduleBlockOverridesRow): Sche
     label: row.label ?? undefined,
     kind: (row.kind as ScheduleBlockOverride["kind"]) ?? undefined,
     customKindLabel: row.custom_kind_label ?? undefined,
-    // Reverse of the tri-state mapping in scheduleBlockOverrideToRow.
-    classSectionId: row.class_section_overridden ? row.class_section_id : undefined,
+    // Reverse of the tri-state mapping in scheduleBlockOverrideToRow. Unlike
+    // every other optional field above (which resolveBlockOverride.ts reads
+    // via `??`, so an always-present-but-undefined key is harmless),
+    // classSectionId is read there via `"classSectionId" in override` -
+    // property PRESENCE, not value, distinguishes "not overridden" from
+    // "explicitly unassigned". The key must therefore be omitted entirely
+    // when this override never touched class assignment, not merely set to
+    // undefined - a bare `classSectionId: cond ? x : undefined` still
+    // creates the key and silently broke this contract for any time/label
+    // -only override once it round-tripped through Supabase.
+    ...(row.class_section_overridden ? { classSectionId: row.class_section_id } : {}),
     startTime: row.start_time ? normalizeDbTime(row.start_time) : undefined,
     endTime: row.end_time ? normalizeDbTime(row.end_time) : undefined,
   };

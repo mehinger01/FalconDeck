@@ -12,8 +12,9 @@
 
 import * as Map_ from "@/lib/data/supabaseMapping";
 import type { OwnerContext } from "@/lib/data/supabaseMapping";
+import { resolveBlockOverride, resolveScheduleForWeekday } from "@/lib/schedule/resolveBlockOverride";
 import type { Course, ClassSection } from "@/types/course";
-import type { BellSchedule } from "@/types/schedule";
+import type { BellSchedule, ScheduleBlock, ScheduleBlockOverride } from "@/types/schedule";
 import type { DailyLesson } from "@/types/lesson";
 import type { LibraryResource } from "@/types/resource";
 import type { ClassPresentationSettings, ClassroomExperienceSettings } from "@/types/classPresentation";
@@ -397,6 +398,122 @@ check("changed item (b) is detected as updated, not added", diff.updated.some((i
 check("new item (d) is detected as added", diff.added.some((i) => i.id === "d"));
 check("missing item (c) is detected as removed", diff.removedIds.includes("c"));
 check("no false positives: exactly one added, one updated, one removed", diff.added.length === 1 && diff.updated.length === 1 && diff.removedIds.length === 1);
+
+console.log("\n16. Weekday-override classSectionId round-trip: property PRESENCE, not just value, must survive a Supabase reload");
+console.log("    (bug found during the Stage E weekday-override audit: rowToScheduleBlockOverride used to always write");
+console.log("    the classSectionId key, even as undefined - resolveBlockOverride's \"classSectionId\" in override check");
+console.log("    can't tell that apart from a genuine explicit value, so it silently dropped the base block's classSectionId");
+console.log("    for any override that never touched class assignment, once that override round-tripped through Supabase.");
+console.log("    deepEqual can't catch this class of bug - it deliberately treats an undefined-valued key as equivalent to");
+console.log("    an absent one (see deepEqual's own doc comment) - so these checks test property presence directly instead.");
+
+function hasClassSectionIdKey(override: ScheduleBlockOverride): boolean {
+  return Object.prototype.hasOwnProperty.call(override, "classSectionId");
+}
+
+const baseBlock: ScheduleBlock = {
+  id: "block-1",
+  label: "Enrichment",
+  kind: "enrichment",
+  startTime: "08:55",
+  endTime: "09:35",
+  classSectionId: "section-a",
+  overrides: [],
+};
+
+function roundTripOverride(override: ScheduleBlockOverride): ScheduleBlockOverride {
+  const row = Map_.scheduleBlockOverrideToRow(override, "block-1", ctx);
+  return Map_.rowToScheduleBlockOverride(withTimestamps(row));
+}
+
+// Case A - time-only override: no class-section decision was ever made.
+const timeOnlyOverride: ScheduleBlockOverride = { id: "ov-time", weekday: "thursday", startTime: "09:00", endTime: "09:40" };
+const timeOnlyRow = Map_.scheduleBlockOverrideToRow(timeOnlyOverride, "block-1", ctx);
+check("Case A (time-only): DB row has class_section_overridden=false, class_section_id=null", timeOnlyRow.class_section_overridden === false && timeOnlyRow.class_section_id === null);
+const timeOnlyBack = roundTripOverride(timeOnlyOverride);
+check("Case A (time-only): local override before save has NO classSectionId key", !hasClassSectionIdKey(timeOnlyOverride));
+check("Case A (time-only): round-tripped override STILL has NO classSectionId key", !hasClassSectionIdKey(timeOnlyBack));
+check(
+  "Case A (time-only): resolveBlockOverride retains the base block's classSectionId (\"section-a\")",
+  resolveBlockOverride({ ...baseBlock, overrides: [timeOnlyBack] }, "thursday").classSectionId === "section-a",
+);
+
+// Case B - explicit unassign.
+const unassignOverride: ScheduleBlockOverride = { id: "ov-unassign", weekday: "thursday", classSectionId: null };
+const unassignRow = Map_.scheduleBlockOverrideToRow(unassignOverride, "block-1", ctx);
+check("Case B (explicit unassign): DB row has class_section_overridden=true, class_section_id=null", unassignRow.class_section_overridden === true && unassignRow.class_section_id === null);
+const unassignBack = roundTripOverride(unassignOverride);
+check("Case B (explicit unassign): round-tripped override HAS classSectionId key, value null", hasClassSectionIdKey(unassignBack) && unassignBack.classSectionId === null);
+check(
+  "Case B (explicit unassign): resolveBlockOverride returns null, not the base classSectionId",
+  resolveBlockOverride({ ...baseBlock, overrides: [unassignBack] }, "thursday").classSectionId === null,
+);
+
+// Case C - explicit reassignment.
+const reassignOverride: ScheduleBlockOverride = { id: "ov-reassign", weekday: "thursday", classSectionId: "section-b" };
+const reassignRow = Map_.scheduleBlockOverrideToRow(reassignOverride, "block-1", ctx);
+check("Case C (reassign): DB row has class_section_overridden=true, class_section_id=\"section-b\"", reassignRow.class_section_overridden === true && reassignRow.class_section_id === "section-b");
+const reassignBack = roundTripOverride(reassignOverride);
+check("Case C (reassign): round-tripped override HAS classSectionId key, value \"section-b\"", hasClassSectionIdKey(reassignBack) && reassignBack.classSectionId === "section-b");
+check(
+  "Case C (reassign): resolveBlockOverride returns the override's classSectionId (\"section-b\"), not the base",
+  resolveBlockOverride({ ...baseBlock, overrides: [reassignBack] }, "thursday").classSectionId === "section-b",
+);
+
+// Additional non-class-section override shapes - all must preserve the base classSectionId.
+const labelOnlyOverride: ScheduleBlockOverride = { id: "ov-label", weekday: "friday", label: "Assembly" };
+const labelOnlyBack = roundTripOverride(labelOnlyOverride);
+check("label-only override: no classSectionId key after round-trip", !hasClassSectionIdKey(labelOnlyBack));
+check(
+  "label-only override: resolveBlockOverride retains the base classSectionId",
+  resolveBlockOverride({ ...baseBlock, overrides: [labelOnlyBack] }, "friday").classSectionId === "section-a",
+);
+
+const kindOnlyOverride: ScheduleBlockOverride = { id: "ov-kind", weekday: "friday", kind: "custom", customKindLabel: "Pep Rally" };
+const kindOnlyBack = roundTripOverride(kindOnlyOverride);
+check("kind-only override: no classSectionId key after round-trip", !hasClassSectionIdKey(kindOnlyBack));
+check(
+  "kind-only override: resolveBlockOverride retains the base classSectionId",
+  resolveBlockOverride({ ...baseBlock, overrides: [kindOnlyBack] }, "friday").classSectionId === "section-a",
+);
+
+const timeAndLabelOverride: ScheduleBlockOverride = { id: "ov-time-label", weekday: "friday", label: "Half Day", startTime: "08:00", endTime: "08:30" };
+const timeAndLabelBack = roundTripOverride(timeAndLabelOverride);
+check("time+label override: no classSectionId key after round-trip", !hasClassSectionIdKey(timeAndLabelBack));
+check(
+  "time+label override: resolveBlockOverride retains the base classSectionId",
+  resolveBlockOverride({ ...baseBlock, overrides: [timeAndLabelBack] }, "friday").classSectionId === "section-a",
+);
+
+console.log("    Shared-schedule (Stage E) relevance: a base classSectionId merged from teacher_period_assignments");
+console.log("    onto an organization-owned schedule's block must also survive an ordinary weekday override:");
+const orgOwnedSchedule: BellSchedule = {
+  id: "schedule-shared",
+  name: "Shared Master Schedule",
+  ownerType: "organization",
+  isDefault: true,
+  timeZone: "America/Detroit",
+  blocks: [
+    {
+      ...baseBlock,
+      // Simulates rowsToBellSchedule's org-owned merge: classSectionId
+      // comes from assignedSectionByBlockId (a Stage-E base teacher-period
+      // assignment projection), not the block's own row.
+      classSectionId: "section-teacher-base-assignment",
+      overrides: [timeOnlyBack],
+    },
+  ],
+};
+const resolvedSharedThursday = resolveScheduleForWeekday(orgOwnedSchedule, "thursday").find((b) => b.blockId === "block-1");
+check(
+  "shared (org-owned) schedule: a time-only weekday override does NOT erase the merged base teacher assignment",
+  resolvedSharedThursday?.classSectionId === "section-teacher-base-assignment",
+);
+const resolvedSharedMonday = resolveScheduleForWeekday(orgOwnedSchedule, "monday").find((b) => b.blockId === "block-1");
+check(
+  "shared (org-owned) schedule: an un-overridden weekday also keeps the base teacher assignment",
+  resolvedSharedMonday?.classSectionId === "section-teacher-base-assignment" && resolvedSharedMonday?.isOverridden === false,
+);
 
 console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}`);
 process.exit(failures === 0 ? 0 : 1);
