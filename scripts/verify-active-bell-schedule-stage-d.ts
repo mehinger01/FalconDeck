@@ -28,6 +28,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolveActiveSchedule } from "@/lib/schedule/resolveActiveSchedule";
+import { isRecommendedSchedule } from "@/lib/schedule/isRecommendedSchedule";
 import { resolveSchoolDate } from "@/lib/calendar/resolveSchoolDate";
 import type { BellSchedule } from "@/types/schedule";
 import type { TeacherSchedulePreferences } from "@/types/teacherSchedule";
@@ -390,22 +391,33 @@ console.log("\n7. ScheduleList: shared schedules are read-only, private schedule
     scheduleList.includes("Recommended") && !/>\s*Default\s*</.test(scheduleList),
   );
   check(
+    // Stage F extracted this gate into lib/schedule/isRecommendedSchedule.ts
+    // (shared with the new ScheduleChoiceScreen.tsx) - the original inline
+    // `schedule.ownerType === "organization" && schedule.isDefault && (`
+    // expression this check used to grep for no longer appears verbatim in
+    // ScheduleList.tsx by design; updated to confirm the real replacement
+    // (import + call) instead of a now-stale source pattern.
     "7f-2: \"Recommended\" is gated on BOTH ownerType==='organization' AND isDefault - not on isDefault alone (a teacher-owned schedule with legacy isDefault:true must never show it)",
-    /schedule\.ownerType === "organization" && schedule\.isDefault && \(/.test(scheduleList),
+    scheduleList.includes('import { isRecommendedSchedule } from "@/lib/schedule/isRecommendedSchedule"') &&
+      /\{isRecommendedSchedule\(schedule\) && \(/.test(scheduleList),
   );
   check(
     "7f-3: behaviorally, a teacher-owned schedule with isDefault:true renders no Recommended/Default/active-derived-from-isDefault badge - only activeSchedule?.id === schedule.id may show \"Currently in use\"",
     (() => {
-      // renderRow's isActive/badge logic is simple enough to re-derive here
-      // without importing React/rendering: the badge condition is
-      // literally `schedule.ownerType === "organization" && schedule.isDefault`.
-      // This check proves that expression evaluates false for a
-      // teacher-owned schedule regardless of its isDefault value - the
-      // exact case that was previously (incorrectly) true.
-      const legacyDefaultTeacherSchedule = { ownerType: "teacher" as const, isDefault: true };
-      const showsRecommended =
-        (legacyDefaultTeacherSchedule.ownerType as string) === "organization" && legacyDefaultTeacherSchedule.isDefault;
-      return showsRecommended === false;
+      // Calls the REAL, shared isRecommendedSchedule implementation (not a
+      // hand-copied re-derivation) - this proves the actual function used
+      // by both ScheduleList.tsx and ScheduleChoiceScreen.tsx evaluates
+      // false for a teacher-owned schedule regardless of its isDefault
+      // value - the exact case that was previously (incorrectly) true.
+      const legacyDefaultTeacherSchedule: BellSchedule = {
+        id: "legacy",
+        name: "Legacy",
+        ownerType: "teacher",
+        isDefault: true,
+        timeZone: "America/Detroit",
+        blocks: [],
+      };
+      return isRecommendedSchedule(legacyDefaultTeacherSchedule) === false;
     })(),
   );
   check(

@@ -3,6 +3,8 @@ export * from "./localDate";
 export * from "./resolveBlockOverride";
 export * from "./isStudentFacingBlock";
 export * from "./isTeachingBlock";
+export * from "./isUsableSharedSchedule";
+export * from "./isRecommendedSchedule";
 export * from "./getCurrentBlock";
 export * from "./getNextBlock";
 export * from "./getRemainingTime";

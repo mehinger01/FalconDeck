@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import type { ReactNode } from "react";
+import { ActiveScheduleGate } from "./ActiveScheduleGate";
 import { AppDataProvider } from "./AppDataProvider";
 import { selectDataRepositoryPolicy } from "./selectDataRepository";
 import { dataAuthorityMountKey, type DataAuthorityState } from "@/lib/auth/dataAuthority";
@@ -62,7 +63,16 @@ export function CutoverAppDataProvider({ authority, children }: { authority: Dat
 
   return (
     <AppDataProvider key={mountKey} repository={repository} blockUntilHydrated={blockUntilHydrated}>
-      {children}
+      {/* Stage F: mounted here (not in each route group's own layout) so
+          every consumer of CutoverAppDataProvider - (app)/layout.tsx AND
+          (presentation)/present/layout.tsx alike - gets the active-schedule
+          gate for free, from one place, using this same already-resolved
+          AppData context. `enabled` is authority.kind === "cloud-ready" -
+          a migration-pending "local"-authority account must never be
+          gated (bare /setup has to stay reachable for MigrationSetupCard);
+          see ActiveScheduleGate.tsx's own doc comment for the cutover-audit
+          bug this fixes. */}
+      <ActiveScheduleGate enabled={authority.kind === "cloud-ready"}>{children}</ActiveScheduleGate>
     </AppDataProvider>
   );
 }

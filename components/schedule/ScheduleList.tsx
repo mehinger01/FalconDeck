@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useAppData, useActiveSchedule } from "@/lib/store/AppDataProvider";
 import { createOhhsRegularSchedule, OHHS_REGULAR_ID } from "@/lib/schedule/presets/ohhsRegular";
+import { isRecommendedSchedule } from "@/lib/schedule/isRecommendedSchedule";
 import { formatTimeString } from "@/lib/schedule/time";
 import type { BellSchedule } from "@/types/schedule";
 
@@ -88,8 +89,11 @@ export function ScheduleList({
                 non-authoritative bookkeeping flag for teacher-owned rows -
                 see BellSchedule.isDefault's own doc comment). A teacher's
                 own active/in-use state is shown separately below, driven
-                only by activeSchedule?.id === schedule.id, never isDefault. */}
-            {schedule.ownerType === "organization" && schedule.isDefault && (
+                only by activeSchedule?.id === schedule.id, never isDefault.
+                isRecommendedSchedule is the single shared source of truth
+                for this rule - ScheduleChoiceScreen.tsx (Stage F) uses the
+                exact same predicate. */}
+            {isRecommendedSchedule(schedule) && (
               <span className="rounded-full bg-falcon-gold-500 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-falcon-brown-950">
                 Recommended
               </span>

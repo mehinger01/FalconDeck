@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useAppData, useActiveSchedule } from "@/lib/store/AppDataProvider";
+import { isUsableSharedSchedule } from "@/lib/schedule/isUsableSharedSchedule";
 import { validateSchedule } from "@/lib/schedule/validateSchedule";
 import { BellScheduleImportPanel } from "./BellScheduleImportPanel";
 import { BlockList } from "./BlockList";
@@ -88,9 +89,7 @@ export function ScheduleSetupScreen() {
                   <ValidationBanner issues={validateSchedule(selectedSchedule)} />
                   <BlockList schedule={selectedSchedule} />
                 </>
-              ) : selectedSchedule.ownerType === "organization" &&
-                !selectedSchedule.needsConfiguration &&
-                selectedSchedule.blocks.length > 0 ? (
+              ) : isUsableSharedSchedule(selectedSchedule) ? (
                 // Stage E: a configured shared schedule gets the
                 // class-assignment view instead of the plain read-only
                 // summary - an unconfigured one (or any teacher-owned
