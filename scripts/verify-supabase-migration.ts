@@ -272,6 +272,7 @@ function realisticAppData(prefix: string): AppData {
       defaultBellScheduleId: `${prefix}-schedule-custom`,
       exceptions: [{ id: `${prefix}-exc-1`, startDate: "2026-09-07", endDate: "2026-09-07", type: "no-school", title: "Labor Day" }],
     },
+    teacherPeriodAssignments: [],
   };
 }
 

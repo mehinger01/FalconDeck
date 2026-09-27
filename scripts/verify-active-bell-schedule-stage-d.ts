@@ -460,18 +460,38 @@ console.log("\n9. Present Mode / Week View resolve via the active schedule, with
   );
 }
 
-console.log("\n10. Stage E boundary: no teacher_period_assignments write path introduced");
+// This section was originally written as a Stage D boundary guard ("Stage E
+// hasn't started yet") - its checks asserted teacher_period_assignments had
+// NO write path and that no assignment UI existed. Stage E has since been
+// explicitly approved and implemented (see
+// scripts/verify-teacher-period-assignments-stage-e.ts for its actual
+// behavioral coverage - base-only, zero writes to
+// bell_schedules/schedule_blocks/schedule_block_overrides, weekday-row
+// preservation, etc.) - the old assertions are now checking the OPPOSITE of
+// reality and were updated here rather than left to pass vacuously on a
+// narrow regex technicality (10c's old form never actually matched
+// "SharedScheduleAssignmentView" against "period" on the same line, so it
+// kept reporting "ok" even though a new assignment UI plainly was added -
+// exactly the kind of false-positive-by-narrow-matching this repo's verify
+// scripts must not tolerate).
+console.log("\n10. Stage E has arrived: teacher_period_assignments now has a real, approved write path (base-only)");
 {
   check(
-    "10a: no INSERT/UPDATE/UPSERT against teacher_period_assignments exists in the data repository",
-    !/\.from\("teacher_period_assignments"\)\s*\n?\s*\.(insert|update|upsert)/.test(supabaseDataRepository),
+    "10a: an upsert against teacher_period_assignments now exists in the data repository (Stage E, approved)",
+    /\.from\("teacher_period_assignments"\)\s*\n?\s*\.upsert/.test(supabaseDataRepository),
   );
   check(
-    "10b: teacher_period_assignments is still only ever SELECTed (the existing read/merge path), never written",
-    (supabaseDataRepository.match(/teacher_period_assignments/g) ?? []).length >= 1 &&
-      /client\.from\("teacher_period_assignments"\)\.select/.test(supabaseDataRepository),
+    "10b: teacher_period_assignments is still read via exactly the original, single SELECT (no duplicate query introduced for Stage E)",
+    (supabaseDataRepository.match(/client\.from\("teacher_period_assignments"\)\.select/g) ?? []).length === 1,
   );
-  check("10c: no new UI component for assigning a shared block to a class section was added", !/assign.*period|period.*assign/i.test(scheduleList) && !/assign.*period|period.*assign/i.test(scheduleSetupScreen));
+  check(
+    "10c: ScheduleSetupScreen routes a configured shared schedule to the new SharedScheduleAssignmentView",
+    /SharedScheduleAssignmentView/.test(scheduleSetupScreen),
+  );
+  check(
+    "10c-2: ScheduleList itself still has no per-block assignment UI (the new routing lives in ScheduleSetupScreen only)",
+    !/SharedScheduleAssignmentView|setTeacherPeriodAssignment/.test(scheduleList),
+  );
 }
 
 console.log("\n11. Cloud/localStorage authority remains unchanged by this stage's new files");

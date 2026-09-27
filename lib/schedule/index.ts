@@ -2,6 +2,7 @@ export * from "./time";
 export * from "./localDate";
 export * from "./resolveBlockOverride";
 export * from "./isStudentFacingBlock";
+export * from "./isTeachingBlock";
 export * from "./getCurrentBlock";
 export * from "./getNextBlock";
 export * from "./getRemainingTime";

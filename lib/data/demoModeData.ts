@@ -290,5 +290,8 @@ export function createDemoModeAppData(): AppData {
     // Mode, so this must be set explicitly like any other teacher's choice.
     teacherSchedulePreferences: { lunchWave: "B", activeBellScheduleId: ohhsRegular.id },
     schoolCalendar: calendar,
+    // No organization-owned schedule in Demo Mode (Stage E scope) - nothing
+    // to bridge a class section onto yet.
+    teacherPeriodAssignments: [],
   });
 }

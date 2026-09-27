@@ -1,6 +1,7 @@
 import { createDemoAppData } from "@/lib/data/demoData";
 import type { AppData } from "@/lib/data/types";
 import { clampBellOffsetSeconds } from "@/lib/schedule/time";
+import { isTeachingBlock } from "@/lib/schedule/isTeachingBlock";
 import type { BellSchedule } from "@/types/schedule";
 import type { AppDataAction } from "./actions";
 import { generateId } from "./id";
@@ -198,6 +199,91 @@ export function appDataReducer(state: AppData, action: AppDataAction): AppData {
             : block,
         ),
       }));
+
+    case "SET_TEACHER_PERIOD_ASSIGNMENT": {
+      // The inverse guard of updateSchedule() above: this action exists
+      // SPECIFICALLY because a teacher can never write to another owner's
+      // bell_schedules/schedule_blocks row (Stage E, join-existing-school
+      // initiative) - so unlike every schedule-editing action above, this
+      // one only ever operates on an organization-owned schedule. A
+      // teacher-owned block's classSectionId is set directly via
+      // UPDATE_BLOCK instead.
+      const schedule = state.schedules.find((s) => s.id === action.scheduleId);
+      if (!schedule || schedule.ownerType !== "organization") return state;
+      const block = schedule.blocks.find((b) => b.id === action.blockId);
+      if (!block) return state;
+      // Application-layer invariant: the database intentionally has no
+      // concept of which block kinds may carry a teacher assignment (an
+      // ordinary FK on class_section_id says nothing about the referenced
+      // block's own kind), so this must be enforced here. Reuses
+      // isTeachingBlock rather than re-deriving the same
+      // instructional/enrichment predicate inline - see that helper's own
+      // doc comment for why it's kept separate from
+      // LessonsScreen.tsx/BlockRow.tsx/PresentModeControls.tsx's existing,
+      // deliberately-untouched copies.
+      if (!isTeachingBlock(block.kind)) return state;
+      // Defense-in-depth mirroring teacher_period_assignments' own
+      // composite FK (organization_id, owner_membership_id,
+      // class_section_id) -> class_sections: never assign a section this
+      // teacher doesn't actually have. SharedScheduleAssignmentView's
+      // <select> only ever offers the teacher's own sections, so this
+      // should never actually reject a real dispatch.
+      if (action.classSectionId !== null && !state.classSections.some((s) => s.id === action.classSectionId)) {
+        return state;
+      }
+
+      // Only the BASE assignment (overrideWeekday: null) for this block is
+      // ever read or written here - any weekday-specific row for the same
+      // block (Stage E defers weekday reassignment entirely) passes
+      // through completely untouched, whether it's kept or not.
+      const existingBase = state.teacherPeriodAssignments.find(
+        (a) => a.scheduleId === action.scheduleId && a.blockId === action.blockId && a.overrideWeekday === null,
+      );
+      const withoutExistingBase = state.teacherPeriodAssignments.filter((a) => a !== existingBase);
+      const teacherPeriodAssignments =
+        action.classSectionId === null
+          ? withoutExistingBase // teacher_period_assignments.class_section_id is NOT NULL - "unassigned" is this row's absence, never an explicit null row.
+          : [
+              ...withoutExistingBase,
+              {
+                id: existingBase?.id ?? action.newAssignmentId,
+                scheduleId: action.scheduleId,
+                blockId: action.blockId,
+                overrideWeekday: null,
+                classSectionId: action.classSectionId,
+              },
+            ];
+
+      return {
+        ...state,
+        // teacherPeriodAssignments is the ONLY canonical, editable,
+        // persisted state this action changes - this is what applyDiff
+        // diffs and writes to teacher_period_assignments.
+        teacherPeriodAssignments,
+        // Everything below is a DERIVED CLIENT PROJECTION, not an edit to
+        // the shared schedule itself: it re-derives, in-memory, the exact
+        // same merge rowsToBellSchedule's assignedSectionByBlockId already
+        // performs at load() time (see supabaseDataRepository.ts), purely
+        // so Present Mode/Week View reflect the new assignment immediately
+        // without waiting for a reload. This block/its classSectionId is
+        // NEVER sent to schedule_blocks - applyDiff explicitly filters
+        // every organization-owned schedule out of its
+        // bell_schedules/schedule_blocks/schedule_block_overrides diffing
+        // and upserts (see that file's own comments), specifically so this
+        // projection can never be mistaken for, or accidentally persisted
+        // as, a real edit to a schedule the teacher doesn't own.
+        schedules: state.schedules.map((s) =>
+          s.id !== action.scheduleId
+            ? s
+            : {
+                ...s,
+                blocks: s.blocks.map((b) =>
+                  b.id !== action.blockId ? b : { ...b, classSectionId: action.classSectionId },
+                ),
+              },
+        ),
+      };
+    }
 
     case "ADD_COURSE":
       return { ...state, courses: [...state.courses, action.course] };

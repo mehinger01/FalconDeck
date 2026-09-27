@@ -365,5 +365,8 @@ export function createDemoAppData(): AppData {
     // ships already chosen).
     teacherSchedulePreferences: { ...DEFAULT_TEACHER_SCHEDULE_PREFERENCES, activeBellScheduleId: STANDARD_DAY_SCHEDULE.id },
     schoolCalendar: null,
+    // No organization-owned schedule exists in demo data (Stage E scope) -
+    // nothing to bridge a class section onto yet.
+    teacherPeriodAssignments: [],
   });
 }

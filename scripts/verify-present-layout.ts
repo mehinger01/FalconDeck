@@ -169,6 +169,7 @@ function buildAppData(finalFiveMessage: string): AppData {
     libraryResources: [],
     teacherSchedulePreferences: DEFAULT_TEACHER_SCHEDULE_PREFERENCES,
     schoolCalendar: DEMO_SCHOOL_CALENDAR,
+    teacherPeriodAssignments: [],
   };
 }
 

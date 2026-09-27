@@ -178,6 +178,22 @@ function validateAppDataShape(value: Record<string, unknown>): string | null {
     return "This backup's teacher schedule preferences are the wrong shape.";
   }
 
+  const teacherPeriodAssignments = value.teacherPeriodAssignments;
+  if (teacherPeriodAssignments !== undefined) {
+    if (!Array.isArray(teacherPeriodAssignments)) return "This backup's teacher period assignments are the wrong shape.";
+    for (const assignment of teacherPeriodAssignments) {
+      if (
+        !isPlainObject(assignment) ||
+        !isNonEmptyString(assignment.id) ||
+        !isNonEmptyString(assignment.scheduleId) ||
+        !isNonEmptyString(assignment.blockId) ||
+        !isNonEmptyString(assignment.classSectionId)
+      ) {
+        return "This backup contains a teacher period assignment with a missing or invalid id/schedule/block/class section.";
+      }
+    }
+  }
+
   const schoolCalendar = value.schoolCalendar;
   if (schoolCalendar !== undefined && schoolCalendar !== null) {
     if (!isPlainObject(schoolCalendar) || !isNonEmptyString(schoolCalendar.id) || !isNonEmptyString(schoolCalendar.defaultBellScheduleId)) {
@@ -225,6 +241,7 @@ function normalizeParsedAppData(value: Record<string, unknown>): AppData {
       ...(value.teacherSchedulePreferences as Partial<AppData["teacherSchedulePreferences"]> | undefined),
     },
     schoolCalendar: (value.schoolCalendar as AppData["schoolCalendar"] | undefined) ?? null,
+    teacherPeriodAssignments: (value.teacherPeriodAssignments as AppData["teacherPeriodAssignments"] | undefined) ?? [],
   };
 }
 

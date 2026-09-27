@@ -10,6 +10,8 @@ import { DEFAULT_CLASSROOM_EXPERIENCE_SETTINGS } from "@/types/classPresentation
 import type { TeacherSchedulePreferences } from "@/types/teacherSchedule";
 import { DEFAULT_TEACHER_SCHEDULE_PREFERENCES } from "@/types/teacherSchedule";
 import type { SchoolCalendarException, SchoolYearCalendar } from "@/types/calendar";
+import type { TeacherPeriodAssignment } from "@/types/teacherPeriodAssignment";
+import type { Weekday } from "@/types/schedule";
 
 /**
  * Everything a row needs to know about "whose data is this" - denormalized
@@ -36,6 +38,7 @@ export type LibraryResourceCoursesRow = Database["public"]["Tables"]["library_re
 export type ClassPresentationSettingsRow = Database["public"]["Tables"]["class_presentation_settings"]["Row"];
 export type ClassroomExperienceSettingsRow = Database["public"]["Tables"]["classroom_experience_settings"]["Row"];
 export type TeacherSchedulePreferencesRow = Database["public"]["Tables"]["teacher_schedule_preferences"]["Row"];
+export type TeacherPeriodAssignmentsRow = Database["public"]["Tables"]["teacher_period_assignments"]["Row"];
 
 // "Insert" variants - used only by the *ToRow() functions below that have no
 // real local created_at/updated_at source. Deliberately narrower than the
@@ -59,6 +62,7 @@ export type LibraryResourceCoursesInsert = Omit<LibraryResourceCoursesRow, "crea
 export type ClassPresentationSettingsInsert = Omit<ClassPresentationSettingsRow, "created_at" | "updated_at">;
 export type ClassroomExperienceSettingsInsert = Omit<ClassroomExperienceSettingsRow, "created_at" | "updated_at">;
 export type TeacherSchedulePreferencesInsert = Omit<TeacherSchedulePreferencesRow, "created_at" | "updated_at">;
+export type TeacherPeriodAssignmentsInsert = Omit<TeacherPeriodAssignmentsRow, "created_at" | "updated_at">;
 
 // ---------------------------------------------------------------------------
 // Local -> Supabase (write direction). Every function is pure - no I/O.
@@ -354,6 +358,31 @@ export function teacherSchedulePreferencesToRow(
   };
 }
 
+/**
+ * Stage E (join-existing-school initiative): a teacher's own class-section
+ * binding onto an organization-owned schedule's block - see
+ * TeacherPeriodAssignment's own doc comment for why `classSectionId` is
+ * never null here (unlike scheduleBlockOverrideToRow's genuine tri-state).
+ * `schedule_block_id` must be the same CLOUD-scoped id
+ * scheduleBlockToRow/scheduleBlockCloudId would derive for
+ * (assignment.scheduleId, assignment.blockId) - schedule_blocks.id is a
+ * single global primary key, never the raw local block id alone (see
+ * scheduleBlockCloudId's own doc comment).
+ */
+export function teacherPeriodAssignmentToRow(
+  assignment: TeacherPeriodAssignment,
+  ctx: OwnerContext,
+): TeacherPeriodAssignmentsInsert {
+  return {
+    id: assignment.id,
+    organization_id: ctx.organizationId,
+    owner_membership_id: ctx.membershipId,
+    schedule_block_id: scheduleBlockCloudId(assignment.scheduleId, assignment.blockId),
+    override_weekday: assignment.overrideWeekday,
+    class_section_id: assignment.classSectionId,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Supabase -> Local (read direction). Every function is pure - no I/O.
 // ---------------------------------------------------------------------------
@@ -589,6 +618,25 @@ export function rowToTeacherSchedulePreferences(row: TeacherSchedulePreferencesR
   return {
     lunchWave: row.lunch_wave as TeacherSchedulePreferences["lunchWave"],
     activeBellScheduleId: row.active_bell_schedule_id,
+  };
+}
+
+/**
+ * Reverse of teacherPeriodAssignmentToRow. `row.schedule_block_id` is
+ * scopedCloudId(bellScheduleId, localBlockId) - see scheduleBlockCloudId's
+ * doc comment - so parseScopedCloudId recovers BOTH the owning schedule's
+ * id and the block's own local id in one call; no separate scheduleId
+ * parameter is needed the way rowsToDailyLesson needs a caller-supplied
+ * courseId, because that pair is already fully encoded in this one column.
+ */
+export function rowToTeacherPeriodAssignment(row: TeacherPeriodAssignmentsRow): TeacherPeriodAssignment {
+  const { parentId: scheduleId, localId: blockId } = parseScopedCloudId(row.schedule_block_id);
+  return {
+    id: row.id,
+    scheduleId,
+    blockId,
+    overrideWeekday: row.override_weekday as Weekday | null,
+    classSectionId: row.class_section_id,
   };
 }
 

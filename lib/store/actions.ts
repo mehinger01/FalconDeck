@@ -6,6 +6,7 @@ import type { ClassroomExperienceSettings } from "@/types/classPresentation";
 import type { LibraryResource } from "@/types/resource";
 import type { TeacherSchedulePreferences } from "@/types/teacherSchedule";
 import type { SchoolCalendarException, SchoolYearCalendar } from "@/types/calendar";
+import type { TeacherPeriodAssignment } from "@/types/teacherPeriodAssignment";
 
 export type AppDataAction =
   | { type: "HYDRATE"; data: AppData }
@@ -38,4 +39,13 @@ export type AppDataAction =
   | { type: "IMPORT_MASTER_CALENDAR"; calendar: SchoolYearCalendar; newBellSchedules: BellSchedule[] }
   | { type: "ADD_CALENDAR_EXCEPTION"; exception: SchoolCalendarException }
   | { type: "UPDATE_CALENDAR_EXCEPTION"; exceptionId: string; patch: Partial<Omit<SchoolCalendarException, "id">> }
-  | { type: "DELETE_CALENDAR_EXCEPTION"; exceptionId: string };
+  | { type: "DELETE_CALENDAR_EXCEPTION"; exceptionId: string }
+  | {
+      type: "SET_TEACHER_PERIOD_ASSIGNMENT";
+      scheduleId: string;
+      blockId: string;
+      /** `null` clears the assignment (removes the base row - teacher_period_assignments.class_section_id is NOT NULL, so "unassigned" is the row's absence, never an explicit null value). */
+      classSectionId: string | null;
+      /** A freshly-generated UUID, used only if no base assignment for this block exists yet - see TeacherPeriodAssignment.id's own doc comment. */
+      newAssignmentId: TeacherPeriodAssignment["id"];
+    };

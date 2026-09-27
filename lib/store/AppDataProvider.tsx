@@ -68,6 +68,18 @@ export interface AppDataActions extends LessonActions, LibraryResourceActions {
     override: Omit<ScheduleBlockOverride, "id"> & { id?: string },
   ) => void;
   removeBlockOverride: (scheduleId: string, blockId: string, weekday: Weekday) => void;
+  /**
+   * Assigns (or clears, with `null`) the teacher's own class section onto
+   * one block of an organization-owned (shared) schedule - Stage E,
+   * join-existing-school initiative. Only ever creates/updates the BASE
+   * assignment (never a weekday-specific one - deferred). A fresh UUID is
+   * generated here, before dispatch (matching duplicateSchedule's own
+   * newId convention below) - the reducer uses it only if no base
+   * assignment for this block exists yet; see TeacherPeriodAssignment.id's
+   * doc comment for why this must be a real UUID, not generateId()'s
+   * prefixed shape.
+   */
+  setTeacherPeriodAssignment: (scheduleId: string, blockId: string, classSectionId: string | null) => void;
   addCourse: (course: Omit<Course, "id">) => void;
   addClassSection: (section: Omit<ClassSection, "id">) => void;
   resetToDemo: () => void;
@@ -320,6 +332,15 @@ export function AppDataProvider({
         }),
       removeBlockOverride: (scheduleId, blockId, weekday) =>
         dispatch({ type: "REMOVE_BLOCK_OVERRIDE", scheduleId, blockId, weekday }),
+
+      setTeacherPeriodAssignment: (scheduleId, blockId, classSectionId) =>
+        dispatch({
+          type: "SET_TEACHER_PERIOD_ASSIGNMENT",
+          scheduleId,
+          blockId,
+          classSectionId,
+          newAssignmentId: crypto.randomUUID(),
+        }),
 
       addCourse: (course) =>
         dispatch({ type: "ADD_COURSE", course: { ...course, id: generateId("course") } }),

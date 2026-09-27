@@ -137,6 +137,13 @@ export async function fetchAppData(client: Client, ctx: OwnerContext): Promise<A
 
   const classSections: ClassSection[] = classSectionRows.map(Map_.rowToClassSection);
 
+  // Stage E: the exact same `assignments` rows already fetched above (no
+  // duplicate query) - both the base-only merge into assignedSectionByBlockId
+  // (used for the org-owned schedule blocks' classSectionId above) AND this
+  // full collection (base + any pre-existing weekday-specific rows,
+  // untouched) are derived from one fetch.
+  const teacherPeriodAssignments = assignments.map(Map_.rowToTeacherPeriodAssignment);
+
   return {
     courses: courses.map(Map_.rowToCourse),
     classSections,
@@ -147,6 +154,7 @@ export async function fetchAppData(client: Client, ctx: OwnerContext): Promise<A
     libraryResources: resources,
     teacherSchedulePreferences: Map_.rowToTeacherSchedulePreferences(unwrap(prefsRes, "load teacher_schedule_preferences")),
     schoolCalendar,
+    teacherPeriodAssignments,
   };
 }
 
@@ -189,6 +197,7 @@ export async function applyDiff(client: Client, ctx: OwnerContext, prev: AppData
     prev.classPresentationSettings.map((s) => ({ ...s, id: s.classSectionId })),
     next.classPresentationSettings.map((s) => ({ ...s, id: s.classSectionId })),
   );
+  const assignmentDiff = diffById(prev.teacherPeriodAssignments, next.teacherPeriodAssignments);
 
   // Per-schedule nested block/override diffs, computed against whichever
   // schedule (by id) existed in prev - a schedule present in both counts
@@ -207,6 +216,17 @@ export async function applyDiff(client: Client, ctx: OwnerContext, prev: AppData
     ReturnType<typeof diffById<BellSchedule["blocks"][number]["overrides"][number]>>
   >();
   for (const schedule of next.schedules) {
+    // Stage E hard requirement: an organization-owned schedule's blocks are
+    // never teacher-writable - schedule_blocks/schedule_block_overrides
+    // belong to the org admin. A block's `classSectionId` on such a
+    // schedule is a per-teacher MERGED VIEW derived from
+    // teacherPeriodAssignments (see rowsToBellSchedule), recomputed at
+    // every load() and kept in sync locally by setTeacherPeriodAssignment -
+    // never a real schedule_blocks column value for this teacher, so it
+    // must never be diffed/upserted here. Skipping the whole schedule here
+    // is what keeps an assignment change from ever producing a
+    // bell_schedules/schedule_blocks/schedule_block_overrides write.
+    if (schedule.ownerType === "organization") continue;
     const priorSchedule = prevSchedulesById.get(schedule.id);
     const priorBlocks = priorSchedule?.blocks ?? [];
     blockDiffsBySchedule.set(schedule.id, diffById(priorBlocks, schedule.blocks));
@@ -242,6 +262,14 @@ export async function applyDiff(client: Client, ctx: OwnerContext, prev: AppData
   };
 
   // ---- Delete pass (child-before-parent) ----
+  // teacher_period_assignments is a leaf table (nothing references it) -
+  // deleted early alongside the other leaf tables below. Deleting a row
+  // here whose class_section_id or schedule_block_id was ALSO deleted this
+  // same save (via their own ON DELETE CASCADE) simply deletes 0 rows -
+  // harmless either way, so no ordering dependency on those deletes exists.
+  for (const id of assignmentDiff.removedIds) {
+    unwrap(await client.from("teacher_period_assignments").delete().eq("id", id), "delete teacher_period_assignments");
+  }
   for (const id of presentationDiff.removedIds) {
     unwrap(await client.from("class_presentation_settings").delete().eq("class_section_id", id), "delete class_presentation_settings");
   }
@@ -317,7 +345,14 @@ export async function applyDiff(client: Client, ctx: OwnerContext, prev: AppData
     );
   }
 
-  const schedulesToWrite = [...scheduleDiff.added, ...scheduleDiff.updated];
+  // Stage E hard requirement (see the block/override diff loop above for
+  // the full reasoning): an organization-owned schedule is never written
+  // to bell_schedules by a teacher's own save - it can only ever appear
+  // here as "updated" because its blocks' merged classSectionId view
+  // changed locally, never a real change to the schedule's own row.
+  const schedulesToWrite = [...scheduleDiff.added, ...scheduleDiff.updated].filter(
+    (schedule) => schedule.ownerType !== "organization",
+  );
   if (schedulesToWrite.length > 0) {
     unwrap(
       await client.from("bell_schedules").upsert(schedulesToWrite.map((s) => Map_.bellScheduleToRow(s, ctx))),
@@ -352,6 +387,20 @@ export async function applyDiff(client: Client, ctx: OwnerContext, prev: AppData
         );
       }
     }
+  }
+
+  // Stage E: base (and any pre-existing, untouched weekday-specific)
+  // teacher_period_assignments rows. class_sections/schedule_blocks this
+  // references are upserted above (in the same pass) whenever they're also
+  // new in this same save.
+  const assignmentsToWrite = [...assignmentDiff.added, ...assignmentDiff.updated];
+  if (assignmentsToWrite.length > 0) {
+    unwrap(
+      await client
+        .from("teacher_period_assignments")
+        .upsert(assignmentsToWrite.map((a) => Map_.teacherPeriodAssignmentToRow(a, ctx))),
+      "upsert teacher_period_assignments",
+    );
   }
 
   // Calendar: single-row upsert only if it changed (deletion/creation of

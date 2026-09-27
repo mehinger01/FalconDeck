@@ -5,6 +5,7 @@ import type { ClassPresentationSettings, ClassroomExperienceSettings } from "@/t
 import type { LibraryResource } from "@/types/resource";
 import type { TeacherSchedulePreferences } from "@/types/teacherSchedule";
 import type { SchoolYearCalendar } from "@/types/calendar";
+import type { TeacherPeriodAssignment } from "@/types/teacherPeriodAssignment";
 
 export interface AppData {
   courses: Course[];
@@ -17,6 +18,14 @@ export interface AppData {
   teacherSchedulePreferences: TeacherSchedulePreferences;
   /** `null` = no Master Calendar imported yet - fully supported; Live Present Mode resolves against the teacher's active schedule (see lib/schedule/resolveActiveSchedule.ts), never a schedule's own `isDefault` flag. */
   schoolCalendar: SchoolYearCalendar | null;
+  /**
+   * The teacher's own class-section bindings onto organization-owned
+   * schedules' blocks (Stage E, join-existing-school initiative) - see
+   * TeacherPeriodAssignment's own doc comment. Includes BASE
+   * (overrideWeekday: null) and any pre-existing weekday-specific rows
+   * alike; Stage E's own UI only ever creates/edits the former.
+   */
+  teacherPeriodAssignments: TeacherPeriodAssignment[];
 }
 
 /** A reason code callers can use to tailor messaging (e.g. "try a smaller image" only makes sense for quota-exceeded). */

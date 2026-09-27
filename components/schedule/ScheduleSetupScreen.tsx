@@ -9,6 +9,7 @@ import { BuiltInScheduleSummary } from "./BuiltInScheduleSummary";
 import { MyScheduleSection } from "./MyScheduleSection";
 import { ScheduleList } from "./ScheduleList";
 import { ScheduleSectionTabs } from "./ScheduleSectionTabs";
+import { SharedScheduleAssignmentView } from "./SharedScheduleAssignmentView";
 import { ValidationBanner } from "./ValidationBanner";
 
 export function ScheduleSetupScreen() {
@@ -87,6 +88,15 @@ export function ScheduleSetupScreen() {
                   <ValidationBanner issues={validateSchedule(selectedSchedule)} />
                   <BlockList schedule={selectedSchedule} />
                 </>
+              ) : selectedSchedule.ownerType === "organization" &&
+                !selectedSchedule.needsConfiguration &&
+                selectedSchedule.blocks.length > 0 ? (
+                // Stage E: a configured shared schedule gets the
+                // class-assignment view instead of the plain read-only
+                // summary - an unconfigured one (or any teacher-owned
+                // built-in) still falls through to BuiltInScheduleSummary
+                // below, unchanged.
+                <SharedScheduleAssignmentView schedule={selectedSchedule} />
               ) : (
                 <BuiltInScheduleSummary schedule={selectedSchedule} />
               )}
