@@ -340,3 +340,42 @@ body {
     padding: 0.25rem 1rem;
   }
 }
+
+/*
+ * Teacher Transition Content - responsive lower-content layout for short
+ * presentation heights (e.g. a 1366x768 BenQ board). A height-only query,
+ * with no width component - orthogonal to the width+height "presentation
+ * tier" block above, which is ClassroomView's own concern
+ * (TransitionScreen never uses .present-grid/.present-card at all). Same
+ * unlayered-CSS reasoning as that block: wins over the Tailwind utility
+ * classes already on these elements with no !important needed, and is
+ * completely inert above this breakpoint.
+ *
+ * Only ever changes HOW MUCH HORIZONTAL SPACE each section gets, never a
+ * font-size - the readability floor set inline via Tailwind classes in
+ * TransitionScreen.tsx is untouched here.
+ */
+@media (max-height: 820px) {
+  /* Set by TransitionScreen.tsx only when Warm-Up is actually present -
+     switches from the default stacked column to Warm-Up (wide) beside
+     everything else (narrow), which is what actually recovers the
+     vertical space this breakpoint is short on. Never applied when
+     Warm-Up is absent, so a Materials/Arrival-only screen never gets an
+     empty, wasted second column. */
+  .transition-lower-with-warmup {
+    display: grid;
+    grid-template-columns: 3fr 2fr;
+    column-gap: 2.5rem;
+    align-items: start;
+  }
+
+  /* Two lines instead of three at this cramped a height - materially
+     reduces Warm-Up's own height contribution on top of the two-column
+     split above. Overrides only the line count Tailwind's line-clamp-3
+     utility set; `warmup` itself is still always the complete, unmutated
+     stored value (see DailyLesson.warmup's own doc comment) - this is a
+     presentation-only clamp, never truncated data. */
+  .transition-body-warmup {
+    -webkit-line-clamp: 2;
+  }
+}

@@ -8,6 +8,7 @@ import { resolveActiveSchedule } from "@/lib/schedule/resolveActiveSchedule";
 import { DEFAULT_TIME_ZONE } from "@/lib/schedule/time";
 import { resolveSchoolDate } from "@/lib/calendar/resolveSchoolDate";
 import { findLessonForSection } from "@/lib/data/lessons";
+import { resolveTransitionContent } from "@/lib/data/transitionContent";
 import { getArrivalInstructions } from "@/lib/data/classPresentation";
 import type { DailyLesson } from "@/types/lesson";
 import type { ResolvedScheduleBlock } from "@/types/schedule";
@@ -59,12 +60,18 @@ function TransitionScreenContainer({
   arrivalInstructions,
   showCountdown,
   showArrivalInstructions,
+  materials,
+  warmup,
+  note,
 }: {
   nextBlock: ResolvedScheduleBlock;
   secondsUntilNext: number;
   arrivalInstructions: string[];
   showCountdown: boolean;
   showArrivalInstructions: boolean;
+  materials?: string;
+  warmup?: string;
+  note?: string;
 }) {
   const nextDisplayName = useDisplayName(nextBlock.classSectionId);
   return (
@@ -75,6 +82,9 @@ function TransitionScreenContainer({
       arrivalInstructions={arrivalInstructions}
       showCountdown={showCountdown}
       showArrivalInstructions={showArrivalInstructions}
+      materials={materials}
+      warmup={warmup}
+      note={note}
     />
   );
 }
@@ -104,6 +114,13 @@ function TransitionScreenContainer({
  * Reports whichever lesson is currently on screen via
  * `onCurrentLessonChange`, so `PresentScreen`'s classroom tools (Quick
  * Resource, QR) can use it without this component knowing tools exist.
+ *
+ * Teacher Transition Content (Stage C): the transition branch also resolves
+ * `nextTransitionContent` (materials/warmup/note) via the Stage A/B
+ * `resolveTransitionContent` helper, off the same `nextStudentFacingBlock`
+ * this component already resolves - no second "find the next class"
+ * lookup, no snapshotting. Only the three primitive fields are passed down
+ * to `TransitionScreen`, which stays presentation-only.
  */
 export function LivePresentScreen({
   onCurrentLessonChange,
@@ -137,6 +154,20 @@ export function LivePresentScreen({
   const currentLesson =
     state?.mode === "student-facing" && state.block.classSectionId && dateKey
       ? findLessonForSection(data.lessons, dateKey, state.block.classSectionId)
+      : null;
+  // Stage C: the transition screen's materials/warm-up/note - resolved here
+  // (not inside TransitionScreen, which stays presentation-only) via the
+  // Stage A pure resolver, off the SAME nextStudentFacingBlock the existing
+  // transition branch below already uses. Never computed for Lunch (which
+  // renders LunchScreen, not a "next class" countdown at all).
+  const nextTransitionContent =
+    state?.mode === "transition" && state.currentBlock?.kind !== "lunch" && state.nextStudentFacingBlock && dateKey
+      ? resolveTransitionContent(
+          data.lessons,
+          data.transitionOverrides,
+          dateKey,
+          state.nextStudentFacingBlock.classSectionId,
+        )
       : null;
 
   useEffect(() => {
@@ -200,6 +231,9 @@ export function LivePresentScreen({
                 )}
                 showCountdown={settings.transitionCountdownEnabled}
                 showArrivalInstructions={settings.transitionArrivalInstructionsEnabled}
+                materials={nextTransitionContent?.materials}
+                warmup={nextTransitionContent?.warmup}
+                note={nextTransitionContent?.note}
               />
             ) : (
               <EndOfDayScreen show={settings.showEndOfDayScreen} message={settings.endOfDayMessage} />

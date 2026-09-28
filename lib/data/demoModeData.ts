@@ -1,6 +1,7 @@
 import type { AppData } from "./types";
 import type { Course, ClassSection } from "@/types/course";
 import type { AgendaItem, DailyLesson } from "@/types/lesson";
+import type { TransitionOverride } from "@/types/transitionOverride";
 import type { ClassPresentationSettings, ClassroomExperienceSettings } from "@/types/classPresentation";
 import { DEFAULT_CLASSROOM_EXPERIENCE_SETTINGS } from "@/types/classPresentation";
 import type { LibraryResource } from "@/types/resource";
@@ -113,6 +114,13 @@ function algebraLesson(date: string, classSectionId: string): DailyLesson {
       { id: demoId("announcement"), text: "Quiz Friday" },
       { id: demoId("announcement"), text: "Corrections due tomorrow" },
     ],
+    // Teacher Transition Content (Stage C demo fixture): 4th Hour's warmup
+    // is deliberately hidden by a TransitionOverride below
+    // (DEMO_TRANSITION_OVERRIDES) - it's set here so the "Passing -> 4th
+    // Hour" scenario can actually demonstrate "explicit hide wins over a
+    // real, present lesson value", not merely "warmup happens to be blank".
+    materials: "Scientific calculator\nSpiral notebook\nGraph paper",
+    warmup: "Simplify: 3(x + 4) - 2x",
     createdAt: now,
     updatedAt: now,
   };
@@ -138,6 +146,18 @@ function geometryLesson(date: string, classSectionId: string): DailyLesson {
       { id: demoId("resource"), title: "Interactive Activity", url: "https://www.desmos.com/geometry", type: "link" },
     ],
     announcements: [{ id: demoId("announcement"), text: "Homework due tomorrow" }],
+    // Teacher Transition Content (Stage C demo fixture): materials is a
+    // short single line (contrast with algebraLesson's multi-line list),
+    // warmup is deliberately long enough to exceed the transition screen's
+    // ~4-visible-line clamp, so the "Passing -> 2nd Hour" scenario exercises
+    // both materials+warmup together AND the long-warmup visual clamp.
+    materials: "Compass and protractor",
+    warmup:
+      "1. Two angles are complementary. One angle measures 34°. Find the measure of the other angle.\n" +
+      "2. Two angles are supplementary. One angle measures 112°. Find the measure of the other angle.\n" +
+      "3. Name a pair of vertical angles in the diagram on the board.\n" +
+      "4. If two lines are cut by a transversal and a pair of alternate interior angles measures 58° and (2x + 4)°, find x.\n" +
+      "5. Sketch and label an example of a linear pair.",
     createdAt: now,
     updatedAt: now,
   };
@@ -158,6 +178,11 @@ function enrichmentLesson(date: string, classSectionId: string): DailyLesson {
     ],
     resources: [],
     announcements: [],
+    // Teacher Transition Content (Stage C demo fixture): warmup only, no
+    // materials - so the "Passing -> Enrichment" scenario demonstrates a
+    // lesson with warmup present but materials absent (the transition
+    // screen should omit the materials section, not show an empty one).
+    warmup: "Open your planner and list today's top-priority task before starting work time.",
     createdAt: now,
     updatedAt: now,
   };
@@ -171,6 +196,27 @@ function buildDemoLessons(regularDate: string): DailyLesson[] {
     algebraLesson(regularDate, DEMO_SECTION_ALGEBRA_4TH),
     geometryLesson(regularDate, DEMO_SECTION_GEOMETRY_5TH),
     geometryLesson(regularDate, DEMO_SECTION_GEOMETRY_7TH),
+  ];
+}
+
+/**
+ * Teacher Transition Content (Stage C demo fixture): a single
+ * TransitionOverride hiding 4th Hour's warmup for `regularDate`, even
+ * though `algebraLesson` gives it a real one above - the "Passing -> 4th
+ * Hour" scenario (see DemoPresentSimulator.tsx) is what demonstrates
+ * "explicit hide wins over a present live lesson value" without any
+ * editing UI existing yet (that's Stage D). Never copies the lesson's own
+ * materials/warmup INTO this row - only warmupOverride is set; materials
+ * is left `undefined` (no override) so it still resolves live.
+ */
+function buildDemoTransitionOverrides(regularDate: string): TransitionOverride[] {
+  return [
+    {
+      id: demoId("transition-override"),
+      date: regularDate,
+      classSectionId: DEMO_SECTION_ALGEBRA_4TH,
+      warmupOverride: null,
+    },
   ];
 }
 
@@ -272,6 +318,20 @@ export function createDemoModeAppData(): AppData {
   const demoEarlyRelease = createDemoEarlyReleaseSchedule();
   const demoTestingDay = createDemoTestingDaySchedule();
   const { calendar, extraSchedules } = buildDemoCalendarAndSchedules();
+  // Pre-existing gap, found and fixed while visually verifying the Teacher
+  // Transition Content readability correction: DEMO_REGULAR_DATE
+  // ("2026-09-15", chosen only for being "a Tuesday, no exception") is NOT
+  // the same date `calendar.firstStudentDay` actually resolves to (the REAL
+  // imported OHHS calendar's real first day, "2026-08-31") -
+  // DemoPresentSimulator's own `regularDate` reads firstStudentDay, so
+  // every lesson previously seeded against DEMO_REGULAR_DATE was silently
+  // unreachable by `findLessonForSection` on the actual date Demo Mode
+  // resolves as "today" (materials/warmup/agenda would never appear, only
+  // the schedule-structure-driven scenario buttons ever worked). Seeding
+  // against the calendar's own resolved date closes that gap at its root
+  // instead of hardcoding a second date that can drift from the first
+  // again later.
+  const regularDate = calendar?.firstStudentDay ?? DEMO_REGULAR_DATE;
 
   const schedules = [ohhsRegular, demoEarlyRelease, demoTestingDay, ...extraSchedules];
 
@@ -279,7 +339,7 @@ export function createDemoModeAppData(): AppData {
     courses: DEMO_COURSES,
     classSections: DEMO_CLASS_SECTIONS,
     schedules,
-    lessons: buildDemoLessons(DEMO_REGULAR_DATE),
+    lessons: buildDemoLessons(regularDate),
     classPresentationSettings: DEMO_ARRIVAL_ROUTINES,
     classroomExperienceSettings: DEMO_CLASSROOM_EXPERIENCE_SETTINGS,
     libraryResources: DEMO_LIBRARY_RESOURCES,
@@ -293,8 +353,6 @@ export function createDemoModeAppData(): AppData {
     // No organization-owned schedule in Demo Mode (Stage E scope) - nothing
     // to bridge a class section onto yet.
     teacherPeriodAssignments: [],
-    // No transition overrides in Demo Mode - the transition screen falls
-    // back to each day's live DailyLesson materials/warmup by default.
-    transitionOverrides: [],
+    transitionOverrides: buildDemoTransitionOverrides(regularDate),
   });
 }

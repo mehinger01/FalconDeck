@@ -96,7 +96,40 @@ export function DemoPresentSimulator() {
       next.push({
         id: "passing",
         label: "Passing",
-        description: "Jump into a real passing block from the calendar-resolved schedule",
+        description:
+          "Jump into a real passing block from the calendar-resolved schedule - Transition Content demo: materials + a long warm-up (visually clamped)",
+        date: atDemoTime(regularDate, Math.floor((start + end) / 2)),
+      });
+    }
+
+    // Teacher Transition Content (Stage C): two more passing-block jump
+    // points, found the same way `firstPassing` is (by kind, not by a new
+    // resolver) - each lands on a DIFFERENT next class so together with
+    // "Passing" above, three of the five Stage C demo states are covered
+    // without adding a whole new scenario per state. See
+    // buildDemoTransitionOverrides/algebraLesson/enrichmentLesson in
+    // lib/data/demoModeData.ts for the actual fixture content each targets.
+    const passingBeforeEnrichment = blocks.find((block) => block.id.endsWith("-passing-2"));
+    if (passingBeforeEnrichment) {
+      const start = timeStringToSeconds(passingBeforeEnrichment.startTime);
+      const end = timeStringToSeconds(passingBeforeEnrichment.endTime);
+      next.push({
+        id: "passing-warmup-only",
+        label: "Passing → Enrichment",
+        description: "Transition Content demo: warm-up present, materials absent (no empty Materials section should render)",
+        date: atDemoTime(regularDate, Math.floor((start + end) / 2)),
+      });
+    }
+
+    const passingBeforeFourth = blocks.find((block) => block.id.endsWith("-passing-3"));
+    if (passingBeforeFourth) {
+      const start = timeStringToSeconds(passingBeforeFourth.startTime);
+      const end = timeStringToSeconds(passingBeforeFourth.endTime);
+      next.push({
+        id: "passing-materials-hidden-warmup",
+        label: "Passing → 4th Hour",
+        description:
+          "Transition Content demo: materials shows live, warm-up is explicitly hidden by a TransitionOverride even though the lesson has one",
         date: atDemoTime(regularDate, Math.floor((start + end) / 2)),
       });
     }
