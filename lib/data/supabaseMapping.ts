@@ -12,6 +12,7 @@ import { DEFAULT_TEACHER_SCHEDULE_PREFERENCES } from "@/types/teacherSchedule";
 import type { SchoolCalendarException, SchoolYearCalendar } from "@/types/calendar";
 import type { TeacherPeriodAssignment } from "@/types/teacherPeriodAssignment";
 import type { Weekday } from "@/types/schedule";
+import type { TransitionOverride } from "@/types/transitionOverride";
 
 /**
  * Everything a row needs to know about "whose data is this" - denormalized
@@ -39,6 +40,7 @@ export type ClassPresentationSettingsRow = Database["public"]["Tables"]["class_p
 export type ClassroomExperienceSettingsRow = Database["public"]["Tables"]["classroom_experience_settings"]["Row"];
 export type TeacherSchedulePreferencesRow = Database["public"]["Tables"]["teacher_schedule_preferences"]["Row"];
 export type TeacherPeriodAssignmentsRow = Database["public"]["Tables"]["teacher_period_assignments"]["Row"];
+export type TransitionOverridesRow = Database["public"]["Tables"]["transition_overrides"]["Row"];
 
 // "Insert" variants - used only by the *ToRow() functions below that have no
 // real local created_at/updated_at source. Deliberately narrower than the
@@ -63,6 +65,7 @@ export type ClassPresentationSettingsInsert = Omit<ClassPresentationSettingsRow,
 export type ClassroomExperienceSettingsInsert = Omit<ClassroomExperienceSettingsRow, "created_at" | "updated_at">;
 export type TeacherSchedulePreferencesInsert = Omit<TeacherSchedulePreferencesRow, "created_at" | "updated_at">;
 export type TeacherPeriodAssignmentsInsert = Omit<TeacherPeriodAssignmentsRow, "created_at" | "updated_at">;
+export type TransitionOverridesInsert = Omit<TransitionOverridesRow, "created_at" | "updated_at">;
 
 // ---------------------------------------------------------------------------
 // Local -> Supabase (write direction). Every function is pure - no I/O.
@@ -249,6 +252,7 @@ export function lessonToRow(lesson: DailyLesson, courseId: string, ctx: OwnerCon
     resources: lesson.resources as unknown as LessonsRow["resources"],
     announcements: lesson.announcements as unknown as LessonsRow["announcements"],
     materials: lesson.materials ?? null,
+    warmup: lesson.warmup ?? null,
     created_at: lesson.createdAt,
     updated_at: lesson.updatedAt,
   };
@@ -380,6 +384,39 @@ export function teacherPeriodAssignmentToRow(
     schedule_block_id: scheduleBlockCloudId(assignment.scheduleId, assignment.blockId),
     override_weekday: assignment.overrideWeekday,
     class_section_id: assignment.classSectionId,
+  };
+}
+
+/**
+ * Encodes TransitionOverride's tri-state materialsOverride/warmupOverride
+ * (undefined/null/string - see the type's own doc comment) into the two-
+ * column *_overridden/*_override representation
+ * 20260927150100_transition_content_stage_b_transition_overrides.sql
+ * defines, mirroring scheduleBlockOverrideToRow's identical treatment of
+ * ScheduleBlockOverride.classSectionId below. Property PRESENCE, not just
+ * value, is what distinguishes "undefined" from "null" here - `override ===
+ * undefined` (the key was never set) must never be conflated with `override
+ * === null` (explicitly hidden), so this checks strict undefined first.
+ */
+function encodeOverrideField(override: string | null | undefined): { overridden: boolean; value: string | null } {
+  if (override === undefined) return { overridden: false, value: null };
+  return { overridden: true, value: override };
+}
+
+export function transitionOverrideToRow(override: TransitionOverride, ctx: OwnerContext): TransitionOverridesInsert {
+  const materials = encodeOverrideField(override.materialsOverride);
+  const warmup = encodeOverrideField(override.warmupOverride);
+  return {
+    id: override.id,
+    organization_id: ctx.organizationId,
+    owner_membership_id: ctx.membershipId,
+    class_section_id: override.classSectionId,
+    transition_date: override.date,
+    materials_overridden: materials.overridden,
+    materials_override: materials.value,
+    warmup_overridden: warmup.overridden,
+    warmup_override: warmup.value,
+    note: override.note ?? null,
   };
 }
 
@@ -562,6 +599,7 @@ export function rowsToDailyLesson(lesson: LessonsRow, lessonClassSection: Lesson
     resources: (lesson.resources ?? []) as unknown as LessonResource[],
     announcements: (lesson.announcements ?? []) as unknown as Announcement[],
     materials: lesson.materials ?? undefined,
+    warmup: lesson.warmup ?? undefined,
     createdAt: normalizeDbTimestamp(lesson.created_at),
     updatedAt: normalizeDbTimestamp(lesson.updated_at),
   };
@@ -637,6 +675,23 @@ export function rowToTeacherPeriodAssignment(row: TeacherPeriodAssignmentsRow): 
     blockId,
     overrideWeekday: row.override_weekday as Weekday | null,
     classSectionId: row.class_section_id,
+  };
+}
+
+/** Reverse of encodeOverrideField - `overridden=false` collapses back to `undefined` regardless of `value` (which is always NULL at the DB level in that case; see the migration's own comment), never accidentally surfacing a stray stored value as a real override. */
+function decodeOverrideField(overridden: boolean, value: string | null): string | null | undefined {
+  return overridden ? value : undefined;
+}
+
+/** Reverse of transitionOverrideToRow - see encodeOverrideField/decodeOverrideField for the tri-state round-trip these two build on. */
+export function rowToTransitionOverride(row: TransitionOverridesRow): TransitionOverride {
+  return {
+    id: row.id,
+    date: row.transition_date,
+    classSectionId: row.class_section_id,
+    materialsOverride: decodeOverrideField(row.materials_overridden, row.materials_override),
+    warmupOverride: decodeOverrideField(row.warmup_overridden, row.warmup_override),
+    note: row.note ?? undefined,
   };
 }
 

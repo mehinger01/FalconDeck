@@ -375,6 +375,7 @@ export type Database = {
           owner_membership_id: string
           resources: Json
           updated_at: string
+          warmup: string | null
         }
         Insert: {
           agenda_items?: Json
@@ -389,6 +390,7 @@ export type Database = {
           owner_membership_id: string
           resources?: Json
           updated_at?: string
+          warmup?: string | null
         }
         Update: {
           agenda_items?: Json
@@ -403,6 +405,7 @@ export type Database = {
           owner_membership_id?: string
           resources?: Json
           updated_at?: string
+          warmup?: string | null
         }
         Relationships: [
           {
@@ -1115,6 +1118,77 @@ export type Database = {
             foreignKeyName: "teacher_schedule_preferences_owner_membership_id_fkey"
             columns: ["owner_membership_id"]
             isOneToOne: true
+            referencedRelation: "organization_memberships"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      transition_overrides: {
+        Row: {
+          class_section_id: string
+          created_at: string
+          id: string
+          materials_override: string | null
+          materials_overridden: boolean
+          note: string | null
+          organization_id: string
+          owner_membership_id: string
+          transition_date: string
+          updated_at: string
+          warmup_override: string | null
+          warmup_overridden: boolean
+        }
+        Insert: {
+          class_section_id: string
+          created_at?: string
+          id: string
+          materials_override?: string | null
+          materials_overridden?: boolean
+          note?: string | null
+          organization_id: string
+          owner_membership_id: string
+          transition_date: string
+          updated_at?: string
+          warmup_override?: string | null
+          warmup_overridden?: boolean
+        }
+        Update: {
+          class_section_id?: string
+          created_at?: string
+          id?: string
+          materials_override?: string | null
+          materials_overridden?: boolean
+          note?: string | null
+          organization_id?: string
+          owner_membership_id?: string
+          transition_date?: string
+          updated_at?: string
+          warmup_override?: string | null
+          warmup_overridden?: boolean
+        }
+        Relationships: [
+          {
+            foreignKeyName: "transition_overrides_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "transition_overrides_organization_id_owner_membership_id_fkey"
+            columns: [
+              "organization_id",
+              "owner_membership_id",
+              "class_section_id",
+            ]
+            isOneToOne: false
+            referencedRelation: "class_sections"
+            referencedColumns: ["organization_id", "owner_membership_id", "id"]
+          },
+          {
+            foreignKeyName: "transition_overrides_owner_membership_id_fkey"
+            columns: ["owner_membership_id"]
+            isOneToOne: false
             referencedRelation: "organization_memberships"
             referencedColumns: ["id"]
           },

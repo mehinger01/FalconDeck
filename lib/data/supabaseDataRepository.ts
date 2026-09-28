@@ -41,6 +41,7 @@ export async function fetchAppData(client: Client, ctx: OwnerContext): Promise<A
     presentationRes,
     experienceRes,
     prefsRes,
+    transitionOverridesRes,
   ] = await Promise.all([
     client.from("courses").select("*").eq("organization_id", ctx.organizationId),
     client.from("class_sections").select("*").eq("owner_membership_id", ctx.membershipId),
@@ -61,6 +62,10 @@ export async function fetchAppData(client: Client, ctx: OwnerContext): Promise<A
     client.from("class_presentation_settings").select("*").eq("owner_membership_id", ctx.membershipId),
     client.from("classroom_experience_settings").select("*").eq("owner_membership_id", ctx.membershipId).maybeSingle(),
     client.from("teacher_schedule_preferences").select("*").eq("owner_membership_id", ctx.membershipId).maybeSingle(),
+    // Leaf table, no schedule dependency at all (see transition_overrides'
+    // own migration comment) - fetched independently of
+    // bell_schedules/schedule_blocks, same as teacher_period_assignments.
+    client.from("transition_overrides").select("*").eq("owner_membership_id", ctx.membershipId),
   ]);
 
   const courses = unwrap(coursesRes, "load courses");
@@ -75,6 +80,10 @@ export async function fetchAppData(client: Client, ctx: OwnerContext): Promise<A
   const libraryResources = unwrap(libraryResourcesRes, "load library_resources");
   const libraryResourceCourses = unwrap(libraryResourceCoursesRes, "load library_resource_courses");
   const presentationSettings = unwrap(presentationRes, "load class_presentation_settings");
+  // An empty table (or a brand-new teacher with none yet) unwraps to `[]`
+  // via the same unwrap() every other table already uses - no special
+  // "missing table" branch, no auto-creation.
+  const transitionOverrideRows = unwrap(transitionOverridesRes, "load transition_overrides");
 
   const overridesByBlockId = new Map<string, typeof overrides>();
   for (const override of overrides) {
@@ -155,12 +164,7 @@ export async function fetchAppData(client: Client, ctx: OwnerContext): Promise<A
     teacherSchedulePreferences: Map_.rowToTeacherSchedulePreferences(unwrap(prefsRes, "load teacher_schedule_preferences")),
     schoolCalendar,
     teacherPeriodAssignments,
-    // No `transition_overrides` table exists yet (Stage A of the
-    // transition-content initiative is model-only) - always empty until
-    // that Stage B schema/mapping work ships. Same pattern as
-    // `customWatermarkDataUrl: undefined` in rowToClassroomExperienceSettings
-    // for a known field with no Supabase-backed source yet.
-    transitionOverrides: [],
+    transitionOverrides: transitionOverrideRows.map(Map_.rowToTransitionOverride),
   };
 }
 
@@ -204,6 +208,12 @@ export async function applyDiff(client: Client, ctx: OwnerContext, prev: AppData
     next.classPresentationSettings.map((s) => ({ ...s, id: s.classSectionId })),
   );
   const assignmentDiff = diffById(prev.teacherPeriodAssignments, next.teacherPeriodAssignments);
+  // Independent of every other diff here by construction: transition_overrides
+  // has no FK to lessons, bell_schedules, schedule_blocks,
+  // schedule_block_overrides, or teacher_period_assignments (see that
+  // table's own migration comment) - so this diff/write can never be
+  // coupled to, or triggered by, any of those tables' changes.
+  const transitionOverrideDiff = diffById(prev.transitionOverrides, next.transitionOverrides);
 
   // Per-schedule nested block/override diffs, computed against whichever
   // schedule (by id) existed in prev - a schedule present in both counts
@@ -275,6 +285,12 @@ export async function applyDiff(client: Client, ctx: OwnerContext, prev: AppData
   // harmless either way, so no ordering dependency on those deletes exists.
   for (const id of assignmentDiff.removedIds) {
     unwrap(await client.from("teacher_period_assignments").delete().eq("id", id), "delete teacher_period_assignments");
+  }
+  // Also a leaf table, also deleted early alongside teacher_period_assignments
+  // - nothing references transition_overrides, so ordering relative to
+  // every other delete/upsert below is irrelevant.
+  for (const id of transitionOverrideDiff.removedIds) {
+    unwrap(await client.from("transition_overrides").delete().eq("id", id), "delete transition_overrides");
   }
   for (const id of presentationDiff.removedIds) {
     unwrap(await client.from("class_presentation_settings").delete().eq("class_section_id", id), "delete class_presentation_settings");
@@ -406,6 +422,19 @@ export async function applyDiff(client: Client, ctx: OwnerContext, prev: AppData
         .from("teacher_period_assignments")
         .upsert(assignmentsToWrite.map((a) => Map_.teacherPeriodAssignmentToRow(a, ctx))),
       "upsert teacher_period_assignments",
+    );
+  }
+
+  // Independent write, same reasoning as the diff above: never coupled to
+  // lessons, bell_schedules, schedule_blocks, schedule_block_overrides, or
+  // teacher_period_assignments writes in this same save() call.
+  const transitionOverridesToWrite = [...transitionOverrideDiff.added, ...transitionOverrideDiff.updated];
+  if (transitionOverridesToWrite.length > 0) {
+    unwrap(
+      await client
+        .from("transition_overrides")
+        .upsert(transitionOverridesToWrite.map((o) => Map_.transitionOverrideToRow(o, ctx))),
+      "upsert transition_overrides",
     );
   }
 
