@@ -22,6 +22,7 @@ function blankLesson(date: string, classSectionId: string): DailyLesson {
     resources: [],
     announcements: [],
     materials: undefined,
+    warmup: undefined,
     createdAt: timestamp,
     updatedAt: timestamp,
   };
@@ -62,6 +63,7 @@ function performCopy(
     resources: source.resources.map((resource) => ({ ...resource, id: generateId("resource") })),
     announcements: source.announcements.map((note) => ({ ...note, id: generateId("announcement") })),
     materials: source.materials,
+    warmup: source.warmup,
     createdAt: destination ? destination.createdAt : timestamp,
     updatedAt: timestamp,
   };
@@ -77,6 +79,7 @@ export interface LessonActions {
 
   updateLearningTarget: (date: string, classSectionId: string, learningTarget: string) => void;
   updateMaterials: (date: string, classSectionId: string, materials: string) => void;
+  updateWarmup: (date: string, classSectionId: string, warmup: string) => void;
 
   addAgendaItem: (date: string, classSectionId: string, title: string) => void;
   updateAgendaItem: (
@@ -167,6 +170,11 @@ export function createLessonActions(data: AppData, dispatch: Dispatch): LessonAc
     updateMaterials(date, classSectionId, materials) {
       const lesson = getOrInitLesson(data.lessons, date, classSectionId);
       upsert({ ...lesson, materials });
+    },
+
+    updateWarmup(date, classSectionId, warmup) {
+      const lesson = getOrInitLesson(data.lessons, date, classSectionId);
+      upsert({ ...lesson, warmup });
     },
 
     addAgendaItem(date, classSectionId, title) {

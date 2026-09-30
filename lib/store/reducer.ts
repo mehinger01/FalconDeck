@@ -2,7 +2,9 @@ import { createDemoAppData } from "@/lib/data/demoData";
 import type { AppData } from "@/lib/data/types";
 import { clampBellOffsetSeconds } from "@/lib/schedule/time";
 import { isTeachingBlock } from "@/lib/schedule/isTeachingBlock";
+import { isFullyDefaultTransitionOverride } from "@/lib/data/transitionOverrideMode";
 import type { BellSchedule } from "@/types/schedule";
+import type { TransitionOverride } from "@/types/transitionOverride";
 import type { AppDataAction } from "./actions";
 import { generateId } from "./id";
 
@@ -402,6 +404,37 @@ export function appDataReducer(state: AppData, action: AppDataAction): AppData {
             exception.id === action.exceptionId ? { ...exception, ...action.patch } : exception,
           ),
         },
+      };
+    }
+
+    // Teacher Transition Content (Stage D): the ONLY place a
+    // TransitionOverride row is created, updated, or deleted. Sparse by
+    // construction - a dispatch that leaves every field at its default
+    // (materialsOverride/warmupOverride both undefined, note blank) never
+    // creates a row, and one that brings an EXISTING row back to fully
+    // default deletes it, rather than leaving a stale empty row behind.
+    // Writes only AppData.transitionOverrides - never lessons,
+    // bell_schedules, schedule_blocks, schedule_block_overrides, or
+    // teacher_period_assignments, so this can never become a shared-
+    // schedule structural write no matter what a caller passes in.
+    case "SET_TRANSITION_OVERRIDE": {
+      const existing = state.transitionOverrides.find(
+        (o) => o.date === action.date && o.classSectionId === action.classSectionId,
+      );
+      const merged: TransitionOverride = {
+        id: existing?.id ?? action.newOverrideId,
+        date: action.date,
+        classSectionId: action.classSectionId,
+        materialsOverride: "materialsOverride" in action.patch ? action.patch.materialsOverride : existing?.materialsOverride,
+        warmupOverride: "warmupOverride" in action.patch ? action.patch.warmupOverride : existing?.warmupOverride,
+        note: "note" in action.patch ? action.patch.note : existing?.note,
+      };
+      const withoutExisting = state.transitionOverrides.filter((o) => o !== existing);
+      return {
+        ...state,
+        transitionOverrides: isFullyDefaultTransitionOverride(merged)
+          ? withoutExisting
+          : [...withoutExisting, merged],
       };
     }
 

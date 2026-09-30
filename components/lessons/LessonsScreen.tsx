@@ -12,6 +12,7 @@ import { CopyLessonPanel } from "./CopyLessonPanel";
 import { LessonAgendaEditor } from "./LessonAgendaEditor";
 import { LessonAnnouncementEditor } from "./LessonAnnouncementEditor";
 import { LessonResourceEditor } from "./LessonResourceEditor";
+import { TransitionOverrideEditor } from "./TransitionOverrideEditor";
 
 export function LessonsScreen() {
   const { data, actions } = useAppData();
@@ -178,6 +179,23 @@ export function LessonsScreen() {
             />
           </section>
 
+          <section className="mb-6 rounded-xl border border-falcon-brown-700/15 bg-white/60 p-4">
+            <h2 className="mb-2 text-sm font-bold uppercase tracking-wide text-falcon-brown-700/70">
+              Warm-Up / Bell Ringer
+            </h2>
+            <p className="mb-2 text-xs text-falcon-brown-700/60">
+              What students begin the moment class starts - Falcon Deck can also show this during
+              the passing period right before this class.
+            </p>
+            <textarea
+              value={lesson?.warmup ?? ""}
+              onChange={(e) => actions.updateWarmup(date, classSectionId, e.target.value)}
+              placeholder="e.g. 1. Solve for x... 2. Simplify..."
+              rows={2}
+              className="w-full rounded-md border border-falcon-brown-700/30 bg-white px-3 py-2 text-sm text-falcon-brown-900"
+            />
+          </section>
+
           <div className="grid gap-6 lg:grid-cols-2">
             <LessonAgendaEditor
               key={`agenda:${date}:${classSectionId}`}
@@ -213,6 +231,16 @@ export function LessonsScreen() {
                 </p>
               </section>
             )}
+          </div>
+
+          <div className="mt-6">
+            <TransitionOverrideEditor
+              key={`transition:${date}:${classSectionId}`}
+              date={date}
+              classSectionId={classSectionId}
+              lessonMaterials={lesson?.materials}
+              lessonWarmup={lesson?.warmup}
+            />
           </div>
 
           {lesson && (

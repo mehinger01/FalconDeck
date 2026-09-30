@@ -7,6 +7,7 @@ import type { LibraryResource } from "@/types/resource";
 import type { TeacherSchedulePreferences } from "@/types/teacherSchedule";
 import type { SchoolCalendarException, SchoolYearCalendar } from "@/types/calendar";
 import type { TeacherPeriodAssignment } from "@/types/teacherPeriodAssignment";
+import type { TransitionOverride } from "@/types/transitionOverride";
 
 export type AppDataAction =
   | { type: "HYDRATE"; data: AppData }
@@ -48,4 +49,20 @@ export type AppDataAction =
       classSectionId: string | null;
       /** A freshly-generated UUID, used only if no base assignment for this block exists yet - see TeacherPeriodAssignment.id's own doc comment. */
       newAssignmentId: TeacherPeriodAssignment["id"];
+    }
+  | {
+      type: "SET_TRANSITION_OVERRIDE";
+      date: string;
+      classSectionId: string;
+      /**
+       * Only the field(s) actually being changed - a key's PRESENCE (even
+       * with value `undefined`) means "set this field," its absence means
+       * "leave whatever this field currently is untouched." Lets one
+       * dispatch touch exactly one field (e.g. just materialsOverride)
+       * without the caller needing to know or resend the row's other
+       * current values.
+       */
+      patch: Partial<Pick<TransitionOverride, "materialsOverride" | "warmupOverride" | "note">>;
+      /** Client-generated (generateId("transition-override")), used only if no row for (date, classSectionId) exists yet - see TransitionOverride.id's own doc comment. Never regenerated for an in-place update. */
+      newOverrideId: TransitionOverride["id"];
     };

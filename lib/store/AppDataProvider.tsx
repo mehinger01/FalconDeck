@@ -24,6 +24,7 @@ import {
 import { generateId } from "./id";
 import { createLessonActions, type LessonActions } from "./lessonActions";
 import { createLibraryResourceActions, type LibraryResourceActions } from "./libraryResourceActions";
+import { createTransitionOverrideActions, type TransitionOverrideActions } from "./transitionOverrideActions";
 import { appDataReducer } from "./reducer";
 import {
   canSave,
@@ -35,7 +36,7 @@ import {
   type HydrationState,
 } from "./hydrationState";
 
-export interface AppDataActions extends LessonActions, LibraryResourceActions {
+export interface AppDataActions extends LessonActions, LibraryResourceActions, TransitionOverrideActions {
   createSchedule: (name: string) => void;
   /** Adds a fully-formed BellSchedule as-is (its id is preserved verbatim) - used for the built-in OHHS Regular Day preset and for committing a successfully-parsed Bell Schedule import. */
   addBuiltInSchedule: (schedule: BellSchedule) => void;
@@ -366,6 +367,7 @@ export function AppDataProvider({
 
       ...createLessonActions(data, dispatch),
       ...createLibraryResourceActions(data, dispatch),
+      ...createTransitionOverrideActions(dispatch),
     }),
     [data],
   );
