@@ -33,6 +33,7 @@
     "verify:transition-content-stage-b": "tsx scripts/verify-transition-content-stage-b.ts",
     "verify:transition-content-stage-c": "tsx scripts/verify-transition-content-stage-c.ts",
     "verify:transition-content-stage-d": "tsx scripts/verify-transition-content-stage-d.ts",
+    "verify:supabase-save-serialization": "tsx scripts/verify-supabase-save-serialization.ts",
     "verify": "npm run verify:schedule && npm run verify:lessons && npm run verify:preview && npm run verify:week && npm run verify:classroom && npm run verify:resources && npm run verify:calendar && npm run verify:new-user-cloud-authority && npm run verify:navbar-organization && npm run verify:join-existing-school-stage-b && npm run verify:onboarding-school-search-and-join && npm run verify:active-bell-schedule-stage-d && npm run verify:demo && npm run verify:lesson-import && npm run verify:clockstore && npm run verify:present-layout && npm run verify:supabase-mapping && npm run verify:cutover-provider && npm run verify:restore-backup && npm run verify:teacher-period-assignments-stage-e && npm run verify:onboarding-schedule-choice-stage-f && npm run verify:transition-content-stage-a && npm run verify:transition-content-stage-b && npm run verify:transition-content-stage-c && npm run verify:transition-content-stage-d"
   },
   "dependencies": {

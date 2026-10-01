@@ -550,6 +550,7 @@ export class SupabaseDataRepository implements DataRepository {
   private readonly client: Client;
   private readonly ctx: OwnerContext;
   private lastSnapshot: AppData | null = null;
+  private queueTail: Promise<void> = Promise.resolve();
 
   constructor(client: Client, ctx: OwnerContext) {
     this.client = client;
@@ -563,19 +564,37 @@ export class SupabaseDataRepository implements DataRepository {
   }
 
   async save(data: AppData): Promise<SaveResult> {
-    const prev = this.lastSnapshot ?? (await fetchAppData(this.client, this.ctx));
+    const runAfter = this.queueTail;
+    let releaseNext: () => void;
+
+    this.queueTail = new Promise<void>((resolve) => {
+      releaseNext = resolve;
+    });
+
+    await runAfter;
+
     try {
+      const prev =
+        this.lastSnapshot ?? (await fetchAppData(this.client, this.ctx));
+
       await applyDiff(this.client, this.ctx, prev, data);
+
       // Only advance the snapshot after every write above succeeded -
       // Decision 2's core requirement.
       this.lastSnapshot = structuredClone(data);
+
       return { ok: true };
     } catch (error) {
       return {
         ok: false,
         reason: "unknown",
-        message: error instanceof Error ? error.message : "Unknown error saving to Supabase.",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Unknown error saving to Supabase.",
       };
+    } finally {
+      releaseNext!();
     }
   }
 
