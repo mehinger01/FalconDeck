@@ -264,6 +264,29 @@ export function AppDataProvider({
     };
   }, [data, repository, hydration]);
 
+  // Warns on a REAL browser-level unload (reload, tab/window close,
+  // external navigation, typed URL) only while there is known-unsaved/
+  // in-flight/coalesced work - `persistence.status` already reflects this
+  // exactly: under SupabaseDataRepository's coalescing, a caller's own
+  // save() promise (and therefore this effect's own `.then()` above) does
+  // not resolve until the actual representative write lands, so status
+  // stays "saving" for as long as anything is genuinely still
+  // unpersisted. Deliberately does NOT fire for in-app/SPA navigation -
+  // `beforeunload` only fires for a real document unload, never for a
+  // Next.js client-side route change, so this never interferes with
+  // ordinary navigation within (or between) route groups.
+  useEffect(() => {
+    function handleBeforeUnload(event: BeforeUnloadEvent) {
+      if (persistence.status !== "saving") return;
+      event.preventDefault();
+      event.returnValue = "";
+    }
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [persistence.status]);
+
   const actions = useMemo<AppDataActions>(
     () => ({
       createSchedule: (name) =>

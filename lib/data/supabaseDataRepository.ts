@@ -550,7 +550,21 @@ export class SupabaseDataRepository implements DataRepository {
   private readonly client: Client;
   private readonly ctx: OwnerContext;
   private lastSnapshot: AppData | null = null;
-  private queueTail: Promise<void> = Promise.resolve();
+
+  /**
+   * At most one critical section (read baseline -> applyDiff -> advance
+   * baseline) runs at a time. `pending` holds the single latest AppData
+   * snapshot - plus every caller currently waiting on it - that arrived
+   * while a critical section was already running: a new arrival simply
+   * replaces `pending.data` and appends its own resolver, so any number of
+   * overlapping save() calls collapse into at most one further write, not
+   * one per call. This is only safe because each save(data) carries a
+   * COMPLETE AppData snapshot and, within one tab's single reducer, a
+   * later snapshot is always a superset/evolution of an earlier one - the
+   * intermediate ones being discarded unwritten is lossless.
+   */
+  private inFlight = false;
+  private pending: { data: AppData; waiters: Array<(result: SaveResult) => void> } | null = null;
 
   constructor(client: Client, ctx: OwnerContext) {
     this.client = client;
@@ -564,15 +578,16 @@ export class SupabaseDataRepository implements DataRepository {
   }
 
   async save(data: AppData): Promise<SaveResult> {
-    const runAfter = this.queueTail;
-    let releaseNext: () => void;
-
-    this.queueTail = new Promise<void>((resolve) => {
-      releaseNext = resolve;
+    if (!this.inFlight) {
+      return this.runCriticalSection(data);
+    }
+    return new Promise<SaveResult>((resolve) => {
+      this.pending = { data, waiters: [...(this.pending?.waiters ?? []), resolve] };
     });
+  }
 
-    await runAfter;
-
+  private async runCriticalSection(data: AppData): Promise<SaveResult> {
+    this.inFlight = true;
     try {
       const prev =
         this.lastSnapshot ?? (await fetchAppData(this.client, this.ctx));
@@ -585,6 +600,14 @@ export class SupabaseDataRepository implements DataRepository {
 
       return { ok: true };
     } catch (error) {
+      // applyDiff is not atomic - it issues a sequence of independent
+      // upserts/deletes, so a failure partway through may have already
+      // written part of this attempt to the database. The cached baseline
+      // can therefore no longer be trusted: invalidate it so the next
+      // critical section re-fetches real cloud state (via the `??
+      // fetchAppData(...)` fallback above) instead of diffing against a
+      // baseline that might already be stale or wrong.
+      this.lastSnapshot = null;
       return {
         ok: false,
         reason: "unknown",
@@ -594,7 +617,14 @@ export class SupabaseDataRepository implements DataRepository {
             : "Unknown error saving to Supabase.",
       };
     } finally {
-      releaseNext!();
+      this.inFlight = false;
+      const promoted = this.pending;
+      this.pending = null;
+      if (promoted) {
+        void this.runCriticalSection(promoted.data).then((result) => {
+          for (const resolve of promoted.waiters) resolve(result);
+        });
+      }
     }
   }
 
