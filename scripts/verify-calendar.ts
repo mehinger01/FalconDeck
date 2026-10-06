@@ -38,7 +38,6 @@ import {
   type ParsedCalendarException,
 } from "@/lib/calendar/masterCalendarImport";
 import { OHHS_MASTER_CALENDAR_2026_JSON } from "@/lib/data/ohhsMasterCalendar2026";
-import { buildScheduleBlocksFromRows, parseBellScheduleTable } from "@/lib/schedule/bellScheduleImport";
 import { appDataReducer } from "@/lib/store/reducer";
 import { createDemoAppData } from "@/lib/data/demoData";
 import { LocalStorageDataRepository } from "@/lib/data/localStorageRepository";
@@ -468,52 +467,11 @@ console.log("\n61-75. Master Calendar import pipeline");
   check("75: deleting a calendar exception does not delete lessons", state.lessons === lessonsBeforeDelete);
 }
 
-console.log("\n76-84. Bell Schedule import (CSV/paste)");
-{
-  const csvText = "label,start_time,end_time,kind,class_section\nPeriod 1,7:25 AM,8:23 AM,instructional,\nPassing,8:23 AM,8:29 AM,passing,";
-  const csvResult = parseBellScheduleTable(csvText);
-  check("76: CSV bell schedule parses", csvResult.ok === true && csvResult.ok && csvResult.rows.length === 2);
-
-  const pastedTable = "label\tstart_time\tend_time\tkind\tclass_section\nPeriod 1\t7:25 AM\t8:23 AM\tinstructional\t";
-  const pastedResult = parseBellScheduleTable(pastedTable);
-  check("77: pasted (tab-delimited) table parses", pastedResult.ok === true);
-
-  const invalidStart = parseBellScheduleTable("label,start_time,end_time,kind,class_section\nPeriod 1,not-a-time,8:23 AM,instructional,");
-  check("78: invalid start time rejected", invalidStart.ok === false);
-
-  const endBeforeStart = parseBellScheduleTable("label,start_time,end_time,kind,class_section\nPeriod 1,8:23 AM,7:25 AM,instructional,");
-  check("79: end <= start rejected", endBeforeStart.ok === false);
-
-  const overlapping = parseBellScheduleTable(
-    "label,start_time,end_time,kind,class_section\nPeriod 1,7:25 AM,8:30 AM,instructional,\nPeriod 2,8:00 AM,9:00 AM,instructional,",
-  );
-  check("80: accidental overlap detected", overlapping.ok === false);
-
-  if (csvResult.ok) {
-    const blocks = buildScheduleBlocksFromRows(csvResult.rows, "imported-test");
-    const newSchedule: BellSchedule = { id: "imported-test", name: "Imported", ownerType: "teacher", isDefault: false, timeZone: "America/Detroit", source: "imported", blocks };
-    let state: AppData = createDemoAppData();
-    const beforeCount = state.schedules.length;
-    const priorDefault = state.schedules.find((s) => s.isDefault)?.id;
-    state = appDataReducer(state, { type: "ADD_SCHEDULE", schedule: newSchedule });
-    check("81: a valid import creates a new schedule", state.schedules.length === beforeCount + 1);
-    const imported = state.schedules.find((s) => s.id === "imported-test");
-    check("82: the imported schedule does not become default automatically", imported?.isDefault === false);
-    check("83: the previous default is unchanged", state.schedules.find((s) => s.isDefault)?.id === priorDefault);
-  } else {
-    check("81: a valid import creates a new schedule", false);
-    check("82: the imported schedule does not become default automatically", false);
-    check("83: the previous default is unchanged", false);
-  }
-
-  const manyPeriods = parseBellScheduleTable(
-    Array.from({ length: 10 }, (_, i) => {
-      const startHour = (7 + i).toString().padStart(2, "0");
-      return `Period ${i + 1},${startHour}:00,${startHour}:45,instructional,`;
-    }).join("\n"),
-  );
-  check("84: an arbitrary number of periods is supported (10 periods)", manyPeriods.ok === true && manyPeriods.ok && manyPeriods.rows.length === 10);
-}
+// 76-84. Bell Schedule import (CSV/paste) - the legacy loose-schema importer
+// (label,start_time,end_time,kind,class_section; optional headers;
+// positional fallback) these checks exercised no longer exists. Stage E
+// replaced it with a stricter importer; see
+// scripts/verify-bell-schedule-import-stage-e.ts for its coverage.
 
 console.log("\n85-94. Present Mode / Week integration (static source checks - see verify:demo for behavioral coverage)");
 {

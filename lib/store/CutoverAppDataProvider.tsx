@@ -1,11 +1,38 @@
 "use client";
 
-import { useMemo } from "react";
+import { createContext, useContext, useMemo } from "react";
 import type { ReactNode } from "react";
 import { ActiveScheduleGate } from "./ActiveScheduleGate";
 import { AppDataProvider } from "./AppDataProvider";
 import { selectDataRepositoryPolicy } from "./selectDataRepository";
 import { dataAuthorityMountKey, type DataAuthorityState } from "@/lib/auth/dataAuthority";
+
+/**
+ * The current organization id, available to client components ONLY when the
+ * resolved authority is "cloud-ready" (a real SupabaseDataRepository is
+ * active) - `null` for anonymous/no-membership/needs-selection/"local"
+ * (pre-migration, still LocalStorageDataRepository-backed even though it
+ * does carry a real organizationId - see DataAuthorityState) and for Demo
+ * Mode (no CutoverAppDataProvider mounted there at all, so this resolves to
+ * the plain default below). Purpose-built for Stage E's Bell Schedule CSV
+ * Import, which needs to know "is it safe to call a Supabase RPC that
+ * writes directly to the cloud" - never broadened into a generic auth/role/
+ * membership context. See useCurrentOrganizationId's own doc comment.
+ */
+const OrganizationIdContext = createContext<string | null>(null);
+
+/**
+ * `null` means either no CutoverAppDataProvider is mounted (Demo Mode,
+ * Present Mode outside its own authenticated layout, etc.) or the resolved
+ * authority is anything other than "cloud-ready" - callers must treat both
+ * cases identically: whatever Supabase-only feature this gates must not
+ * render/run. Never attempt to fall back to a different authority's
+ * organizationId (e.g. "local"'s) - that would defeat the reason this
+ * exists (see the context's own doc comment).
+ */
+export function useCurrentOrganizationId(): string | null {
+  return useContext(OrganizationIdContext);
+}
 
 /**
  * The only place AppDataProvider's `repository`/`blockUntilHydrated` props
@@ -72,7 +99,9 @@ export function CutoverAppDataProvider({ authority, children }: { authority: Dat
           gated (bare /setup has to stay reachable for MigrationSetupCard);
           see ActiveScheduleGate.tsx's own doc comment for the cutover-audit
           bug this fixes. */}
-      <ActiveScheduleGate enabled={authority.kind === "cloud-ready"}>{children}</ActiveScheduleGate>
+      <OrganizationIdContext.Provider value={authority.kind === "cloud-ready" ? authority.organizationId : null}>
+        <ActiveScheduleGate enabled={authority.kind === "cloud-ready"}>{children}</ActiveScheduleGate>
+      </OrganizationIdContext.Provider>
     </AppDataProvider>
   );
 }

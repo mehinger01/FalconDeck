@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useAppData, useActiveSchedule } from "@/lib/store/AppDataProvider";
+import { useCurrentOrganizationId } from "@/lib/store/CutoverAppDataProvider";
 import { isUsableSharedSchedule } from "@/lib/schedule/isUsableSharedSchedule";
 import { validateSchedule } from "@/lib/schedule/validateSchedule";
 import { BellScheduleImportPanel } from "./BellScheduleImportPanel";
@@ -16,6 +17,7 @@ import { ValidationBanner } from "./ValidationBanner";
 export function ScheduleSetupScreen() {
   const { data, actions } = useAppData();
   const activeSchedule = useActiveSchedule();
+  const organizationId = useCurrentOrganizationId();
   // The right-hand panel's "which schedule am I looking at" state - a
   // teacher may browse any schedule they can see (including a shared one,
   // read-only) without that changing which schedule is active. Defaults to
@@ -48,9 +50,11 @@ export function ScheduleSetupScreen() {
         <MyScheduleSection />
       </div>
 
-      <div className="mb-4 flex justify-end">
-        <BellScheduleImportPanel />
-      </div>
+      {organizationId !== null && (
+        <div className="mb-4 flex justify-end">
+          <BellScheduleImportPanel organizationId={organizationId} />
+        </div>
+      )}
 
       <div className="flex flex-col gap-6 sm:flex-row">
         <ScheduleList

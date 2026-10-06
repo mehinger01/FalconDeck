@@ -1,0 +1,8 @@
+schedule_name,block_name,block_type,start_time,end_time
+Regular Day,Period 1,class,08:00,08:50
+Regular Day,Passing,passing,08:50,08:55
+Regular Day,Period 2,class,08:55,09:45
+Regular Day,Lunch,lunch,09:45,10:15
+Regular Day,Enrichment,enrichment,10:15,10:45
+Regular Day,Prep,prep,10:45,11:35
+Regular Day,Period 3,class,11:35,12:25
