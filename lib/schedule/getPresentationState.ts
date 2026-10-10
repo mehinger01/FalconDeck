@@ -1,6 +1,6 @@
 import type { BellSchedule, ResolvedScheduleBlock, Weekday } from "@/types/schedule";
 import { getScheduleState } from "./getScheduleState";
-import { getSecondsUntilStart } from "./getRemainingTime";
+import { getSecondsUntilStart, shouldShowCountdown } from "./getRemainingTime";
 import { isStudentFacingBlock } from "./isStudentFacingBlock";
 
 export type PresentationState =
@@ -25,6 +25,8 @@ export type PresentationState =
       currentBlock: ResolvedScheduleBlock | null;
       nextStudentFacingBlock: ResolvedScheduleBlock | null;
       secondsUntilNextStudentFacing: number | null;
+      /** Lunch stays calm until the final five minutes before the next class. */
+      showLunchScreen: boolean;
     }
   | { mode: "no-blocks-today"; weekday: Weekday };
 
@@ -84,5 +86,8 @@ export function getPresentationState(
     currentBlock,
     nextStudentFacingBlock,
     secondsUntilNextStudentFacing,
+    showLunchScreen:
+      currentBlock?.kind === "lunch" &&
+      (secondsUntilNextStudentFacing === null || !shouldShowCountdown(secondsUntilNextStudentFacing)),
   };
 }
