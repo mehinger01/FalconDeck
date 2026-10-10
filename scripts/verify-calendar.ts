@@ -126,6 +126,33 @@ console.log("\n4-20. Official OHHS bell times");
   check("20: end of school day is 2:19", p7?.endTime === "14:19");
 }
 
+console.log("\nPost-lunch next-class countdown boundaries");
+{
+  const resolved = resolveTeacherSchedule(ohhs, { lunchWave: "A", activeBellScheduleId: null });
+  const before = getPresentationState(resolved, new Date(`${MONDAY}T11:12:59-04:00`));
+  check("Lunch stays calm with 5:01 until Period 5", before.mode === "transition" && before.showLunchScreen && before.secondsUntilNextStudentFacing === 301);
+  for (const [time, seconds] of [["11:13:00", 300], ["11:17:30", 30], ["11:17:59", 1]] as const) {
+    const state = getPresentationState(resolved, new Date(`${MONDAY}T${time}-04:00`));
+    check(`Next-class screen at ${seconds} seconds before Period 5`, state.mode === "transition" && !state.showLunchScreen && state.currentBlock?.kind === "lunch" && state.nextStudentFacingBlock?.label === "Period 5" && state.secondsUntilNextStudentFacing === seconds);
+  }
+  const start = getPresentationState(resolved, atLocalTime(MONDAY, "11:18"));
+  check("Period 5 lesson begins exactly when A Lunch ends", start.mode === "student-facing" && start.block.label === "Period 5");
+
+  const b = resolveTeacherSchedule(ohhs, { lunchWave: "B", activeBellScheduleId: null });
+  const bFinalFive = getPresentationState(b, atLocalTime(MONDAY, "11:43"));
+  check("B Lunch also transitions five minutes before class resumes", bFinalFive.mode === "transition" && !bFinalFive.showLunchScreen && bFinalFive.secondsUntilNextStudentFacing === 300);
+
+  const c = resolveTeacherSchedule(ohhs, { lunchWave: "C", activeBellScheduleId: null });
+  const cLunchEnd = getPresentationState(c, new Date(`${MONDAY}T12:17:59-04:00`));
+  check("C Lunch stays calm when passing time leaves 6:01 until class", cLunchEnd.mode === "transition" && cLunchEnd.showLunchScreen && cLunchEnd.secondsUntilNextStudentFacing === 361);
+  const passing = getPresentationState(c, atLocalTime(MONDAY, "12:18"));
+  check("Normal passing screen still counts toward Period 6", passing.mode === "transition" && !passing.showLunchScreen && passing.secondsUntilNextStudentFacing === 360);
+
+  const lunchOnly = { ...resolved, blocks: resolved.blocks.filter((block) => block.kind === "lunch") };
+  const noNextClass = getPresentationState(lunchOnly, atLocalTime(MONDAY, "11:17"));
+  check("Lunch with no upcoming class stays calm", noNextClass.mode === "transition" && noNextClass.showLunchScreen && noNextClass.nextStudentFacingBlock === null);
+}
+
 console.log("\n21-33. Lunch wave resolution");
 {
   const aResolved = resolveTeacherSchedule(ohhs, { lunchWave: "A", activeBellScheduleId: null });
@@ -482,7 +509,7 @@ console.log("\n85-94. Present Mode / Week integration (static source checks - se
   check("88: a no-students Present state is wired up", liveSource.includes("NoStudentsScreen"));
   check("89: an unconfigured-schedule warning is wired up", liveSource.includes("UnconfiguredScheduleScreen"));
   check("90: automated transitions use the date-resolved schedule (fed by `schedule`, itself from dateResolution)", liveSource.includes("TransitionScreenContainer") && liveSource.includes("const schedule = dateResolution"));
-  check("91: lunch state is integrated into Present Mode", liveSource.includes("LunchScreen") && liveSource.includes('kind === "lunch"'));
+  check("91: lunch state is integrated into Present Mode", liveSource.includes("LunchScreen") && liveSource.includes("state.showLunchScreen"));
 
   const weekGridSource = readFileSync(join(process.cwd(), "components", "week", "WeekGrid.tsx"), "utf8");
   check("92: Week view marks No School", weekGridSource.includes("NO SCHOOL"));

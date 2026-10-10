@@ -3,9 +3,8 @@ import { formatTimeString } from "@/lib/schedule/time";
 
 /**
  * Shown while the teacher's resolved lunch wave is the active block
- * (`currentBlock.kind === "lunch"`, produced by resolveTeacherSchedule.ts
- * splitting the school-wide lunch window) - a calm state instead of the
- * generic "NEXT CLASS" transition screen. Nothing here decides when lunch
+ * before the final five minutes leading into the next class - a calm state
+ * instead of the generic "NEXT CLASS" transition screen. Nothing here decides when lunch
  * starts/ends or what resumes after - that's entirely the existing
  * schedule engine (the post-lunch block shares the original block's
  * classSectionId, so the same lesson just resumes automatically once this

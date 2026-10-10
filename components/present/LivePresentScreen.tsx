@@ -107,9 +107,9 @@ function TransitionScreenContainer({
  * `resolveTeacherSchedule` represents a teacher's lunch wave as an
  * ordinary `kind: "lunch"` block, which naturally falls into
  * `getPresentationState`'s "transition" mode (it's not student-facing) -
- * `currentBlock.kind === "lunch"` swaps in the calm LunchScreen instead of
- * the generic "next class" countdown, and the moment that block ends the
- * engine's own logic resumes the original lesson with zero special-casing.
+ * Lunch stays calm until the final five minutes before the next class,
+ * when the engine's `showLunchScreen` flag allows the normal transition
+ * screen. The lesson still starts at its scheduled time.
  *
  * Reports whichever lesson is currently on screen via
  * `onCurrentLessonChange`, so `PresentScreen`'s classroom tools (Quick
@@ -158,10 +158,10 @@ export function LivePresentScreen({
   // Stage C: the transition screen's materials/warm-up/note - resolved here
   // (not inside TransitionScreen, which stays presentation-only) via the
   // Stage A pure resolver, off the SAME nextStudentFacingBlock the existing
-  // transition branch below already uses. Never computed for Lunch (which
-  // renders LunchScreen, not a "next class" countdown at all).
+  // transition branch below already uses, including the final five minutes
+  // before the post-lunch class. The calm lunch screen needs no content.
   const nextTransitionContent =
-    state?.mode === "transition" && state.currentBlock?.kind !== "lunch" && state.nextStudentFacingBlock && dateKey
+    state?.mode === "transition" && !state.showLunchScreen && state.nextStudentFacingBlock && dateKey
       ? resolveTransitionContent(
           data.lessons,
           data.transitionOverrides,
@@ -219,7 +219,7 @@ export function LivePresentScreen({
           {state.mode === "prep" && <PrepView block={state.block} remainingSeconds={state.remainingSeconds} />}
 
           {state.mode === "transition" &&
-            (state.currentBlock?.kind === "lunch" ? (
+            (state.showLunchScreen && state.currentBlock ? (
               <LunchScreen block={state.currentBlock} />
             ) : state.nextStudentFacingBlock ? (
               <TransitionScreenContainer
