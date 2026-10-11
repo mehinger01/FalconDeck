@@ -3,8 +3,8 @@
 **Status:** persistence foundation implemented and tested in isolation, awaiting
 review. The two migrations below are **not applied to any Supabase project**. No
 route, screen, or redirect has changed; no existing account behaves differently.
-One risk is reproduced and **unresolved** (§9.2) and should be closed before any
-real account can complete guided setup.
+The stale-tab data loss found during review is fixed in the save engine and
+covered by regression tests (§9.2); what that fix does not cover is listed there.
 
 **Goal of the milestone:** a new teacher goes from signup to a saved, usable
 classroom display in one continuous flow —
@@ -293,78 +293,77 @@ organization-owned schedule it is never a teacher's own.
    `CutoverAppDataProvider`, whose `load()` reads the committed rows and sets the
    repository's baseline from them.
 
-This makes the completing tab safe. It does nothing for any *other* tab.
+This makes the completing tab safe. Other tabs are the subject of §9.2.
 
-### 9.2 Unresolved: an ordinary tab that was already open
+### 9.2 An ordinary tab that was already open
 
-**The risk.** An ordinary Falcon Deck tab loaded before setup completed holds a
-full snapshot that predates it, and the save engine has no way to know.
-`npm run repro:stale-tab-after-setup` reproduces three outcomes using the real
-`SupabaseDataRepository` and the real `complete_setup`:
+**The problem.** An ordinary Falcon Deck tab loaded before setup completed holds a
+full snapshot that predates it. Before the fix below, three things went wrong, all
+reproduced with the real `SupabaseDataRepository` and the real `complete_setup`:
 
-| | What the stale tab does | Observed result |
+| | What the stale tab did | What happened |
 |---|---|---|
-| A | Changes its lunch wave | The whole `teacher_schedule_preferences` row is rewritten from stale memory: **the active schedule set by setup is cleared.** |
-| B | Has one failed save, then saves again (teacher uses the school's schedule) | After a failure the repository re-reads the database as its new baseline and diffs it against stale memory. Everything the tab never knew about looks "removed": **the class, its period assignment and the first lesson are deleted.** |
-| B2 | The same, teacher built their own schedule | **The first lesson is deleted.** The save then fails on a foreign key (the private schedule is still the active one), which is the only reason the class survives. Every later save from that tab fails. |
+| A | Changed its lunch wave | The whole `teacher_schedule_preferences` row was rewritten from stale memory: **the active schedule set by setup was cleared.** |
+| B | Had one failed save, then saved again (teacher uses the school's schedule) | After a failure the repository discarded its baseline, re-read the whole database, and diffed that against stale memory. Everything the tab never knew about looked "removed": **the class, its period assignment and the first lesson were deleted.** |
+| B2 | The same, teacher built their own schedule | **The first lesson was deleted**, then the save failed on a foreign key, and every later save from that tab failed. |
 
-B is not specific to guided setup. The same mechanism applies to any two ordinary
-tabs today; setup only makes the stale window likely for a brand-new account. It is
-reported here, not fixed.
+B was never specific to guided setup: any two ordinary tabs could do it to each
+other.
 
-**What is guaranteed today** (tested): the completion is atomic and happens once; a
-stale tab cannot alter the draft or the completion record; a tab loaded after
-completion is unaffected.
+**The fix** is two narrow changes inside `lib/data/supabaseDataRepository.ts`. The
+diff, the write ordering, the queue and the coalescing are untouched.
 
-**What is not guaranteed today:** that the rows setup committed survive a stale
-ordinary tab.
+1. **A failed save no longer replaces the baseline with a full re-read.** The
+   baseline — what this tab knows the database held for the rows it has loaded or
+   written — is kept. The rows the failed save set out to change are marked
+   *uncertain*, and only those are re-read before the next save, so a half-written
+   attempt is still corrected from the truth. A row that is neither in the baseline
+   nor uncertain is one this tab did not create and has never seen; it is left out
+   of the comparison entirely and can no longer be mistaken for a deletion.
+2. **The two one-row-per-teacher tables are written column by column.**
+   `teacher_schedule_preferences` and `classroom_experience_settings` are now
+   updated with only the columns this tab changed, instead of upserted whole. A
+   tab that changes the lunch wave sends the lunch wave. If no row exists yet, the
+   whole row is inserted as before.
 
-**Why a small database-only guard is not enough.** Rejecting just the stale
-preferences write turns outcome A into outcome B: a rejected write is a failed
-save, and a failed save is what triggers the destructive re-read. A protection
-that works by refusing stale writes must either cover every table that tab can
-write, or stop that tab from ever saving again.
+**Unsaved edits survive recovery.** A failed save does not consume the edit: the
+provider still holds it and passes it to the next save, which now writes it in
+full — including edits made between the failure and the retry, and including an
+edit that was reverted in between (the uncertain row or field is re-read, so the
+database ends where the tab does).
 
-**Proposed protection — a completion fence.** Not implemented.
+**What is now guaranteed, and tested** (`verify:stale-tab-save-safety`, real engine,
+real `complete_setup`, local PostgreSQL 17):
 
-1. *Database.* One trigger function on the teacher-owned tables. For a direct
-   write by `authenticated` to a row owned by membership M: if M has a
-   `setup_completions` row, the request must carry that operation id in a request
-   header; otherwise the write is refused with a dedicated error code. Memberships
-   with no completion record — every existing and legacy account — are untouched.
-   `SECURITY DEFINER` functions are exempt.
-2. *Client.* The server layout already resolves the membership; it also resolves
-   the completion's operation id, includes it in the data-authority value and mount
-   key, and the browser client is constructed with it as a header. On the dedicated
-   error code the repository reports a terminal "this tab is out of date — reload"
-   state, the way it already reports a session ending.
+- A, B and B2 above: setup's rows and its active schedule survive, the stale tab's
+  save succeeds, and the stale tab's own edit is saved.
+- Two ordinary tabs: one tab's failed-then-retried save does not delete what the
+  other tab added.
+- A half-written save is still cleaned up: an abandoned row is removed, a reverted
+  preference ends reverted.
+- A tab can still delete rows it knows about, and only those.
 
-*What that would guarantee:* no client that has not seen the completion can change
-or delete any teacher-owned row after it — from any tab, browser or device,
-including a tab running an older bundle — because the refusal is in the database
-and covers deletes as well as writes. Outcomes A, B and B2 all become a refused
-write followed by a reload prompt.
+The same suite fails 17 checks against the previous engine.
 
-*What it does not require:* any change to the diff, queue, or coalescing in the
-save engine.
+**What the fix does not do**
 
-*Cost:* one migration (one function, about fifteen triggers, one indexed lookup per
-direct write), and four small client changes. *Assumption to confirm on a real
-project:* PostgREST exposes request headers to SQL as `request.headers`.
+- **It is client code.** A tab still running a bundle from before this change
+  behaves the old way until it is reloaded. Ship this ahead of wiring the entry
+  rule, so no account can complete guided setup while old bundles are in use.
+- **A stale tab still cannot see what it never loaded.** Setup's classes do not
+  appear in it until a reload. Nothing is lost, but the tab is out of date.
+- **A field or row the stale tab's user explicitly edits is still last-write-wins.**
+  If they change the lunch wave, their lunch wave replaces the newer one. That is
+  their edit, not a side effect, but it is not conflict detection.
+- **It is not verified through PostgREST**, only against the same SQL the engine's
+  calls produce (§8.3 applies here too).
 
-**Alternatives considered**
-
-| Option | Why not sufficient alone |
-|---|---|
-| Revision column on the preferences row | Converts A into B (see above) |
-| `BroadcastChannel` message that reloads other tabs | Same browser profile only; best-effort delivery. Worth adding for a prompt reload, not a guarantee |
-| Never serve the ordinary app to an account that is eligible or mid-setup | Reduces how often a stale tab exists; cannot cover interrupted accounts (§10), which by definition have used the ordinary app, or tabs open across a deploy |
-
-**Until the fence is implemented and the reproduction script's expectations are
-inverted, this risk is open.** It should be closed before `deriveSetupEntry` is
-wired to a route.
-
----
+**If a server-side guarantee is wanted later:** a *completion fence* — a trigger
+on the teacher-owned tables that refuses a direct write from any client not
+carrying the membership's completion id, plus a "this tab is out of date — reload"
+state on the client. It would cover old bundles and make a stale tab reload
+instead of merely being harmless. It is not needed for the data-loss cases above
+and is not implemented.
 
 ## 10. Entry: new and interrupted accounts only
 
@@ -406,7 +405,9 @@ the lunch wave kept. Completion upserts the same preferences row.
 
 ## 11. Unresolved limitations
 
-1. **Stale ordinary tab after completion** — §9.2. Reproduced, not resolved.
+1. **Stale ordinary tab after completion** — the data loss is fixed (§9.2). Still
+   true: the fix is client-side, a stale tab does not show data it never loaded,
+   and an explicitly edited field is last-write-wins.
 2. **Concurrency through PostgREST and the Supabase pooler is unverified** — §8.3.
 3. **No disposable Supabase project exists.** The repo links only production.
    A Supabase preview branch would not work as-is:
@@ -448,9 +449,10 @@ the lunch wave kept. Completion upserts the same preferences row.
 | Weekday override changes detected | db §14; foundation §7 |
 | Interrupted accounts resume; established and legacy accounts unchanged | db §2, §15, §16; foundation §8 |
 | Genuinely overlapping requests | `verify:onboarding-setup-concurrency` |
-| Stale ordinary tab (reproduction of an open risk) | `repro:stale-tab-after-setup` — not in `npm run verify` |
+| Stale ordinary tab cannot overwrite or delete what it never loaded; unsaved edits survive a failed save | `verify:stale-tab-save-safety` |
 
-The three `verify:onboarding-setup-*` scripts are in `npm run verify`. The database
+The three `verify:onboarding-setup-*` scripts and `verify:stale-tab-save-safety`
+are in `npm run verify`. The database
 ones start a PostgreSQL 17 server in a temporary directory, apply every file in
 `supabase/migrations` to it, and delete it. They read no environment file and
 connect to nothing else.

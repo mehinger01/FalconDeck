@@ -51,8 +51,9 @@ most points below.
   - anonymous / no membership / needs selection → `LocalStorageDataRepository`
 - **`SupabaseDataRepository.save()` is not transactional.** It diffs two snapshots
   and issues sequential per-table writes, serialized and coalesced to one in flight.
-  A failure can leave a partial write; the cached baseline is discarded when that
-  happens. Connected writes that must be all-or-nothing go through an RPC instead
+  A failure can leave a partial write; the rows that save set out to change are
+  re-read before the next save, and the rest of the cached baseline is kept. The
+  two one-row-per-teacher tables are written column by column. Connected writes that must be all-or-nothing go through an RPC instead
   (`import_bell_schedule`; `complete_setup` once applied).
 - **No cross-tab or cross-device change detection for cloud data.** The Supabase
   repository only reports sign-out.
@@ -81,9 +82,9 @@ most points below.
   `verify:onboarding-setup-concurrency`, which start a throwaway local PostgreSQL 17
   server (`scripts/support/testDatabase.ts`, via the `embedded-postgres` dev
   dependency), apply every migration to it, and never connect to Supabase.
-- `npm run repro:stale-tab-after-setup` — reproduces an **open** risk
-  (`docs/ONBOARDING_SETUP_ARCHITECTURE.md` §9.2). Exits 0 when the problem is still
-  there. Not part of `npm run verify`.
+- `verify:stale-tab-save-safety` (also in `npm run verify`, same local server) —
+  a stale tab cannot overwrite or delete rows it never loaded, and unsaved edits
+  survive a failed save. See `docs/ONBOARDING_SETUP_ARCHITECTURE.md` §9.2.
 - `npm run verify:supabase-migration` — **runs against the production project**
   using two dedicated test accounts. Not part of `npm run verify`.
 - Not in `npm run verify`: `verify:supabase-save-serialization`,

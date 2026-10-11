@@ -104,15 +104,18 @@ export interface RpcResult {
 /**
  * `select("*")` with equality filters and ordering (all fetchAppData() asks
  * of a table), plus `upsert(rows)` and `delete()` with equality filters
- * (all applyDiff() asks) - so the real SupabaseDataRepository can run
+ * and `update(patch)` with equality filters (all applyDiff() asks) - so the
+ * real SupabaseDataRepository can run
  * against this database, as the calling user, under RLS.
  */
 export interface SelectBuilder extends PromiseLike<RpcResult> {
-  select(columns: "*"): SelectBuilder;
+  select(columns: string): SelectBuilder;
   eq(column: string, value: unknown): SelectBuilder;
   order(column: string, options?: { ascending?: boolean }): SelectBuilder;
   maybeSingle(): SelectBuilder;
   upsert(rows: Record<string, unknown> | Array<Record<string, unknown>>): SelectBuilder;
+  /** With equality filters; resolves with the rows it changed, as `.update(...).select()` does. */
+  update(patch: Record<string, unknown>): SelectBuilder;
   delete(): SelectBuilder;
 }
 
@@ -279,6 +282,7 @@ export async function createTestDatabase(): Promise<TestDatabase> {
           let single = false;
           let upsertRows: Array<Record<string, unknown>> | null = null;
           let deleting = false;
+          let updatePatch: Record<string, unknown> | null = null;
           const run = async (): Promise<RpcResult> => {
             const where = filters.map(([column], index) => `${identifier(column)} = $${index + 1}`).join(" and ");
             try {
@@ -297,6 +301,21 @@ export async function createTestDatabase(): Promise<TestDatabase> {
                   [JSON.stringify(upsertRows)],
                 );
                 return { data: null, error: null };
+              }
+              if (updatePatch) {
+                if (!where) throw new Error("refusing an unfiltered update");
+                const columns = Object.keys(updatePatch).map(identifier);
+                const offset = filters.length;
+                const rows = await asUser<Record<string, unknown>>(
+                  userId,
+                  `update public.${identifier(table)} t
+                   set ${columns.map((column) => `${column} = patch.${column}`).join(", ")}
+                   from jsonb_populate_record(null::public.${table}, $${offset + 1}::jsonb) patch
+                   where ${filters.map(([column], index) => `t.${identifier(column)} = $${index + 1}`).join(" and ")}
+                   returning t.*`,
+                  [...filters.map(([, value]) => value), JSON.stringify(updatePatch)],
+                );
+                return { data: rows.map(toWireRow), error: null };
               }
               if (deleting) {
                 if (!where) throw new Error("refusing an unfiltered delete");
@@ -339,6 +358,10 @@ export async function createTestDatabase(): Promise<TestDatabase> {
             },
             delete() {
               deleting = true;
+              return builder;
+            },
+            update(patch) {
+              updatePatch = patch;
               return builder;
             },
             then: (onFulfilled, onRejected) => run().then(onFulfilled, onRejected),

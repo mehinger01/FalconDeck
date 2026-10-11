@@ -513,23 +513,235 @@ export async function applyDiff(client: Client, ctx: OwnerContext, prev: AppData
     );
   }
 
-  if (!Map_.deepEqual(prev.classroomExperienceSettings, next.classroomExperienceSettings)) {
-    unwrap(
+  // The two one-row-per-teacher tables are written as "only the columns
+  // this tab changed", never as the whole row - see changedColumns().
+  const experiencePatch = changedColumns(
+    Map_.classroomExperienceSettingsToRow(prev.classroomExperienceSettings, ctx),
+    Map_.classroomExperienceSettingsToRow(next.classroomExperienceSettings, ctx),
+  );
+  if (experiencePatch) {
+    const updated = unwrap(
       await client
         .from("classroom_experience_settings")
-        .upsert(Map_.classroomExperienceSettingsToRow(next.classroomExperienceSettings, ctx)),
-      "upsert classroom_experience_settings",
+        .update(experiencePatch)
+        .eq("owner_membership_id", ctx.membershipId)
+        .select("owner_membership_id"),
+      "update classroom_experience_settings",
     );
+    if (updated.length === 0) {
+      unwrap(
+        await client
+          .from("classroom_experience_settings")
+          .upsert(Map_.classroomExperienceSettingsToRow(next.classroomExperienceSettings, ctx)),
+        "upsert classroom_experience_settings",
+      );
+    }
   }
 
-  if (!Map_.deepEqual(prev.teacherSchedulePreferences, next.teacherSchedulePreferences)) {
-    unwrap(
+  const preferencesPatch = changedColumns(
+    Map_.teacherSchedulePreferencesToRow(prev.teacherSchedulePreferences, ctx),
+    Map_.teacherSchedulePreferencesToRow(next.teacherSchedulePreferences, ctx),
+  );
+  if (preferencesPatch) {
+    const updated = unwrap(
       await client
         .from("teacher_schedule_preferences")
-        .upsert(Map_.teacherSchedulePreferencesToRow(next.teacherSchedulePreferences, ctx)),
-      "upsert teacher_schedule_preferences",
+        .update(preferencesPatch)
+        .eq("owner_membership_id", ctx.membershipId)
+        .select("owner_membership_id"),
+      "update teacher_schedule_preferences",
     );
+    if (updated.length === 0) {
+      unwrap(
+        await client
+          .from("teacher_schedule_preferences")
+          .upsert(Map_.teacherSchedulePreferencesToRow(next.teacherSchedulePreferences, ctx)),
+        "upsert teacher_schedule_preferences",
+      );
+    }
   }
+}
+
+/**
+ * The columns whose value differs between `prev` and `next`, or `null` when
+ * none do.
+ *
+ * Why the one-row-per-teacher tables are patched rather than upserted
+ * whole: `prev` and `next` are both THIS TAB's view. A column this tab did
+ * not change may hold a newer value in the database - written by another
+ * tab, another device, or a server-side function - that this tab
+ * has never seen. Sending the whole row would silently put this tab's old
+ * value back (e.g. a tab that only changes the lunch wave clearing the
+ * active schedule another tab just set). Sending only what changed means a
+ * tab can only ever overwrite what its own user actually edited.
+ *
+ * If no row exists yet the UPDATE matches nothing, and the caller falls
+ * back to inserting the whole row - there is nothing newer to protect.
+ */
+function changedColumns<Row extends object>(prev: Row, next: Row): Partial<Row> | null {
+  const patch: Partial<Row> = {};
+  let changed = false;
+  for (const column of Object.keys(next) as Array<keyof Row>) {
+    if (!Map_.deepEqual(prev[column], next[column])) {
+      patch[column] = next[column];
+      changed = true;
+    }
+  }
+  return changed ? patch : null;
+}
+
+// ---------------------------------------------------------------------------
+// Recovering from a failed save
+// ---------------------------------------------------------------------------
+
+/**
+ * What a failed save may or may not have written. applyDiff() is a
+ * sequence of independent writes, so when it throws partway nobody knows
+ * which of the rows it meant to change actually changed. Those rows - and
+ * only those - are "uncertain" until a later save succeeds.
+ */
+export interface UncertainWrites {
+  courses: Set<string>;
+  classSections: Set<string>;
+  schedules: Set<string>;
+  lessons: Set<string>;
+  libraryResources: Set<string>;
+  classPresentationSettings: Set<string>;
+  teacherPeriodAssignments: Set<string>;
+  transitionOverrides: Set<string>;
+  schoolCalendar: boolean;
+  /** Field names (not ids) of the two one-row-per-teacher settings objects. */
+  teacherSchedulePreferences: Set<string>;
+  classroomExperienceSettings: Set<string>;
+}
+
+export function noUncertainWrites(): UncertainWrites {
+  return {
+    courses: new Set(),
+    classSections: new Set(),
+    schedules: new Set(),
+    lessons: new Set(),
+    libraryResources: new Set(),
+    classPresentationSettings: new Set(),
+    teacherPeriodAssignments: new Set(),
+    transitionOverrides: new Set(),
+    schoolCalendar: false,
+    teacherSchedulePreferences: new Set(),
+    classroomExperienceSettings: new Set(),
+  };
+}
+
+const presentationKey = (settings: AppData["classPresentationSettings"][number]) => settings.classSectionId;
+const idKey = (item: Keyed) => item.id;
+
+function addChangedKeys<T>(into: Set<string>, prev: T[], next: T[], keyOf: (item: T) => string): void {
+  const prevByKey = new Map(prev.map((item) => [keyOf(item), item]));
+  const nextKeys = new Set(next.map(keyOf));
+  for (const item of next) {
+    const prior = prevByKey.get(keyOf(item));
+    if (!prior || !Map_.deepEqual(prior, item)) into.add(keyOf(item));
+  }
+  for (const key of prevByKey.keys()) {
+    if (!nextKeys.has(key)) into.add(key);
+  }
+}
+
+/** Records every row a save from `prev` to `next` would have touched. Accumulates across consecutive failures. */
+export function recordAttemptedWrites(into: UncertainWrites, prev: AppData, next: AppData): void {
+  addChangedKeys(into.courses, prev.courses, next.courses, idKey);
+  addChangedKeys(into.classSections, prev.classSections, next.classSections, idKey);
+  addChangedKeys(into.schedules, prev.schedules, next.schedules, idKey);
+  addChangedKeys(into.lessons, prev.lessons, next.lessons, idKey);
+  addChangedKeys(into.libraryResources, prev.libraryResources, next.libraryResources, idKey);
+  addChangedKeys(into.classPresentationSettings, prev.classPresentationSettings, next.classPresentationSettings, presentationKey);
+  addChangedKeys(into.teacherPeriodAssignments, prev.teacherPeriodAssignments, next.teacherPeriodAssignments, idKey);
+  addChangedKeys(into.transitionOverrides, prev.transitionOverrides, next.transitionOverrides, idKey);
+  if (!Map_.deepEqual(prev.schoolCalendar, next.schoolCalendar)) into.schoolCalendar = true;
+  addChangedFields(into.teacherSchedulePreferences, prev.teacherSchedulePreferences, next.teacherSchedulePreferences);
+  addChangedFields(into.classroomExperienceSettings, prev.classroomExperienceSettings, next.classroomExperienceSettings);
+}
+
+function addChangedFields<T extends object>(into: Set<string>, prev: T, next: T): void {
+  for (const field of new Set([...Object.keys(prev), ...Object.keys(next)]) as Set<keyof T & string>) {
+    if (!Map_.deepEqual(prev[field], next[field])) into.add(field);
+  }
+}
+
+/** `baseline`, with just the uncertain fields replaced by what the database now holds for them. */
+function rebaseFields<T extends object>(baseline: T, remote: T, uncertain: Set<string>): T {
+  if (uncertain.size === 0) return baseline;
+  const rebased = { ...baseline };
+  for (const field of uncertain as Set<keyof T & string>) rebased[field] = remote[field];
+  return rebased;
+}
+
+function rebaseList<T>(baseline: T[], remote: T[], uncertain: Set<string>, keyOf: (item: T) => string): T[] {
+  if (uncertain.size === 0) return baseline;
+  return [
+    ...baseline.filter((item) => !uncertain.has(keyOf(item))),
+    ...remote.filter((item) => uncertain.has(keyOf(item))),
+  ];
+}
+
+/**
+ * The baseline to diff the next save against after a failure.
+ *
+ * `baseline` is the last state this tab KNOWS the database held for its own
+ * rows. `remote` is the database as just re-read. For each uncertain row
+ * the truth is taken from `remote` (present with whatever it now holds, or
+ * absent), so the next save corrects exactly what the failed one left
+ * behind. Every other row keeps its `baseline` value.
+ *
+ * What this deliberately does NOT do is adopt `remote` wholesale. `remote`
+ * may contain rows this tab has never loaded - created by another tab,
+ * another device, or a server-side function. Diffed against this tab's memory
+ * they would all look "removed" and be deleted. A row that is neither in
+ * `baseline` nor uncertain is therefore left out entirely: this tab did not
+ * create it, has not seen it, and has no business touching it.
+ *
+ * The two one-row-per-teacher settings follow the same rule one level
+ * down, per field: a field the failed save tried to change is re-read; a
+ * field this tab never changed keeps its `baseline` value, so the
+ * changed-columns-only write (see changedColumns) still cannot touch it.
+ */
+export function rebaseline(baseline: AppData, remote: AppData, uncertain: UncertainWrites): AppData {
+  return {
+    ...baseline,
+    courses: rebaseList(baseline.courses, remote.courses, uncertain.courses, idKey),
+    classSections: rebaseList(baseline.classSections, remote.classSections, uncertain.classSections, idKey),
+    schedules: rebaseList(baseline.schedules, remote.schedules, uncertain.schedules, idKey),
+    lessons: rebaseList(baseline.lessons, remote.lessons, uncertain.lessons, idKey),
+    libraryResources: rebaseList(baseline.libraryResources, remote.libraryResources, uncertain.libraryResources, idKey),
+    classPresentationSettings: rebaseList(
+      baseline.classPresentationSettings,
+      remote.classPresentationSettings,
+      uncertain.classPresentationSettings,
+      presentationKey,
+    ),
+    teacherPeriodAssignments: rebaseList(
+      baseline.teacherPeriodAssignments,
+      remote.teacherPeriodAssignments,
+      uncertain.teacherPeriodAssignments,
+      idKey,
+    ),
+    transitionOverrides: rebaseList(baseline.transitionOverrides, remote.transitionOverrides, uncertain.transitionOverrides, idKey),
+    teacherSchedulePreferences: rebaseFields(
+      baseline.teacherSchedulePreferences,
+      remote.teacherSchedulePreferences,
+      uncertain.teacherSchedulePreferences,
+    ),
+    classroomExperienceSettings: rebaseFields(
+      baseline.classroomExperienceSettings,
+      remote.classroomExperienceSettings,
+      uncertain.classroomExperienceSettings,
+    ),
+    // Same rule for the one calendar: take the re-read value only when it
+    // is the same calendar this tab already knew, never a different one.
+    schoolCalendar:
+      uncertain.schoolCalendar && remote.schoolCalendar !== null && remote.schoolCalendar.id === baseline.schoolCalendar?.id
+        ? remote.schoolCalendar
+        : baseline.schoolCalendar,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -549,7 +761,14 @@ export async function applyDiff(client: Client, ctx: OwnerContext, prev: AppData
 export class SupabaseDataRepository implements DataRepository {
   private readonly client: Client;
   private readonly ctx: OwnerContext;
+  /**
+   * What this tab knows the database holds for the rows it has loaded or
+   * written - set by load(), advanced only by a fully successful save, and
+   * never discarded on failure (see runCriticalSection).
+   */
   private lastSnapshot: AppData | null = null;
+  /** Rows one or more failed saves may have half-written; null when the last save succeeded. */
+  private uncertain: UncertainWrites | null = null;
 
   /**
    * At most one critical section (read baseline -> applyDiff -> advance
@@ -574,6 +793,7 @@ export class SupabaseDataRepository implements DataRepository {
   async load(): Promise<AppData> {
     const data = await fetchAppData(this.client, this.ctx);
     this.lastSnapshot = structuredClone(data);
+    this.uncertain = null;
     return data;
   }
 
@@ -588,26 +808,51 @@ export class SupabaseDataRepository implements DataRepository {
 
   private async runCriticalSection(data: AppData): Promise<SaveResult> {
     this.inFlight = true;
+    // The baseline this attempt is diffed against - kept outside the try so
+    // a failure can record exactly which rows the attempt would have
+    // touched.
+    let prev: AppData | null = null;
     try {
-      const prev =
-        this.lastSnapshot ?? (await fetchAppData(this.client, this.ctx));
+      // A save before any load() has no baseline of its own: the database
+      // as it stands is the only honest starting point.
+      this.lastSnapshot ??= await fetchAppData(this.client, this.ctx);
+
+      // After a failed save, the rows that attempt may have half-written
+      // are re-read so this attempt corrects them from the truth. Only
+      // those rows: see rebaseline() for why the re-read state is never
+      // adopted wholesale.
+      prev = this.uncertain
+        ? rebaseline(this.lastSnapshot, await fetchAppData(this.client, this.ctx), this.uncertain)
+        : this.lastSnapshot;
 
       await applyDiff(this.client, this.ctx, prev, data);
 
       // Only advance the snapshot after every write above succeeded -
       // Decision 2's core requirement.
       this.lastSnapshot = structuredClone(data);
+      this.uncertain = null;
 
       return { ok: true };
     } catch (error) {
       // applyDiff is not atomic - it issues a sequence of independent
       // upserts/deletes, so a failure partway through may have already
-      // written part of this attempt to the database. The cached baseline
-      // can therefore no longer be trusted: invalidate it so the next
-      // critical section re-fetches real cloud state (via the `??
-      // fetchAppData(...)` fallback above) instead of diffing against a
-      // baseline that might already be stale or wrong.
-      this.lastSnapshot = null;
+      // written part of this attempt to the database. The baseline is KEPT
+      // (it is still what this tab last knew), and the rows this attempt
+      // set out to change are marked uncertain, so the next critical
+      // section re-reads real cloud state for exactly those rows.
+      //
+      // The baseline used to be discarded here and replaced by a full
+      // re-read. That re-read includes rows this tab never loaded; diffed
+      // against this tab's memory they looked removed and were deleted -
+      // see scripts/verify-stale-tab-save-safety.ts.
+      //
+      // `data` is not consumed by a failure: AppDataProvider still holds
+      // it and passes it (or its successor) to the next save(), so the
+      // teacher's unsaved edits are retried, never dropped.
+      if (prev) {
+        this.uncertain ??= noUncertainWrites();
+        recordAttemptedWrites(this.uncertain, prev, data);
+      }
       return {
         ok: false,
         reason: "unknown",
