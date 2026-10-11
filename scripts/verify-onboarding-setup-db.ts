@@ -852,6 +852,59 @@ async function main() {
     check("import_bell_schedule still works for an account that completed guided setup", imported.error === null);
   }
 
+  console.log("\n17. Eligibility is re-checked when setup is completed");
+  {
+    // A draft is started, and then the teacher sets the account up in the ordinary screens instead.
+    const teacher = await newFounder("late-ineligible");
+    const draft = ownScheduleDraft();
+    const seeded = await teacher.repository.saveDraft(null, draft);
+    if (!seeded.ok || seeded.value.status !== "saved") throw new Error("could not seed the draft");
+
+    const courseId = generateId("course");
+    const sectionId = generateId("section");
+    const scheduleId = generateId("schedule");
+    await db.asUser(teacher.userId, `insert into public.courses (id, organization_id, owner_type, owner_membership_id, name) values ($1, $2, 'teacher', $3, 'Algebra')`, [courseId, teacher.organizationId, teacher.membershipId]);
+    await db.asUser(teacher.userId, `insert into public.class_sections (id, organization_id, owner_membership_id, course_id, name) values ($1, $2, $3, $4, 'Algebra - 2nd Hour')`, [sectionId, teacher.organizationId, teacher.membershipId, courseId]);
+    await db.asUser(teacher.userId, `insert into public.bell_schedules (id, organization_id, owner_type, owner_membership_id, name, is_default, source) values ($1, $2, 'teacher', $3, 'My ordinary schedule', false, 'custom')`, [scheduleId, teacher.organizationId, teacher.membershipId]);
+    await db.asUser(teacher.userId, `insert into public.teacher_schedule_preferences (owner_membership_id, organization_id, lunch_wave, active_bell_schedule_id) values ($1, $2, 'A', $3)`, [teacher.membershipId, teacher.organizationId, scheduleId]);
+
+    const before = await ownedRowCounts(teacher.membershipId);
+    const outcome = await teacher.repository.completeSetup(seeded.value.operationId, seeded.value.revision);
+    check(
+      "completion is returned as a conflict: no-longer-eligible / existing-setup",
+      outcome.ok && outcome.value.status === "conflict" && outcome.value.reason === "no-longer-eligible" && outcome.value.ineligibility === "existing-setup",
+    );
+    const after = await ownedRowCounts(teacher.membershipId);
+    check("no record of any kind was created", JSON.stringify(after) === JSON.stringify(before) && after.setup_completions === 0);
+    const [prefs] = await db.admin<{ lunch_wave: string; active_bell_schedule_id: string }>("select lunch_wave, active_bell_schedule_id from public.teacher_schedule_preferences where owner_membership_id = $1", [teacher.membershipId]);
+    check("the schedule and lunch wave chosen in the ordinary screens are not replaced", prefs.active_bell_schedule_id === scheduleId && prefs.lunch_wave === "A");
+    check("the draft is kept, not consumed", after.setup_drafts === 1);
+    const again = await teacher.repository.completeSetup(seeded.value.operationId, seeded.value.revision);
+    check("asking again gives the same answer and still writes nothing", again.ok && again.value.status === "conflict" && again.value.reason === "no-longer-eligible" && JSON.stringify(await ownedRowCounts(teacher.membershipId)) === JSON.stringify(before));
+
+    // The session a screen would use ends up "ineligible", not offering a side to choose.
+    const session = new SetupDraftSession(teacher.repository, await storedDraftOf(teacher), createEmptySetupDraft());
+    const status = await session.complete();
+    check("SetupDraftSession reports it as ineligible", status.kind === "ineligible" && status.reason === "existing-setup");
+
+    // An account whose guided setup DID commit owns classes too. Its retry must still be answered from the ledger.
+    const done = await newFounder("replay-after-recheck");
+    const doneSeed = await done.repository.saveDraft(null, ownScheduleDraft());
+    if (!doneSeed.ok || doneSeed.value.status !== "saved") throw new Error("could not seed the draft");
+    const firstTime = await done.repository.completeSetup(doneSeed.value.operationId, doneSeed.value.revision);
+    check("an eligible account still completes", firstTime.ok && firstTime.value.status === "completed" && !firstTime.value.replayed);
+    const committed = await ownedRowCounts(done.membershipId);
+    const retry = await done.repository.completeSetup(doneSeed.value.operationId, doneSeed.value.revision);
+    check(
+      "a retry of that completed operation is replayed, not refused as ineligible",
+      retry.ok && retry.value.status === "completed" && retry.value.replayed && firstTime.ok && firstTime.value.status === "completed" &&
+        JSON.stringify(retry.value.completion) === JSON.stringify(firstTime.value.completion),
+    );
+    check("...and writes nothing", JSON.stringify(await ownedRowCounts(done.membershipId)) === JSON.stringify(committed));
+    const otherOperation = await done.repository.completeSetup(crypto.randomUUID(), 1);
+    check("a different operation for that account is still 'already-completed'", otherOperation.ok && otherOperation.value.status === "conflict" && otherOperation.value.reason === "already-completed");
+  }
+
   await db.close();
   console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}`);
   process.exit(failures === 0 ? 0 : 1);

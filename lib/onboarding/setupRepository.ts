@@ -44,7 +44,9 @@ export type CompleteSetupResult =
   | { status: "completed"; replayed: boolean; completion: SetupCompletion }
   | { status: "conflict"; reason: "stale-revision" | "operation-mismatch"; draft: StoredSetupDraft }
   | { status: "conflict"; reason: "shared-schedule-changed" | "draft-missing" }
-  | { status: "conflict"; reason: "already-completed"; completion: SetupCompletion };
+  | { status: "conflict"; reason: "already-completed"; completion: SetupCompletion }
+  /** The account was set up through the ordinary screens after this draft was started. Nothing was written. */
+  | { status: "conflict"; reason: "no-longer-eligible"; ineligibility: SetupIneligibilityReason };
 
 /**
  * `rejected`: the server answered and refused - nothing was applied.
@@ -182,6 +184,10 @@ export function parseCompleteSetupResult(value: unknown): CompleteSetupResult | 
     if (value.reason === "already-completed") {
       const completion = parseCompletion(value.completion);
       return completion && { status: "conflict", reason: "already-completed", completion };
+    }
+    if (value.reason === "no-longer-eligible") {
+      const ineligibility = parseIneligibilityReason(value.ineligibility);
+      return ineligibility && { status: "conflict", reason: "no-longer-eligible", ineligibility };
     }
   }
   return null;

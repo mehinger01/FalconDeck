@@ -112,6 +112,46 @@ async function waitForBlocked(expected: number): Promise<boolean> {
   return false;
 }
 
+/** Resolves true once exactly `expected` complete_setup requests are waiting on another transaction's row lock. */
+async function waitForRowLockWait(expected: number): Promise<boolean> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const [row] = await db.admin<{ count: number }>(
+      `select count(*)::int as count from pg_stat_activity
+       where wait_event_type = 'Lock' and wait_event in ('transactionid', 'tuple') and query ~ 'complete_setup'`,
+    );
+    if (row.count === expected) return true;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return false;
+}
+
+/** A teacher with a saved, complete draft that follows a one-period shared schedule in their school. */
+async function sharedScheduleTeacher(label: string): Promise<{ teacher: Teacher; scheduleId: string; operationId: string; revision: number }> {
+  const teacher = await newFounder(label);
+  const scheduleId = generateId("schedule");
+  await db.admin(
+    `insert into public.bell_schedules (id, organization_id, owner_type, owner_membership_id, name, is_default, source)
+     values ($1, $2, 'organization', null, 'Regular Day', true, 'built-in')`,
+    [scheduleId, teacher.organizationId],
+  );
+  await db.admin(
+    `insert into public.schedule_blocks (id, bell_schedule_id, organization_id, owner_type, owner_membership_id, position, label, kind, start_time, end_time)
+     values ($1 || ':p1', $1, $2, 'organization', null, 0, '1st Hour', 'instructional', '08:00', '08:50')`,
+    [scheduleId, teacher.organizationId],
+  );
+  const base = completeDraft();
+  const seeded = await seedDraft(teacher, {
+    ...base,
+    schedule: {
+      mode: "shared",
+      scheduleId,
+      expectedBlocks: [{ id: "p1", label: "1st Hour", kind: "instructional", startTime: "08:00", endTime: "08:50", overrides: [] }],
+      assignments: [{ id: crypto.randomUUID(), blockId: "p1", classSectionId: base.classSections[0].id }],
+    },
+  });
+  return { teacher, scheduleId, ...seeded };
+}
+
 async function countRows(table: string, membershipId: string): Promise<number> {
   const [row] = await db.admin<{ count: number }>(
     `select count(*)::int as count from public.${table} where owner_membership_id = $1`,
@@ -328,7 +368,82 @@ async function main() {
     check("...and leaves exactly one committed setup", await committedOnce(stale.membershipId));
   }
 
-  console.log("\n8. Nothing is left behind");
+  console.log("\n8. An ordinary save creating a class while setup completes");
+  {
+    // The ordinary save path never takes the setup advisory lock. What
+    // makes the eligibility re-check hold is the membership row lock:
+    // this in-flight, uncommitted class insert must be waited for and seen.
+    const teacher = await newFounder("racing-ordinary-setup");
+    const draft = await seedDraft(teacher, completeDraft());
+    const courseId = generateId("course");
+    const sectionId = generateId("section");
+    const ordinary = await db.connect();
+    await ordinary.query("begin");
+    await ordinary.query(`insert into public.courses (id, organization_id, owner_type, owner_membership_id, name) values ($1, $2, 'teacher', $3, 'Algebra')`, [courseId, teacher.organizationId, teacher.membershipId]);
+    await ordinary.query(`insert into public.class_sections (id, organization_id, owner_membership_id, course_id, name) values ($1, $2, $3, $4, 'Algebra - 2nd Hour')`, [sectionId, teacher.organizationId, teacher.membershipId, courseId]);
+
+    const completing = teacher.repository.completeSetup(draft.operationId, draft.revision);
+    check("the completion waits for the in-flight class insert instead of deciding without it", await waitForRowLockWait(1));
+    await ordinary.query("commit");
+    ordinary.release();
+    const outcome = await completing;
+    check("...and then returns no-longer-eligible", outcome.ok && outcome.value.status === "conflict" && outcome.value.reason === "no-longer-eligible");
+    check(
+      "nothing from the draft was written",
+      (await countRows("class_sections", teacher.membershipId)) === 1 &&
+        (await countRows("bell_schedules", teacher.membershipId)) === 0 &&
+        (await countRows("lessons", teacher.membershipId)) === 0 &&
+        (await countRows("teacher_schedule_preferences", teacher.membershipId)) === 0 &&
+        (await countRows("setup_completions", teacher.membershipId)) === 0 &&
+        (await countRows("setup_drafts", teacher.membershipId)) === 1,
+    );
+  }
+
+  console.log("\n9. An admin editing the shared schedule while setup completes");
+  {
+    // No lock is taken on the shared schedule (see complete_setup 5a). These
+    // two cases show what an edit overlapping a completion actually leaves.
+
+    // (a) A period is being DELETED, uncommitted, when completion runs.
+    const deleting = await sharedScheduleTeacher("racing-block-delete");
+    const admin = await db.connect();
+    await admin.query("begin");
+    await admin.query("delete from public.schedule_blocks where id = $1", [`${deleting.scheduleId}:p1`]);
+    const completing = deleting.teacher.repository.completeSetup(deleting.operationId, deleting.revision);
+    check("the completion waits on the period it is about to reference", await waitForRowLockWait(1));
+    await admin.query("commit");
+    admin.release();
+    const failed = await completing;
+    check("...and fails as a whole once the delete commits", !failed.ok && failed.kind === "rejected");
+    check(
+      "nothing was committed - no class, no preference, no completion; the draft is intact",
+      (await countRows("class_sections", deleting.teacher.membershipId)) === 0 &&
+        (await countRows("teacher_period_assignments", deleting.teacher.membershipId)) === 0 &&
+        (await countRows("teacher_schedule_preferences", deleting.teacher.membershipId)) === 0 &&
+        (await countRows("setup_completions", deleting.teacher.membershipId)) === 0 &&
+        (await countRows("setup_drafts", deleting.teacher.membershipId)) === 1,
+    );
+    const retried = await deleting.teacher.repository.completeSetup(deleting.operationId, deleting.revision);
+    check("the retry reports shared-schedule-changed", retried.ok && retried.value.status === "conflict" && retried.value.reason === "shared-schedule-changed");
+
+    // (b) A period is being RE-TIMED, uncommitted, when completion runs.
+    const retiming = await sharedScheduleTeacher("racing-block-retime");
+    const editor = await db.connect();
+    await editor.query("begin");
+    await editor.query("update public.schedule_blocks set start_time = '08:05' where id = $1", [`${retiming.scheduleId}:p1`]);
+    const completed = await retiming.teacher.repository.completeSetup(retiming.operationId, retiming.revision);
+    await editor.query("commit");
+    editor.release();
+    check("the completion commits against the schedule as it stood", completedFresh(completed));
+    const [assigned] = await db.admin<{ start_time: string }>(
+      `select sb.start_time::text as start_time from public.teacher_period_assignments a
+       join public.schedule_blocks sb on sb.id = a.schedule_block_id where a.owner_membership_id = $1`,
+      [retiming.teacher.membershipId],
+    );
+    check("...and the result is exactly 'completed, then edited': the assignment follows the re-timed period", assigned?.start_time === "08:05:00");
+  }
+
+  console.log("\n10. Nothing is left behind");
   {
     const [locks] = await db.admin<{ count: number }>("select count(*)::int as count from pg_locks where locktype = 'advisory'");
     check("no advisory lock is still held", locks.count === 0);

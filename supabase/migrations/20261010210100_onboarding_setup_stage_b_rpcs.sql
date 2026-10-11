@@ -326,6 +326,7 @@ $$;
 --   { status: 'conflict',  reason: 'stale-revision' | 'operation-mismatch', draft }
 --   { status: 'conflict',  reason: 'shared-schedule-changed' | 'draft-missing' }
 --   { status: 'conflict',  reason: 'already-completed', completion }
+--   { status: 'conflict',  reason: 'no-longer-eligible', ineligibility }
 -- ---------------------------------------------------------------------------
 
 create function public.complete_setup(
@@ -367,6 +368,7 @@ declare
   v_sorted_start time;
   v_sorted_end time;
   v_result jsonb;
+  v_ineligibility text;
 begin
   if p_operation_id is null then
     raise exception 'Operation id is required.' using errcode = '22023';
@@ -391,6 +393,29 @@ begin
   where c.owner_membership_id = v_membership_id;
   if found then
     return jsonb_build_object('status', 'conflict', 'reason', 'already-completed', 'completion', v_completion);
+  end if;
+
+  -- (1b) Eligibility, re-checked here and not only when the draft was
+  -- created: between then and now the teacher may have set the account up
+  -- through the ordinary screens (which stay reachable). Guided setup must
+  -- then write nothing - no second set of classes, and no replacing the
+  -- schedule and lunch wave they chose there. Deliberately AFTER the two
+  -- completion checks above: a membership whose guided setup already
+  -- committed owns classes too, and its retry must still get its stored
+  -- result back.
+  --
+  -- The row lock makes the check hold until this transaction ends. Every
+  -- class_sections / bell_schedules insert for this membership takes a
+  -- KEY SHARE lock on this row for its foreign key, which FOR UPDATE
+  -- conflicts with: an ordinary save already inserting one is waited for
+  -- (and then seen by the check, under READ COMMITTED), and one arriving
+  -- later waits until this function has committed or rolled back. The
+  -- advisory lock above cannot do this - the ordinary save path never
+  -- takes it.
+  perform 1 from public.organization_memberships m where m.id = v_membership_id for update;
+  v_ineligibility := public.setup_ineligibility_reason(v_membership_id);
+  if v_ineligibility is not null then
+    return jsonb_build_object('status', 'conflict', 'reason', 'no-longer-eligible', 'ineligibility', v_ineligibility);
   end if;
 
   -- (2) The draft this call claims to be completing.
@@ -483,6 +508,16 @@ begin
     -- committed against a schedule they did not see. Overrides are
     -- compared as a set per block: both sides are ordered by weekday here,
     -- so the order they were stored or sent in is irrelevant.
+    --
+    -- No lock is taken on the shared schedule's rows, on purpose. An admin
+    -- edit that commits after this comparison leaves exactly the state that
+    -- "this completion, then that edit" leaves: a renamed or re-timed period
+    -- keeps its id and the assignment written below still points at it; a
+    -- deleted period or schedule either removes that assignment by its
+    -- ON DELETE CASCADE or fails the insert's foreign key, which rolls this
+    -- whole completion back to be retried (and reported as
+    -- shared-schedule-changed then). That is the situation every teacher
+    -- already on a shared schedule is in whenever an admin edits it.
     if not exists (
       select 1 from public.bell_schedules b
       where b.id = v_schedule_id

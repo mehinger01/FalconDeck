@@ -189,6 +189,11 @@ export class SetupDraftSession {
       // This membership's setup was committed under another operation -
       // the committed result is the truth, not this draft.
       this.setStatus({ kind: "completed", completion: outcome.completion });
+    } else if (outcome.reason === "no-longer-eligible") {
+      // The account was set up in the ordinary screens meanwhile. There is
+      // no side to choose: guided setup is over for it, same as when a
+      // first save is refused.
+      this.setStatus({ kind: "ineligible", reason: outcome.ineligibility });
     } else {
       this.setStatus({
         kind: "conflict",
