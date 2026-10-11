@@ -520,22 +520,20 @@ export async function applyDiff(client: Client, ctx: OwnerContext, prev: AppData
     Map_.classroomExperienceSettingsToRow(next.classroomExperienceSettings, ctx),
   );
   if (experiencePatch) {
-    const updated = unwrap(
-      await client
-        .from("classroom_experience_settings")
-        .update(experiencePatch)
-        .eq("owner_membership_id", ctx.membershipId)
-        .select("owner_membership_id"),
-      "update classroom_experience_settings",
-    );
-    if (updated.length === 0) {
-      unwrap(
-        await client
+    const patch = experiencePatch;
+    await patchOrCreateRow(
+      "classroom_experience_settings",
+      () =>
+        client
           .from("classroom_experience_settings")
-          .upsert(Map_.classroomExperienceSettingsToRow(next.classroomExperienceSettings, ctx)),
-        "upsert classroom_experience_settings",
-      );
-    }
+          .update(patch)
+          .eq("owner_membership_id", ctx.membershipId)
+          .select("owner_membership_id"),
+      () =>
+        client
+          .from("classroom_experience_settings")
+          .upsert(Map_.classroomExperienceSettingsToRow(next.classroomExperienceSettings, ctx), CREATE_ONLY),
+    );
   }
 
   const preferencesPatch = changedColumns(
@@ -543,23 +541,55 @@ export async function applyDiff(client: Client, ctx: OwnerContext, prev: AppData
     Map_.teacherSchedulePreferencesToRow(next.teacherSchedulePreferences, ctx),
   );
   if (preferencesPatch) {
-    const updated = unwrap(
-      await client
-        .from("teacher_schedule_preferences")
-        .update(preferencesPatch)
-        .eq("owner_membership_id", ctx.membershipId)
-        .select("owner_membership_id"),
-      "update teacher_schedule_preferences",
-    );
-    if (updated.length === 0) {
-      unwrap(
-        await client
+    const patch = preferencesPatch;
+    await patchOrCreateRow(
+      "teacher_schedule_preferences",
+      () =>
+        client
           .from("teacher_schedule_preferences")
-          .upsert(Map_.teacherSchedulePreferencesToRow(next.teacherSchedulePreferences, ctx)),
-        "upsert teacher_schedule_preferences",
-      );
-    }
+          .update(patch)
+          .eq("owner_membership_id", ctx.membershipId)
+          .select("owner_membership_id"),
+      () =>
+        client
+          .from("teacher_schedule_preferences")
+          .upsert(Map_.teacherSchedulePreferencesToRow(next.teacherSchedulePreferences, ctx), CREATE_ONLY),
+    );
   }
+}
+
+/** INSERT ... ON CONFLICT DO NOTHING: creates the teacher's row if it is missing, and never modifies one that exists. */
+const CREATE_ONLY = { onConflict: "owner_membership_id", ignoreDuplicates: true } as const;
+
+type WriteResult<T> = { data: T | null; error: { message: string } | null };
+
+/**
+ * Writes changed columns to a one-row-per-teacher table, creating the row
+ * first if it does not exist. The whole row is only ever sent by an INSERT
+ * that does nothing when a row is already there - so this tab's copy of the
+ * columns it did NOT change can never replace anyone else's values:
+ *
+ *   1. UPDATE the changed columns. In the usual case the row exists and
+ *      this is the only request.
+ *   2. If that matched no row: INSERT the full row, ON CONFLICT DO NOTHING.
+ *      Either the row really was missing and is now created from this
+ *      tab's values (there was nothing newer to lose), or another tab
+ *      created it in the meantime and this statement changes nothing.
+ *   3. UPDATE the changed columns again. After (2) a row exists whichever
+ *      tab created it, so the changed columns land on it and every other
+ *      column keeps the value its creator gave it.
+ *
+ * No step is a read-then-decide: each is a single statement whose effect
+ * is correct whatever another tab did just before it.
+ */
+async function patchOrCreateRow(
+  table: string,
+  updateChangedColumns: () => PromiseLike<WriteResult<unknown[]>>,
+  createIfMissing: () => PromiseLike<WriteResult<unknown>>,
+): Promise<void> {
+  if (unwrap(await updateChangedColumns(), `update ${table}`).length > 0) return;
+  unwrap(await createIfMissing(), `insert ${table}`);
+  unwrap(await updateChangedColumns(), `update ${table}`);
 }
 
 /**
@@ -575,8 +605,7 @@ export async function applyDiff(client: Client, ctx: OwnerContext, prev: AppData
  * active schedule another tab just set). Sending only what changed means a
  * tab can only ever overwrite what its own user actually edited.
  *
- * If no row exists yet the UPDATE matches nothing, and the caller falls
- * back to inserting the whole row - there is nothing newer to protect.
+ * A row that does not exist yet is handled by patchOrCreateRow().
  */
 function changedColumns<Row extends object>(prev: Row, next: Row): Partial<Row> | null {
   const patch: Partial<Row> = {};

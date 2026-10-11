@@ -102,6 +102,8 @@ function createFakeClient(opts: FakeClientOptions) {
     let op: "select" | "upsert" | "delete" | "update" = "select";
     let payload: unknown = null;
     const eqFilters: Array<[string, unknown]> = [];
+    // INSERT ... ON CONFLICT DO NOTHING - an existing row is left exactly as it is.
+    let ignoreDuplicates = false;
 
     const builder = {
       select() {
@@ -120,9 +122,10 @@ function createFakeClient(opts: FakeClientOptions) {
       maybeSingle() {
         return builder;
       },
-      upsert(rows: unknown) {
+      upsert(rows: unknown, options?: { ignoreDuplicates?: boolean }) {
         op = "upsert";
         payload = rows;
+        ignoreDuplicates = options?.ignoreDuplicates === true;
         return builder;
       },
       delete() {
@@ -166,7 +169,7 @@ function createFakeClient(opts: FakeClientOptions) {
             for (const row of rowsToUpsert) {
               const idx = existing.findIndex((r) => r[key] === row[key]);
               if (idx === -1) existing.push(row);
-              else existing[idx] = row;
+              else if (!ignoreDuplicates) existing[idx] = row;
             }
           } else {
             const existing = db[table] ?? [];

@@ -113,7 +113,10 @@ export interface SelectBuilder extends PromiseLike<RpcResult> {
   eq(column: string, value: unknown): SelectBuilder;
   order(column: string, options?: { ascending?: boolean }): SelectBuilder;
   maybeSingle(): SelectBuilder;
-  upsert(rows: Record<string, unknown> | Array<Record<string, unknown>>): SelectBuilder;
+  upsert(
+    rows: Record<string, unknown> | Array<Record<string, unknown>>,
+    options?: { onConflict?: string; ignoreDuplicates?: boolean },
+  ): SelectBuilder;
   /** With equality filters; resolves with the rows it changed, as `.update(...).select()` does. */
   update(patch: Record<string, unknown>): SelectBuilder;
   delete(): SelectBuilder;
@@ -281,6 +284,7 @@ export async function createTestDatabase(): Promise<TestDatabase> {
           const orders: string[] = [];
           let single = false;
           let upsertRows: Array<Record<string, unknown>> | null = null;
+          let ignoreDuplicates = false;
           let deleting = false;
           let updatePatch: Record<string, unknown> | null = null;
           const run = async (): Promise<RpcResult> => {
@@ -297,7 +301,7 @@ export async function createTestDatabase(): Promise<TestDatabase> {
                   userId,
                   `insert into public.${table} (${columns.join(", ")})
                    select ${columns.join(", ")} from jsonb_populate_recordset(null::public.${table}, $1::jsonb)
-                   on conflict (${key.join(", ")}) do ${assignments.length > 0 ? `update set ${assignments.join(", ")}` : "nothing"}`,
+                   on conflict (${key.join(", ")}) do ${assignments.length > 0 && !ignoreDuplicates ? `update set ${assignments.join(", ")}` : "nothing"}`,
                   [JSON.stringify(upsertRows)],
                 );
                 return { data: null, error: null };
@@ -352,8 +356,9 @@ export async function createTestDatabase(): Promise<TestDatabase> {
               single = true;
               return builder;
             },
-            upsert(rows) {
+            upsert(rows, options) {
               upsertRows = Array.isArray(rows) ? rows : [rows];
+              ignoreDuplicates = options?.ignoreDuplicates === true;
               return builder;
             },
             delete() {
@@ -376,7 +381,13 @@ export async function createTestDatabase(): Promise<TestDatabase> {
     },
     async close() {
       await pool.end();
-      await server.stop();
+      // stop() shuts the server down and then deletes its temporary
+      // directory. On Windows the delete occasionally fails with EBUSY
+      // while the just-exited process still holds a file; that leaves a
+      // stray temp folder, not a test failure.
+      await server.stop().catch((error: unknown) => {
+        console.warn(`(test database cleanup: ${error instanceof Error ? error.message : String(error)})`);
+      });
     },
   };
 }

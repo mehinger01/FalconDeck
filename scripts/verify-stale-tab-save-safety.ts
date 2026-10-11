@@ -183,6 +183,49 @@ function flakyClient(client: RpcClient, table: string): { client: RpcClient; fai
   };
 }
 
+/**
+ * A client that runs `between` at one exact moment: after this tab's first
+ * column-level UPDATE of `table` has come back (matching no row), and
+ * before the engine does anything about that. It is how a test puts
+ * another tab's write precisely inside the gap.
+ */
+function clientWithGapAfterFirstUpdate(client: RpcClient, table: string, between: () => Promise<void>): RpcClient {
+  let pending = true;
+  return {
+    rpc: (name, args) => client.rpc(name, args),
+    from(name) {
+      const builder = client.from(name);
+      if (name !== table) return builder;
+      const update = builder.update.bind(builder);
+      builder.update = (patch) => {
+        const inner = update(patch);
+        if (!pending) return inner;
+        pending = false;
+        const gapped: SelectBuilder = {
+          ...inner,
+          eq: (column, value) => {
+            inner.eq(column, value);
+            return gapped;
+          },
+          select: (columns) => {
+            inner.select(columns);
+            return gapped;
+          },
+          then: (onFulfilled, onRejected) =>
+            inner
+              .then(async (result) => {
+                await between();
+                return result;
+              })
+              .then(onFulfilled, onRejected),
+        };
+        return gapped;
+      };
+      return builder;
+    },
+  };
+}
+
 const withLunchWave = (data: AppData, lunchWave: AppData["teacherSchedulePreferences"]["lunchWave"]): AppData => ({
   ...data,
   teacherSchedulePreferences: { ...data.teacherSchedulePreferences, lunchWave },
@@ -386,6 +429,72 @@ async function main() {
     check("the stale tab's memory still has no classes - only a reload shows setup's data", loaded.classSections.length === 0 && (await openTab(teacher).load()).classSections.length === 1);
     const state = await new SupabaseSetupRepository(teacher.client, teacher.organizationId).getState();
     check("setup is still recorded as completed", state.ok && state.value.status === "completed");
+  }
+
+  console.log("\n9. The settings row is created by another tab between this tab's UPDATE and its fallback");
+  {
+    // teacher_schedule_preferences: the row does not exist when this tab's
+    // UPDATE runs (so it matches nothing); guided setup then creates it,
+    // with an active schedule; only then does this tab's fallback run.
+    const teacher = await newFounder("gap-preferences");
+    const draft = ownScheduleSetupDraft();
+    let updatesSeen = 0;
+    const tab = openTab(
+      teacher,
+      clientWithGapAfterFirstUpdate(teacher.client, "teacher_schedule_preferences", async () => {
+        updatesSeen += 1;
+        precondition("no preferences row existed when this tab's UPDATE ran", (await preferences(teacher.membershipId)) === null);
+        await completeGuidedSetup(teacher, draft);
+      }),
+    );
+    const loaded = await tab.load();
+    const result = await tab.save(withLunchWave(loaded, "A"));
+    precondition("the gap was actually exercised", updatesSeen === 1);
+    check("the save succeeds", result.ok);
+    const after = await preferences(teacher.membershipId);
+    check("the active schedule the other tab wrote in the gap survives", after?.active_bell_schedule_id === (draft.schedule?.mode === "own" ? draft.schedule.id : ""));
+    check("this tab's own edit - the lunch wave - is saved", after?.lunch_wave === "A");
+    check("there is still exactly one preferences row", (await count("teacher_schedule_preferences", teacher.membershipId)) === 1);
+
+    // classroom_experience_settings: same gap, another tab creating the row
+    // with two settings this tab never touches.
+    const other = await newFounder("gap-experience");
+    const experience = async () =>
+      (await db.admin<{ final_five_message: string; bell_offset_seconds: number; end_of_day_message: string }>(
+        "select final_five_message, bell_offset_seconds, end_of_day_message from public.classroom_experience_settings where owner_membership_id = $1",
+        [other.membershipId],
+      ))[0] ?? null;
+    let experienceUpdatesSeen = 0;
+    const experienceTab = openTab(
+      other,
+      clientWithGapAfterFirstUpdate(other.client, "classroom_experience_settings", async () => {
+        experienceUpdatesSeen += 1;
+        precondition("no settings row existed when this tab's UPDATE ran", (await experience()) === null);
+        // Written as the teacher, through RLS - what another tab's first save of these settings does.
+        await db.asUser(
+          other.userId,
+          `insert into public.classroom_experience_settings (owner_membership_id, organization_id, final_five_message, bell_offset_seconds) values ($1, $2, 'Pack up', 30)`,
+          [other.membershipId, other.organizationId],
+        );
+      }),
+    );
+    const experienceLoaded = await experienceTab.load();
+    const experienceResult = await experienceTab.save({
+      ...experienceLoaded,
+      classroomExperienceSettings: { ...experienceLoaded.classroomExperienceSettings, endOfDayMessage: "See you tomorrow." },
+    });
+    precondition("the gap was actually exercised", experienceUpdatesSeen === 1);
+    check("the save succeeds", experienceResult.ok);
+    const settings = await experience();
+    check("the two settings the other tab wrote in the gap survive", settings?.final_five_message === "Pack up" && settings.bell_offset_seconds === 30);
+    check("this tab's own edit is saved", settings?.end_of_day_message === "See you tomorrow.");
+
+    // And with no other tab at all, the first-ever write still creates the row in full.
+    const alone = await newFounder("gap-nobody");
+    const aloneTab = openTab(alone);
+    const aloneLoaded = await aloneTab.load();
+    check("with no row and no other writer, the first save creates the row", (await aloneTab.save(withLunchWave(aloneLoaded, "C"))).ok && (await preferences(alone.membershipId))?.lunch_wave === "C");
+    check("...and a second save updates it in place", (await aloneTab.save(withLunchWave(aloneLoaded, "B"))).ok && (await preferences(alone.membershipId))?.lunch_wave === "B" && (await count("teacher_schedule_preferences", alone.membershipId)) === 1);
   }
 
   await db.close();
