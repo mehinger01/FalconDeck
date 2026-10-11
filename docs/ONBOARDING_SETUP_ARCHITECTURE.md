@@ -273,6 +273,37 @@ draft is updated, and the same operation is submitted again.
 shown on resume. An override's class assignment is not compared: on an
 organization-owned schedule it is never a teacher's own.
 
+**An admin edit overlapping a completion.** The comparison and the writes are
+separate statements and the shared schedule's rows are not locked, so an admin
+edit can commit between them. This was assessed against the requirement above
+("never committed against a schedule the teacher did not see") rather than
+dismissed for being brief. Every such interleaving leaves exactly the state that
+*completion, then the edit* leaves - which is the ordinary situation of any teacher
+already on a shared schedule when an admin edits it:
+
+- a period re-timed or renamed keeps its id; the assignment still points at it and
+  follows the edit (concurrency §9b);
+- a period or schedule deleted makes the completion's own insert wait on that row
+  and then fail its foreign key, rolling the whole completion back; the retry
+  reports `shared-schedule-changed` (concurrency §9a).
+
+No interleaving produces a state the two operations could not produce one after the
+other, so no lock was added. Locking the schedule's rows would also make every
+teacher's ordinary period-assignment save wait behind any completion in the school.
+
+**The account was set up the ordinary way meanwhile.** Eligibility is checked when
+a draft is created *and again inside `complete_setup`*, after the two
+already-completed checks (so a retry of a committed operation is still replayed)
+and before anything is written. If the membership now owns a class or a schedule,
+completion returns `conflict: no-longer-eligible` with the reason, writes nothing,
+and leaves the preferences chosen in the ordinary screens alone;
+`SetupDraftSession` reports it as `ineligible`. The check is made to hold until
+commit by locking the membership row `FOR UPDATE`: an ordinary save's class or
+schedule insert takes a key-share lock on that row for its foreign key, so one in
+flight is waited for and seen, and a later one waits for the completion
+(concurrency §8). `save_setup_draft` does not re-check on a revision: a draft is
+scratch data and writing it changes nothing operational.
+
 ---
 
 ## 9. The operational app after completion
@@ -347,6 +378,34 @@ real `complete_setup`, local PostgreSQL 17):
 
 The same suite fails 17 checks against the previous engine.
 
+**A class deleted in another tab.** Not adopting the re-read state wholesale has
+one consequence that needed its own handling. Tab A deletes a class; tab B, still
+showing it, edits one of its lessons. That lesson can never be written - its class
+is gone - and because a save stops at its first failure, everything later in the
+write order (library, display settings, preferences) was stuck behind it on every
+retry. The old engine "recovered" only by re-creating the class tab A had deleted.
+
+Now, when a save fails and the re-read shows a class this tab still has is gone
+(and this tab was not itself changing that class), the engine:
+
+- **holds back** the lesson edits for that class and writes everything else, in the
+  same save call - one immediate second pass, not a retry loop;
+- **does not re-create the class**, and deletes the half-written `lessons` row the
+  failed attempt may have left;
+- **returns `{ ok: false, reason: "held-back" }`** with a message naming the class,
+  on that save and on every later one while the edit is still in the tab - never
+  `ok: true`;
+- leaves the edit in the tab's memory. It is reported again each save and stops
+  being reported once the teacher puts the lesson back as it was, or reloads.
+
+Limits: only **lessons** are handled. An edit to a deleted class's display
+settings, period assignment or transition override, or to a class whose *course*
+was deleted elsewhere, still fails every save from that tab until it is reloaded.
+The held-back edit lives only in that tab; a reload discards it. And the app has
+no app-wide save-failure indicator today - `persistence.error` is shown on two
+settings screens only - so on most screens the teacher is not told about this or
+any other failed save. That is existing behavior and needs UI work to change.
+
 **What the fix does not do**
 
 - **It is client code.** A tab still running a bundle from before this change
@@ -409,7 +468,9 @@ the lunch wave kept. Completion upserts the same preferences row.
 
 1. **Stale ordinary tab after completion** — the data loss is fixed (§9.2). Still
    true: the fix is client-side, a stale tab does not show data it never loaded,
-   and an explicitly edited field is last-write-wins.
+   and an explicitly edited field is last-write-wins. Edits to a class deleted
+   elsewhere are handled for lessons only, and no screen but two shows a failed
+   save (§9.2).
 2. **Concurrency through PostgREST and the Supabase pooler is unverified** — §8.3.
 3. **No disposable Supabase project exists.** The repo links only production.
    A Supabase preview branch would not work as-is:
@@ -452,6 +513,9 @@ the lunch wave kept. Completion upserts the same preferences row.
 | Interrupted accounts resume; established and legacy accounts unchanged | db §2, §15, §16; foundation §8 |
 | Genuinely overlapping requests | `verify:onboarding-setup-concurrency` |
 | Stale ordinary tab cannot overwrite or delete what it never loaded; unsaved edits survive a failed save | `verify:stale-tab-save-safety` |
+| Lesson edit for a class deleted elsewhere is held back, reported, and blocks nothing else | stale-tab §10 |
+| Completion refused once the account is set up the ordinary way; committed operations still replay | db §17; concurrency §8 |
+| Admin edit of a shared schedule overlapping a completion | concurrency §9 |
 
 The three `verify:onboarding-setup-*` scripts and `verify:stale-tab-save-safety`
 are in `npm run verify`. The database
