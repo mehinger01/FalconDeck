@@ -37,7 +37,9 @@
     "verify:bell-schedule-import-stage-e": "tsx scripts/verify-bell-schedule-import-stage-e.ts",
     "verify:bell-schedule-import-stage-e-rpc-scoping": "tsx scripts/verify-bell-schedule-import-stage-e-rpc-scoping.ts",
     "verify:error-report": "tsx scripts/verify-error-report.ts",
-    "verify": "npm run verify:schedule && npm run verify:lessons && npm run verify:preview && npm run verify:week && npm run verify:classroom && npm run verify:resources && npm run verify:calendar && npm run verify:new-user-cloud-authority && npm run verify:navbar-organization && npm run verify:join-existing-school-stage-b && npm run verify:onboarding-school-search-and-join && npm run verify:active-bell-schedule-stage-d && npm run verify:demo && npm run verify:lesson-import && npm run verify:clockstore && npm run verify:present-layout && npm run verify:supabase-mapping && npm run verify:cutover-provider && npm run verify:restore-backup && npm run verify:teacher-period-assignments-stage-e && npm run verify:onboarding-schedule-choice-stage-f && npm run verify:transition-content-stage-a && npm run verify:transition-content-stage-b && npm run verify:transition-content-stage-c && npm run verify:transition-content-stage-d && npm run verify:error-report"
+    "verify:onboarding-setup-foundation": "tsx scripts/verify-onboarding-setup-foundation.ts",
+    "verify:onboarding-setup-db": "tsx scripts/verify-onboarding-setup-db.ts",
+    "verify": "npm run verify:schedule && npm run verify:lessons && npm run verify:preview && npm run verify:week && npm run verify:classroom && npm run verify:resources && npm run verify:calendar && npm run verify:new-user-cloud-authority && npm run verify:navbar-organization && npm run verify:join-existing-school-stage-b && npm run verify:onboarding-school-search-and-join && npm run verify:active-bell-schedule-stage-d && npm run verify:demo && npm run verify:lesson-import && npm run verify:clockstore && npm run verify:present-layout && npm run verify:supabase-mapping && npm run verify:cutover-provider && npm run verify:restore-backup && npm run verify:teacher-period-assignments-stage-e && npm run verify:onboarding-schedule-choice-stage-f && npm run verify:transition-content-stage-a && npm run verify:transition-content-stage-b && npm run verify:transition-content-stage-c && npm run verify:transition-content-stage-d && npm run verify:error-report && npm run verify:onboarding-setup-foundation && npm run verify:onboarding-setup-db"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.5",
@@ -49,6 +51,7 @@
     "server-only": "^0.0.1"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/qrcode": "^1.5.6",
