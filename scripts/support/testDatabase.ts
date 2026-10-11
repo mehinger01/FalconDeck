@@ -192,6 +192,18 @@ function toParameter(value: unknown): unknown {
   return typeof value === "object" && value !== null ? JSON.stringify(value) : value;
 }
 
+function describe(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+const TEMP_DIR_CLEANUP_CODES = new Set(["EBUSY", "EPERM", "ENOTEMPTY", "EACCES"]);
+
+/** A filesystem error from deleting the server's temporary directory - see shutDown(). */
+function isTempDirCleanupError(error: unknown): boolean {
+  const { code, syscall } = error as { code?: unknown; syscall?: unknown };
+  return typeof code === "string" && TEMP_DIR_CLEANUP_CODES.has(code) && typeof syscall === "string";
+}
+
 export async function createTestDatabase(): Promise<TestDatabase> {
   const port = await freePort();
   const server = new EmbeddedPostgres({
@@ -210,6 +222,32 @@ export async function createTestDatabase(): Promise<TestDatabase> {
   // A connection the server closes during shutdown must not crash the process.
   pool.on("error", () => {});
 
+  /**
+   * Ends the pool and stops the server - once each, and the server is
+   * stopped even if ending the pool fails.
+   *
+   * server.stop() does two things in order: waits for the postgres process
+   * to exit, then deletes its temporary directory. On Windows that delete
+   * occasionally fails (EBUSY and friends) while the just-exited process
+   * still holds a file. Only that - a filesystem error from the delete,
+   * which can only be reached after the process has exited - is downgraded
+   * to a warning: it leaves a stray temp folder, not a running database.
+   * Any other failure means the server may not have shut down, and is
+   * thrown.
+   */
+  async function shutDown(): Promise<void> {
+    try {
+      await pool.end();
+    } finally {
+      try {
+        await server.stop();
+      } catch (error) {
+        if (!isTempDirCleanupError(error)) throw error;
+        console.warn(`(test database stopped; temp folder not removed: ${describe(error)})`);
+      }
+    }
+  }
+
   try {
     await pool.query(SUPABASE_SHIM_SQL);
     for (const file of listMigrationFiles()) {
@@ -221,8 +259,11 @@ export async function createTestDatabase(): Promise<TestDatabase> {
       }
     }
   } catch (error) {
-    await pool.end();
-    await server.stop();
+    // The setup error is the one worth reporting; a shutdown problem on top
+    // of it is printed, never thrown in its place.
+    await shutDown().catch((shutdownError: unknown) => {
+      console.error(`(test database shutdown also failed: ${describe(shutdownError)})`);
+    });
     throw error;
   }
 
@@ -379,15 +420,6 @@ export async function createTestDatabase(): Promise<TestDatabase> {
       const result = await pool.query("insert into auth.users (email) values ($1) returning id", [email]);
       return result.rows[0].id as string;
     },
-    async close() {
-      await pool.end();
-      // stop() shuts the server down and then deletes its temporary
-      // directory. On Windows the delete occasionally fails with EBUSY
-      // while the just-exited process still holds a file; that leaves a
-      // stray temp folder, not a test failure.
-      await server.stop().catch((error: unknown) => {
-        console.warn(`(test database cleanup: ${error instanceof Error ? error.message : String(error)})`);
-      });
-    },
+    close: shutDown,
   };
 }
