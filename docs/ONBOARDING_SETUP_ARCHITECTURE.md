@@ -323,8 +323,10 @@ diff, the write ordering, the queue and the coalescing are untouched.
 2. **The two one-row-per-teacher tables are written column by column.**
    `teacher_schedule_preferences` and `classroom_experience_settings` are now
    updated with only the columns this tab changed, instead of upserted whole. A
-   tab that changes the lunch wave sends the lunch wave. If no row exists yet, the
-   whole row is inserted as before.
+   tab that changes the lunch wave sends the lunch wave. If no row exists yet, it
+   is created with an insert that does nothing when a row is already there, and
+   the changed columns are then applied — so if another tab creates the row in
+   between, that tab's other columns are kept.
 
 **Unsaved edits survive recovery.** A failed save does not consume the edit: the
 provider still holds it and passes it to the next save, which now writes it in
