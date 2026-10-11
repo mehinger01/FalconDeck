@@ -258,7 +258,7 @@ console.log("\n17. The Demo Mode 'Final 30 Seconds' scenario still exists, uncha
   check('17b. its description still reads "30 seconds before" the block ends, not repurposed', demoSource.includes("30 seconds before"));
 }
 
-console.log("\n18-19. EndOfDay and Lunch branches are structurally untouched by Stage C");
+console.log("\n18-19. EndOfDay and Lunch rendering use the schedule engine's decision");
 {
   const liveSource = readSource("components", "present", "LivePresentScreen.tsx");
   check(
@@ -266,12 +266,12 @@ console.log("\n18-19. EndOfDay and Lunch branches are structurally untouched by 
     /<EndOfDayScreen show=\{settings\.showEndOfDayScreen\} message=\{settings\.endOfDayMessage\} \/>/.test(liveSource),
   );
   check(
-    "19. LunchScreen is still rendered exactly on currentBlock.kind === \"lunch\", untouched",
-    /currentBlock\?\.kind === "lunch" \? \(\s*<LunchScreen block=\{state\.currentBlock\} \/>/.test(liveSource),
+    "19. LunchScreen uses the engine's showLunchScreen decision",
+    /state\.showLunchScreen && state\.currentBlock \? \(\s*<LunchScreen block=\{state\.currentBlock\} \/>/.test(liveSource),
   );
   check(
-    "19b. transition content is never resolved for Lunch (nextTransitionContent excludes currentBlock.kind === \"lunch\")",
-    liveSource.includes('state.currentBlock?.kind !== "lunch"'),
+    "19b. transition content is excluded only while the calm LunchScreen is shown",
+    liveSource.includes('!state.showLunchScreen && state.nextStudentFacingBlock'),
   );
 }
 
