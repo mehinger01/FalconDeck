@@ -1,47 +1,107 @@
 # Falcon Deck — Current State
 
-Handoff snapshot for a fresh Claude Code session. Read this before starting any new work.
+Handoff snapshot for a fresh session. Read this before starting any new work.
+Reconciled against the code and the live migration list on 2026-10-10; the previous
+version of this file described the app before the cloud cutover and was wrong on
+most points below.
 
 ## Repo / deployment identity
 
-- **Git commit:** `047f7df74b4e681e6c9f124d28ad0d1970c4e963`
 - **GitHub repo:** `mehinger01/FalconDeck`
-- **Supabase project ref:** `rlfydgbololkbrcloneb`
-- **Working tree:** clean (nothing staged, nothing uncommitted)
+- **`main` at reconciliation:** `7a638bc` (PR #3, Present/Preview crash reporting)
+- **Supabase project ref:** `rlfydgbololkbrcloneb` — the only project. It is
+  production. There is no separate development or staging project.
 
 ## Supabase status
 
-- **19 tables + 1 privileged function** are applied live against the linked Supabase project across 15 migrations:
-  - 9 schema-foundation migrations (`profiles`, `organizations`, `organization_memberships`, `organization_settings`, `courses`, `class_sections`, `bell_schedules`, `schedule_blocks`/`schedule_block_overrides`, `teacher_period_assignments`)
-  - 1 post-deploy hardening migration (`function_privilege_hardening`)
-  - 4 schema-completion migrations (`school_year_calendars`/`school_calendar_exceptions`, `lessons`/`lesson_class_sections`, `library_resources`/`library_resource_courses`, `class_presentation_settings`/`classroom_experience_settings`/`teacher_schedule_preferences`) — the full 19-table V2 foundation schema, per `docs/V2_DATABASE_SCHEMA.md`
-  - 1 `bootstrap_organization` migration — see below
-- RLS is enabled on every table; every policy is scoped `to authenticated`.
-- Function-privilege hardening is applied: RLS helper functions (`app_is_member`, `app_is_admin`, `app_owns_membership`, `app_owns_membership_in_org`) have `EXECUTE` revoked from `anon`/`PUBLIC` and granted only to `authenticated`; `handle_new_user()` has `EXECUTE` revoked from `PUBLIC` entirely; `prevent_membership_identity_change()` has an explicit `search_path = pg_catalog`.
-- **`bootstrap_organization(organization_name text)`** (`supabase/migrations/20260914140000_bootstrap_organization.sql`) is the one privileged (`SECURITY DEFINER`) write function in the schema — see `docs/V2_DATABASE_SCHEMA.md` §2.20. Lets an authenticated user with zero active memberships atomically create a new organization and their own initial admin membership, without weakening `organization_memberships`' admin-only INSERT policy. `EXECUTE` is `authenticated`-only.
-- `public.rls_auto_enable` is a pre-existing function, not created by any Falcon Deck migration — its origin/ownership is unconfirmed. Deliberately left untouched pending its own investigation.
-- Vercel public env vars are configured:
-  - `NEXT_PUBLIC_SUPABASE_URL`
-  - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
+- **27 migrations are applied to production**, matching the 27 committed before the
+  onboarding work, by name. Two differ by version only:
+  `transition_content_stage_b_lessons_warmup` and
+  `transition_content_stage_b_transition_overrides` are recorded in production as
+  `20260928002032` / `20260928002124` but are named `20260927150000` /
+  `20260927150100` in `supabase/migrations`. A `supabase db push` would treat those
+  two files as unapplied. Resolve before the next push.
+- **Not applied anywhere:** `20261010210000_onboarding_setup_stage_a_schema.sql` and
+  `20261010210100_onboarding_setup_stage_b_rpcs.sql` (streamlined onboarding — see
+  `docs/ONBOARDING_SETUP_ARCHITECTURE.md`).
+- Tables: the 19-table V2 foundation plus `transition_overrides`. RLS is enabled on
+  every table; every policy is scoped `to authenticated`; `anon` has no table
+  privileges.
+- Columns added after the schema document was locked:
+  `organization_memberships.account_origin`, `organizations.city` / `.state`,
+  `teacher_schedule_preferences.active_bell_schedule_id`, `lessons.warmup`, and
+  dual ownership on `school_year_calendars`.
+- Privileged (`SECURITY DEFINER`) write functions, all `authenticated`-only:
+  `bootstrap_organization`, `join_existing_school`, `import_bell_schedule`.
+- `public.rls_auto_enable` is a pre-existing function not created by any Falcon Deck
+  migration. Its origin is unconfirmed; it is deliberately left untouched.
 
 ## Code status
 
-- Authentication is wired up (Authentication & Organization Onboarding milestone, Phases 1–2): `proxy.ts` + `lib/supabase/proxy.ts` refresh the session; `lib/auth/dal.ts` resolves identity/active-organization state; `lib/auth/actions.ts` implements sign in/up/out, password reset, organization selection, and organization bootstrap (via the `bootstrap_organization` RPC above); `app/login`, `app/onboarding`, `app/auth/*` are the corresponding routes. The `(app)` route group is gated on a resolved active organization; `/present` (now under the sibling `(presentation)` route group, `app/(presentation)/present/layout.tsx`) is gated the same way, without the NavBar/app-shell chrome; `/demo/*` remains public/unauthenticated.
-- `lib/supabase/browserClient.ts` and `lib/supabase/serverClient.ts` are committed; `serverClient.ts` is now used by the auth code above, `browserClient.ts` remains unused (all auth is server-side).
-- `@supabase/ssr` and `@supabase/supabase-js` are committed dependencies (`package.json`/`package-lock.json`).
-- **The live app still uses `LocalStorageDataRepository` exclusively.** `AppDataProvider` imports and defaults to `dataRepository` from `lib/data/localStorageRepository.ts`; no conditional/env-based repository selection exists anywhere. Authentication and organization context are established independently of, and do not yet influence, which repository `AppDataProvider` uses.
-- **No service-role usage** is wired into the app anywhere — `SUPABASE_SERVICE_ROLE_KEY` is documented in `.env.example` but nothing in application code references it. `bootstrap_organization` uses the ordinary authenticated server client, not a service-role client.
-- **No repository cutover has occurred.** `SupabaseDataRepository` does not exist yet — only mentioned in forward-looking doc comments.
+- **Authentication and organization onboarding are live.** `proxy.ts` refreshes the
+  session; `lib/auth/dal.ts` resolves identity and the active organization;
+  `lib/auth/actions.ts` implements sign in/up/out, password reset, organization
+  selection, creating a school, and joining an existing one. The `(app)` route group
+  and `/present` both require a resolved organization. `/demo/*` is public.
+- **The cloud cutover has happened.** `lib/store/selectDataRepository.ts` picks the
+  repository from the resolved data authority (`lib/auth/dataAuthority.ts`):
+  - `cloud-ready` → `SupabaseDataRepository`, children blocked until loaded
+  - `local` (a `legacy_import` membership whose migration has not completed) →
+    `LocalStorageDataRepository`
+  - anonymous / no membership / needs selection → `LocalStorageDataRepository`
+- **`SupabaseDataRepository.save()` is not transactional.** It diffs two snapshots
+  and issues sequential per-table writes, serialized and coalesced to one in flight.
+  A failure can leave a partial write; the cached baseline is discarded when that
+  happens. Connected writes that must be all-or-nothing go through an RPC instead
+  (`import_bell_schedule`; `complete_setup` once applied).
+- **No cross-tab or cross-device change detection for cloud data.** The Supabase
+  repository only reports sign-out.
+- **Local-data migration** (`lib/data/migration/*`, `MigrationSetupCard`,
+  `RestoreBackupCard`) serves legacy accounts.
+- **Setup today:** `/setup` (derived checklist via `getOnboardingStatus`) and
+  `/setup/schedule`, enforced by `ActiveScheduleGate` for cloud accounts with no
+  active schedule.
+- **Streamlined onboarding:** the persistence foundation exists
+  (`lib/onboarding/setup*.ts`, `lib/data/supabaseSetupRepository.ts`) and is tested.
+  Nothing calls it yet; no screen or redirect has changed.
+- **No service-role key is used by application code.**
 
-## Next milestone
+## Known deviations from the guardrails
 
-Authentication & Organization Onboarding Phases 1 (auth infrastructure) and 2 (organization bootstrap) are complete. Remaining, not yet started: `SupabaseDataRepository`, `localStorage` → Supabase data migration, and connecting the newly-established organization context to the rest of the app.
+- `components/onboarding/MigrationSetupCard.tsx` constructs a Supabase browser
+  client itself. It is the only component that does.
+  `scripts/verify-onboarding-setup-foundation.ts` pins that list so it cannot grow
+  unnoticed.
+- `lib/data/supabase.types.ts` is generated and has not been regenerated since
+  before `import_bell_schedule`. Newer RPCs are called through narrow local types.
+
+## Verification
+
+- `npm run verify` — offline suite. Includes `verify:onboarding-setup-db`, which
+  applies every migration to an in-memory Postgres (PGlite) and never connects to
+  Supabase.
+- `npm run verify:supabase-migration` — **runs against the production project**
+  using two dedicated test accounts. Not part of `npm run verify`.
+- Not in `npm run verify`: `verify:supabase-save-serialization`,
+  `verify:bell-schedule-import-stage-e`,
+  `verify:bell-schedule-import-stage-e-rpc-scoping`.
+
+Failing on `main` as of `7a638bc`, before and independent of the onboarding work:
+
+- `verify:classroom` — 1 check ("Live Mode has no separate materials-rendering code
+  of its own"). Because `npm run verify` chains with `&&`, it stops here; every
+  later script has to be run on its own until this is fixed.
+- `verify:demo` — 1 check ("DemoAppDataProvider never imports the real
+  localStorage-backed repository singleton").
+- `npm run lint` — 4 `react-hooks/set-state-in-effect` errors
+  (`CopyLessonPanel`, `LessonsScreen`, `BellScheduleImportPanel`) and 11 warnings.
 
 ## Architectural guardrails
 
-- Preserve the existing `DataRepository` abstraction — everything above it (reducer, screens) only ever talks to that interface.
-- Build `SupabaseDataRepository` behind the existing interface later; don't shortcut around it.
-- Do not couple UI components directly to Supabase (no component/screen should import `@supabase/*` or the client factories directly).
-- Keep `LocalStorageDataRepository` as the known-good path until the Supabase repository and migration are actually tested.
-- Do not overbuild admin, invitations, multi-org switching, or district workflows yet — this milestone is authentication and single-organization onboarding only.
-- Do not expose service-role credentials to the browser, ever.
+- Everything above the data layer talks to `DataRepository` (operational data) or
+  `SetupRepository` (guided-setup drafts). Components do not import `@supabase/*`.
+- Teacher saves never write organization-owned rows.
+- Onboarding readiness is derived from real data, never stored.
+- Service-role credentials never reach the browser.
+- Do not apply migrations to production, merge, or deploy without an explicit
+  instruction to do so.

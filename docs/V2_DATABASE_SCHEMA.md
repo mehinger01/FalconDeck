@@ -1,15 +1,22 @@
 # Falcon Deck V2 — Database Schema Design
 
-**Status: design only.** Nothing in this document has been applied to Supabase. No
-migrations exist. No authentication has been configured. `DataRepository` and the
-current application are untouched. This document is the schema-level continuation of
-`docs/V2_ARCHITECTURE.md`, which is treated here as the locked source of truth — no
-rule in that document is reinterpreted or contradicted below. This is the corrected
-design that survived a dedicated relational-integrity and simplicity audit — every
-foreign key, delete behavior, and constraint below has been checked against a real
+**Status: applied.** This is the schema design record for the V2 foundation, and
+the schema it describes is live — see `docs/CURRENT_STATE.md` for the migration
+list. It is the schema-level continuation of `docs/V2_ARCHITECTURE.md`. Every
+foreign key, delete behavior, and constraint below was checked against a real
 PostgreSQL target, not just type-compatibility.
 
-SQL shown in this document is **descriptive DDL for review**, not a migration to run.
+**Added after this document was locked, and not described below:**
+`organization_memberships.account_origin`; `organizations.city` / `.state`;
+`teacher_schedule_preferences.active_bell_schedule_id` (with a same-organization
+foreign key and an RLS ownership check); `lessons.warmup`; the
+`transition_overrides` table; the `join_existing_school` and `import_bell_schedule`
+functions. Proposed and not yet applied: `setup_drafts`, `setup_completions` and
+their three functions (`docs/ONBOARDING_SETUP_ARCHITECTURE.md`). The migration
+files are the authority for all of these. §2.20's claim that
+`bootstrap_organization` is the only privileged write function is no longer true.
+
+SQL shown in this document is **descriptive DDL**; the files in `supabase/migrations` are what was run.
 
 ---
 
@@ -843,5 +850,4 @@ blanket pattern, and no triggers were introduced anywhere to close a gap.
 
 ---
 
-*This document describes proposed schema design only. No migration has been
-applied, and no Supabase project has been touched.*
+*Design record. See the status note at the top for what has been applied since.*
