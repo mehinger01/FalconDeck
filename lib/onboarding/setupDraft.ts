@@ -10,6 +10,7 @@ import {
   SETUP_DRAFT_VERSION,
   type SetupDraft,
   type SetupDraftSchedule,
+  type SetupSeed,
   type SetupStep,
   type SharedBlockSnapshot,
 } from "@/types/setupDraft";
@@ -56,7 +57,14 @@ export function parseSetupDraft(value: unknown): SetupDraft | null {
   };
 }
 
-/** A shared schedule's periods as recorded in a draft - the exact value complete_setup() compares against the live schedule. */
+/**
+ * A shared schedule's periods as recorded in a draft - the exact value
+ * complete_setup() compares against the live schedule. Includes each
+ * period's weekday overrides (label/kind/time), since a period that moves
+ * only on one weekday is still a change to the teacher's day. An
+ * override's classSectionId is deliberately left out: on an
+ * organization-owned schedule it is never a teacher's assignment.
+ */
 export function snapshotSharedBlocks(schedule: BellSchedule): SharedBlockSnapshot[] {
   return schedule.blocks.map((block) => ({
     id: block.id,
@@ -64,7 +72,38 @@ export function snapshotSharedBlocks(schedule: BellSchedule): SharedBlockSnapsho
     kind: block.kind,
     startTime: block.startTime,
     endTime: block.endTime,
+    overrides: block.overrides
+      .map((override) => ({
+        weekday: override.weekday,
+        label: override.label ?? null,
+        kind: override.kind ?? null,
+        startTime: override.startTime ?? null,
+        endTime: override.endTime ?? null,
+      }))
+      .sort((a, b) => (a.weekday < b.weekday ? -1 : a.weekday > b.weekday ? 1 : 0)),
   }));
+}
+
+/**
+ * The starting draft for a teacher entering guided setup. `seed` is what
+ * get_setup_state() reports the membership already chose on the existing
+ * setup screens: a teacher who picked their school's schedule there and
+ * then stopped resumes with that schedule already selected (periods still
+ * unassigned) and their lunch wave kept, instead of being asked again.
+ *
+ * A seed that names a schedule which is missing, not shared, or not usable
+ * is ignored - the teacher simply chooses on the teaching-day step.
+ */
+export function createSetupDraftFromSeed(seed: SetupSeed, schedules: BellSchedule[]): SetupDraft {
+  const chosen = schedules.find((schedule) => schedule.id === seed.activeBellScheduleId);
+  return {
+    ...createEmptySetupDraft(),
+    lunchWave: seed.lunchWave,
+    schedule:
+      chosen && isUsableSharedSchedule(chosen)
+        ? { mode: "shared", scheduleId: chosen.id, expectedBlocks: snapshotSharedBlocks(chosen), assignments: [] }
+        : null,
+  };
 }
 
 /**
@@ -120,8 +159,9 @@ export interface SetupDraftIssue {
 /**
  * Everything standing between this draft and a successful completion.
  * Empty means ready. Mirrors complete_setup()'s own checks so a teacher is
- * told here rather than by a rejected submission, and adds the one product
- * rule the server leaves open: a prepared first lesson is required.
+ * told here rather than by a rejected submission - including the first
+ * lesson, which both layers require to be "prepared"
+ * (getLessonPlanningStatus).
  *
  * `reference` is the teacher's existing readable data (organization
  * schedules and courses) - used only to resolve what the draft points at.

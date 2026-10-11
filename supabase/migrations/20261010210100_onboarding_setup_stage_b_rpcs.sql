@@ -23,8 +23,15 @@
 -- SERIALIZATION: save_setup_draft and complete_setup take the same
 -- per-membership advisory transaction lock before reading anything, so two
 -- overlapping calls for one membership (two tabs, a double-click, a retry
--- racing its original) run strictly one after the other, and the second
--- always sees the first's committed result.
+-- racing its original) run strictly one after the other, and - under
+-- READ COMMITTED, Postgres's and PostgREST's default - the second always
+-- sees the first's committed result. Three constraints stand behind the
+-- lock and hold even without it: setup_drafts' primary key (one draft per
+-- membership), setup_completions' primary key (one row per operation), and
+-- its UNIQUE (owner_membership_id) (one completion per membership). A
+-- caller on a stale REPEATABLE READ snapshot therefore fails with a unique
+-- or serialization error instead of committing twice. See
+-- scripts/verify-onboarding-setup-concurrency.ts.
 --
 -- What complete_setup() never does: it never writes bell_schedules,
 -- schedule_blocks, or schedule_block_overrides rows for an
@@ -68,9 +75,20 @@ begin
 end;
 $$;
 
--- NULL means eligible. Guided setup is a new-account entry point only: a
--- membership that has (or had) legacy local data, or that already has
--- classes or an active schedule, keeps the existing setup screens.
+-- NULL means eligible. Guided setup is a new-account entry point only.
+--
+-- ESTABLISHED (ineligible, keeps the existing screens): a membership that
+-- has or had legacy local data, or that owns any class section or any
+-- bell schedule of its own - i.e. it has built something in the existing
+-- app.
+--
+-- INTERRUPTED (still eligible): a cloud-native membership that got no
+-- further than choosing which schedule to follow on /setup/schedule. Its
+-- only footprint is a teacher_schedule_preferences row; with no schedule of
+-- its own, that row can only name an organization-owned schedule.
+-- get_setup_state() hands that choice back as `seed` so guided setup starts
+-- from it instead of asking again, and complete_setup() upserts the same
+-- row.
 create function public.setup_ineligibility_reason(p_membership_id uuid)
 returns text
 language plpgsql
@@ -92,10 +110,7 @@ begin
   end if;
 
   if exists (select 1 from public.class_sections s where s.owner_membership_id = p_membership_id)
-    or exists (
-      select 1 from public.teacher_schedule_preferences p
-      where p.owner_membership_id = p_membership_id and p.active_bell_schedule_id is not null
-    )
+    or exists (select 1 from public.bell_schedules b where b.owner_membership_id = p_membership_id)
   then
     return 'existing-setup';
   end if;
@@ -154,7 +169,9 @@ revoke execute on function public.setup_draft_json(public.setup_drafts, boolean)
 -- get_setup_state - read only.
 --   { status: 'completed',   completion }
 --   { status: 'in-progress', draft: { operationId, revision, updatedAt, payload } }
---   { status: 'not-started', eligible, reason }
+--   { status: 'not-started', eligible, reason, seed: { activeBellScheduleId, lunchWave } }
+-- `seed` is what the membership already chose in the existing setup
+-- screens (null / 'none' for a brand-new account).
 -- ---------------------------------------------------------------------------
 
 create function public.get_setup_state(p_organization_id uuid)
@@ -169,6 +186,8 @@ declare
   v_completion jsonb;
   v_draft public.setup_drafts;
   v_reason text;
+  v_active_schedule_id text;
+  v_lunch_wave text;
 begin
   select c.result into v_completion
   from public.setup_completions c
@@ -185,7 +204,20 @@ begin
   end if;
 
   v_reason := public.setup_ineligibility_reason(v_membership_id);
-  return jsonb_build_object('status', 'not-started', 'eligible', v_reason is null, 'reason', v_reason);
+
+  select p.active_bell_schedule_id, p.lunch_wave into v_active_schedule_id, v_lunch_wave
+  from public.teacher_schedule_preferences p
+  where p.owner_membership_id = v_membership_id;
+
+  return jsonb_build_object(
+    'status', 'not-started',
+    'eligible', v_reason is null,
+    'reason', v_reason,
+    'seed', jsonb_build_object(
+      'activeBellScheduleId', v_active_schedule_id,
+      'lunchWave', coalesce(v_lunch_wave, 'none')
+    )
+  );
 end;
 $$;
 
@@ -264,12 +296,24 @@ begin
       'status', 'conflict', 'reason', 'stale-revision', 'draft', public.setup_draft_json(v_draft, true));
   end if;
 
+  -- The revision is re-stated in the WHERE clause, so the compare-and-swap
+  -- is a single statement in its own right and does not depend on the
+  -- advisory lock above having been taken. With the lock it always matches.
   update public.setup_drafts d
   set payload = p_payload,
       revision = d.revision + 1,
       updated_at = now()
   where d.owner_membership_id = v_membership_id
+    and d.revision = p_expected_revision
   returning * into v_draft;
+
+  if not found then
+    select d.* into v_draft
+    from public.setup_drafts d
+    where d.owner_membership_id = v_membership_id;
+    return jsonb_build_object(
+      'status', 'conflict', 'reason', 'stale-revision', 'draft', public.setup_draft_json(v_draft, true));
+  end if;
 
   return jsonb_build_object('status', 'saved', 'draft', public.setup_draft_json(v_draft, false));
 end;
@@ -431,10 +475,14 @@ begin
     v_schedule_id := v_schedule ->> 'scheduleId';
 
     -- (5a) The shared schedule must still be exactly what the teacher was
-    -- shown: same blocks, same order, same times/labels/kinds. Anything
+    -- shown: same blocks, same order, same times/labels/kinds, and the same
+    -- weekday overrides on each block (a period that moves or is renamed
+    -- only on Wednesdays is still a change to the teacher's day). Anything
     -- else (edited, emptied, deleted, no longer shared) is reported as a
     -- conflict so the teacher reviews the new periods - never silently
-    -- committed against a schedule they did not see.
+    -- committed against a schedule they did not see. Overrides are
+    -- compared as a set per block: both sides are ordered by weekday here,
+    -- so the order they were stored or sent in is irrelevant.
     if not exists (
       select 1 from public.bell_schedules b
       where b.id = v_schedule_id
@@ -450,7 +498,18 @@ begin
       'label', sb.label,
       'kind', sb.kind,
       'startTime', public.setup_time_text(sb.start_time),
-      'endTime', public.setup_time_text(sb.end_time)
+      'endTime', public.setup_time_text(sb.end_time),
+      'overrides', coalesce((
+        select jsonb_agg(jsonb_build_object(
+          'weekday', o.weekday,
+          'label', o.label,
+          'kind', o.kind,
+          'startTime', public.setup_time_text(o.start_time),
+          'endTime', public.setup_time_text(o.end_time)
+        ) order by o.weekday)
+        from public.schedule_block_overrides o
+        where o.schedule_block_id = sb.id
+      ), '[]'::jsonb)
     ) order by sb.position), '[]'::jsonb)
     into v_current_blocks
     from public.schedule_blocks sb
@@ -464,7 +523,19 @@ begin
       'label', e.value ->> 'label',
       'kind', e.value ->> 'kind',
       'startTime', e.value ->> 'startTime',
-      'endTime', e.value ->> 'endTime'
+      'endTime', e.value ->> 'endTime',
+      'overrides', coalesce((
+        select jsonb_agg(jsonb_build_object(
+          'weekday', o.value ->> 'weekday',
+          'label', o.value ->> 'label',
+          'kind', o.value ->> 'kind',
+          'startTime', o.value ->> 'startTime',
+          'endTime', o.value ->> 'endTime'
+        ) order by o.value ->> 'weekday')
+        from jsonb_array_elements(
+          case when jsonb_typeof(e.value -> 'overrides') = 'array' then e.value -> 'overrides' else '[]'::jsonb end
+        ) o
+      ), '[]'::jsonb)
     ) order by e.ordinality), '[]'::jsonb)
     into v_expected_blocks
     from jsonb_array_elements(coalesce(v_schedule -> 'expectedBlocks', '[]'::jsonb)) with ordinality e;
@@ -590,37 +661,42 @@ begin
     raise exception 'Unrecognized lunch wave.' using errcode = '22023';
   end if;
 
-  -- (7) First lesson. Optional at this layer - whether the guided flow
-  -- lets a teacher finish without one is a product rule that lives in the
-  -- client validator, not an integrity rule.
+  -- (7) First lesson - required, and required to be "prepared" by the same
+  -- definition lib/week/getLessonPlanningStatus.ts uses everywhere else: a
+  -- non-blank learning target, or at least one agenda item, resource, or
+  -- announcement. lib/onboarding/setupDraft.ts's validateSetupDraft states
+  -- the identical rule for the client; this is the enforcement.
   v_lesson := v_payload -> 'firstLesson';
-  if v_lesson is not null and jsonb_typeof(v_lesson) <> 'null' then
-    if jsonb_typeof(v_lesson) <> 'object' then
-      raise exception 'Setup draft lesson is malformed.' using errcode = '22023';
-    end if;
-    v_lesson_id := v_lesson ->> 'id';
-    if coalesce(btrim(v_lesson_id), '') = '' then
-      raise exception 'Setup draft lesson is malformed.' using errcode = '22023';
-    end if;
-    if not exists (select 1 from jsonb_array_elements(v_sections) s where s ->> 'id' = v_lesson ->> 'classSectionId') then
-      raise exception 'The first lesson is for a class that is not in this setup.' using errcode = '22023';
-    end if;
-    begin
-      v_lesson_date := (v_lesson ->> 'date')::date;
-    exception when others then
-      raise exception 'The first lesson has an invalid date.' using errcode = '22023';
-    end;
-    if v_lesson_date is null then
-      raise exception 'The first lesson has an invalid date.' using errcode = '22023';
-    end if;
-    if jsonb_typeof(coalesce(v_lesson -> 'agendaItems', '[]'::jsonb)) <> 'array'
-      or jsonb_typeof(coalesce(v_lesson -> 'resources', '[]'::jsonb)) <> 'array'
-      or jsonb_typeof(coalesce(v_lesson -> 'announcements', '[]'::jsonb)) <> 'array'
-    then
-      raise exception 'Setup draft lesson is malformed.' using errcode = '22023';
-    end if;
-  else
-    v_lesson := null;
+  if v_lesson is null or jsonb_typeof(v_lesson) <> 'object' then
+    raise exception 'Plan a first lesson before finishing setup.' using errcode = '22023';
+  end if;
+  v_lesson_id := v_lesson ->> 'id';
+  if coalesce(btrim(v_lesson_id), '') = '' then
+    raise exception 'Setup draft lesson is malformed.' using errcode = '22023';
+  end if;
+  if not exists (select 1 from jsonb_array_elements(v_sections) s where s ->> 'id' = v_lesson ->> 'classSectionId') then
+    raise exception 'The first lesson is for a class that is not in this setup.' using errcode = '22023';
+  end if;
+  begin
+    v_lesson_date := (v_lesson ->> 'date')::date;
+  exception when others then
+    raise exception 'The first lesson has an invalid date.' using errcode = '22023';
+  end;
+  if v_lesson_date is null then
+    raise exception 'The first lesson has an invalid date.' using errcode = '22023';
+  end if;
+  if jsonb_typeof(coalesce(v_lesson -> 'agendaItems', '[]'::jsonb)) <> 'array'
+    or jsonb_typeof(coalesce(v_lesson -> 'resources', '[]'::jsonb)) <> 'array'
+    or jsonb_typeof(coalesce(v_lesson -> 'announcements', '[]'::jsonb)) <> 'array'
+  then
+    raise exception 'Setup draft lesson is malformed.' using errcode = '22023';
+  end if;
+  if coalesce(v_lesson ->> 'learningTarget', '') !~ '[^[:space:]]'
+    and jsonb_array_length(coalesce(v_lesson -> 'agendaItems', '[]'::jsonb)) = 0
+    and jsonb_array_length(coalesce(v_lesson -> 'resources', '[]'::jsonb)) = 0
+    and jsonb_array_length(coalesce(v_lesson -> 'announcements', '[]'::jsonb)) = 0
+  then
+    raise exception 'Add a learning target or an agenda item to your first lesson.' using errcode = '22023';
   end if;
 
   -- (8) Writes - parent before child. Every owner/organization value below
@@ -696,31 +772,29 @@ begin
       active_bell_schedule_id = excluded.active_bell_schedule_id,
       updated_at = now();
 
-  if v_lesson is not null then
-    insert into public.lessons (
-      id, organization_id, owner_membership_id, course_id, lesson_date,
-      learning_target, agenda_items, resources, announcements, materials, warmup
-    )
-    select
-      v_lesson_id,
-      p_organization_id,
-      v_membership_id,
-      s ->> 'courseId',
-      v_lesson_date,
-      coalesce(v_lesson ->> 'learningTarget', ''),
-      coalesce(v_lesson -> 'agendaItems', '[]'::jsonb),
-      coalesce(v_lesson -> 'resources', '[]'::jsonb),
-      coalesce(v_lesson -> 'announcements', '[]'::jsonb),
-      v_lesson ->> 'materials',
-      v_lesson ->> 'warmup'
-    from jsonb_array_elements(v_sections) s
-    where s ->> 'id' = v_lesson ->> 'classSectionId';
+  insert into public.lessons (
+    id, organization_id, owner_membership_id, course_id, lesson_date,
+    learning_target, agenda_items, resources, announcements, materials, warmup
+  )
+  select
+    v_lesson_id,
+    p_organization_id,
+    v_membership_id,
+    s ->> 'courseId',
+    v_lesson_date,
+    coalesce(v_lesson ->> 'learningTarget', ''),
+    coalesce(v_lesson -> 'agendaItems', '[]'::jsonb),
+    coalesce(v_lesson -> 'resources', '[]'::jsonb),
+    coalesce(v_lesson -> 'announcements', '[]'::jsonb),
+    v_lesson ->> 'materials',
+    v_lesson ->> 'warmup'
+  from jsonb_array_elements(v_sections) s
+  where s ->> 'id' = v_lesson ->> 'classSectionId';
 
-    insert into public.lesson_class_sections (
-      lesson_id, class_section_id, organization_id, owner_membership_id, lesson_date
-    )
-    values (v_lesson_id, v_lesson ->> 'classSectionId', p_organization_id, v_membership_id, v_lesson_date);
-  end if;
+  insert into public.lesson_class_sections (
+    lesson_id, class_section_id, organization_id, owner_membership_id, lesson_date
+  )
+  values (v_lesson_id, v_lesson ->> 'classSectionId', p_organization_id, v_membership_id, v_lesson_date);
 
   -- (9) Record the outcome and retire the draft, in this same transaction:
   -- the draft exists exactly as long as the completion has not committed.
@@ -748,7 +822,7 @@ comment on function public.get_setup_state(uuid) is
 comment on function public.save_setup_draft(uuid, integer, jsonb) is
   'Guided setup: creates (p_expected_revision NULL) or revises the caller''s draft. A revision mismatch is returned as a conflict carrying the current draft, never applied.';
 comment on function public.complete_setup(uuid, uuid, integer) is
-  'Guided setup: atomically commits the caller''s STORED draft - teacher-owned courses, class sections, either a private schedule with its blocks or teacher_period_assignments onto a shared schedule, schedule preferences, and an optional first lesson - then records the result and deletes the draft. Idempotent on p_operation_id: a retry of a committed operation returns the stored result and writes nothing. Never writes organization-owned rows.';
+  'Guided setup: atomically commits the caller''s STORED draft - teacher-owned courses, class sections, either a private schedule with its blocks or teacher_period_assignments onto a shared schedule, schedule preferences, and a prepared first lesson - then records the result and deletes the draft. Idempotent on p_operation_id: a retry of a committed operation returns the stored result and writes nothing. Never writes organization-owned rows.';
 
 revoke execute on function public.get_setup_state(uuid) from public;
 revoke execute on function public.get_setup_state(uuid) from anon;

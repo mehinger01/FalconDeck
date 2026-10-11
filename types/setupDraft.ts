@@ -1,6 +1,6 @@
 import type { ClassSection, Course } from "./course";
 import type { AgendaItem, Announcement, LessonResource } from "./lesson";
-import type { BlockKind } from "./schedule";
+import type { BlockKind, Weekday } from "./schedule";
 import type { LunchWave } from "./teacherSchedule";
 
 /**
@@ -27,6 +27,20 @@ export type SetupDraftCourse = Pick<Course, "id" | "name" | "colorHex" | "descri
 /** `courseId` may name a SetupDraftCourse from this same draft, or an existing course the teacher can already use. */
 export type SetupDraftClassSection = ClassSection;
 
+/**
+ * One weekday variation of a shared period. `null` means "not overridden
+ * on this weekday" - written as an explicit null (never an omitted key) so
+ * the value survives JSON and compares equal to what complete_setup()
+ * builds from the database row.
+ */
+export interface SharedOverrideSnapshot {
+  weekday: Weekday;
+  label: string | null;
+  kind: BlockKind | null;
+  startTime: string | null;
+  endTime: string | null;
+}
+
 /** One period of a shared schedule as the teacher saw it when they chose it. */
 export interface SharedBlockSnapshot {
   /** The ScheduleBlock's own (schedule-local) id. */
@@ -35,6 +49,8 @@ export interface SharedBlockSnapshot {
   kind: BlockKind;
   startTime: string;
   endTime: string;
+  /** Sorted by weekday name, so two snapshots of the same schedule are always deep-equal. */
+  overrides: SharedOverrideSnapshot[];
 }
 
 export interface SetupDraftAssignment {
@@ -59,8 +75,8 @@ export interface SetupDraftOwnBlock {
 /**
  * "shared": use an organization-owned schedule as-is and record only this
  * teacher's own period assignments. `expectedBlocks` is that schedule's
- * periods at the moment it was chosen; completion is refused if they no
- * longer match.
+ * periods - base times and weekday overrides - at the moment it was chosen;
+ * completion is refused if they no longer match.
  *
  * "own": build a private schedule inside the same organization.
  */
@@ -79,6 +95,12 @@ export interface SetupDraftLesson {
   announcements: Announcement[];
   materials?: string;
   warmup?: string;
+}
+
+/** What a membership already chose on the existing setup screens before entering guided setup - see createSetupDraftFromSeed. */
+export interface SetupSeed {
+  activeBellScheduleId: string | null;
+  lunchWave: LunchWave;
 }
 
 export interface SetupDraft {

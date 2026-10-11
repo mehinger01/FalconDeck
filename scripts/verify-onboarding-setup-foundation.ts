@@ -16,6 +16,7 @@ import { deepEqual } from "@/lib/data/supabaseMapping";
 import { SupabaseSetupRepository } from "@/lib/data/supabaseSetupRepository";
 import {
   createEmptySetupDraft,
+  createSetupDraftFromSeed,
   hasSharedScheduleChanged,
   parseSetupDraft,
   projectSetupDraftToAppData,
@@ -60,7 +61,7 @@ class FakeSetupRepository implements SetupRepository {
   private activeSaves = 0;
 
   async getState(): Promise<SetupCallResult<SetupState>> {
-    return { ok: true, value: { status: "not-started", eligible: true, reason: null } };
+    return { ok: true, value: { status: "not-started", eligible: true, reason: null, seed: { activeBellScheduleId: null, lunchWave: "none" } } };
   }
 
   async saveDraft(expectedRevision: number | null, payload: SetupDraft): Promise<SetupCallResult<SaveSetupDraftResult>> {
@@ -241,6 +242,9 @@ async function main() {
   {
     const completion = { operationId: "op", completedAt: "t", scheduleMode: "own", activeBellScheduleId: "s", courseIds: [], classSectionIds: ["a"], lessonId: null };
     const draft = { operationId: "op", revision: 3, updatedAt: "t", payload: createEmptySetupDraft() };
+    const notStarted = { status: "not-started", eligible: true, reason: null, seed: { activeBellScheduleId: "s", lunchWave: "B" } };
+    check("not-started state parses with its seed", deepEqual(parseSetupState(notStarted), notStarted));
+    check("not-started without a seed, or with an unknown lunch wave, is refused", parseSetupState({ ...notStarted, seed: undefined }) === null && parseSetupState({ ...notStarted, seed: { activeBellScheduleId: null, lunchWave: "Z" } }) === null);
     check("completed state parses", parseSetupState({ status: "completed", completion })?.status === "completed");
     check("in-progress state parses", parseSetupState({ status: "in-progress", draft })?.status === "in-progress");
     check("a draft from another version is refused", parseSetupState({ status: "in-progress", draft: { ...draft, payload: { ...draft.payload, version: 2 } } }) === null);
@@ -297,6 +301,35 @@ async function main() {
     check("a deleted shared schedule is flagged", draft.schedule?.mode === "shared" && hasSharedScheduleChanged(draft.schedule, []));
     check("a schedule that became 'needs configuration' is flagged", draft.schedule?.mode === "shared" && hasSharedScheduleChanged(draft.schedule, [{ ...shared, needsConfiguration: true }]));
 
+    const withOverrides = (overrides: BellSchedule["blocks"][number]["overrides"]): BellSchedule => ({
+      ...shared,
+      blocks: shared.blocks.map((block) => (block.id === "p2" ? { ...block, overrides } : block)),
+    });
+    const wednesday = { id: "o1", weekday: "wednesday" as const, startTime: "09:10", endTime: "10:00" };
+    const friday = { id: "o2", weekday: "friday" as const, label: "Assembly" };
+    check("an added weekday override is flagged, with no base period changed", draft.schedule?.mode === "shared" && hasSharedScheduleChanged(draft.schedule, [withOverrides([wednesday])]));
+    const snapshot = snapshotSharedBlocks(withOverrides([wednesday, friday]));
+    check("a snapshot records overrides sorted by weekday, with explicit nulls for fields not overridden", deepEqual(snapshot[1].overrides, [
+      { weekday: "friday", label: "Assembly", kind: null, startTime: null, endTime: null },
+      { weekday: "wednesday", label: null, kind: null, startTime: "09:10", endTime: "10:00" },
+    ]));
+    check("...and survives JSON unchanged (no undefined keys to lose)", deepEqual(JSON.parse(JSON.stringify(snapshot)), snapshot) && Object.keys(snapshot[1].overrides[0]).length === 5);
+    check("override order in the source does not matter", deepEqual(snapshotSharedBlocks(withOverrides([friday, wednesday])), snapshot));
+    const draftWithOverrides = { mode: "shared" as const, scheduleId: shared.id, expectedBlocks: snapshot, assignments: [] };
+    check("a schedule whose overrides are unchanged is not flagged", !hasSharedScheduleChanged(draftWithOverrides, [withOverrides([friday, wednesday])]));
+    check("a changed override time is flagged", hasSharedScheduleChanged(draftWithOverrides, [withOverrides([{ ...wednesday, startTime: "09:15" }, friday])]));
+    check("a removed override is flagged", hasSharedScheduleChanged(draftWithOverrides, [withOverrides([friday])]));
+    check("an override's class assignment is not part of the snapshot", deepEqual(snapshotSharedBlocks(withOverrides([{ ...wednesday, classSectionId: "anything" }, friday])), snapshot));
+
+    const seeded = createSetupDraftFromSeed({ activeBellScheduleId: shared.id, lunchWave: "B" }, reference.schedules);
+    check("a seed naming a usable shared schedule pre-selects it, unassigned, and keeps the lunch wave", seeded.schedule?.mode === "shared" && seeded.schedule.scheduleId === shared.id && seeded.schedule.assignments.length === 0 && deepEqual(seeded.schedule.expectedBlocks, snapshotSharedBlocks(shared)) && seeded.lunchWave === "B");
+    check("an empty seed is an empty draft", deepEqual(createSetupDraftFromSeed({ activeBellScheduleId: null, lunchWave: "none" }, reference.schedules), createEmptySetupDraft()));
+    check("a seed naming a missing, private, or unconfigured schedule selects nothing", [
+      createSetupDraftFromSeed({ activeBellScheduleId: "gone", lunchWave: "none" }, reference.schedules),
+      createSetupDraftFromSeed({ activeBellScheduleId: shared.id, lunchWave: "none" }, [{ ...shared, ownerType: "teacher" }]),
+      createSetupDraftFromSeed({ activeBellScheduleId: shared.id, lunchWave: "none" }, [{ ...shared, needsConfiguration: true }]),
+    ].every((candidate) => candidate.schedule === null));
+
     const own: SetupDraft = {
       ...draft,
       schedule: {
@@ -331,14 +364,14 @@ async function main() {
   {
     const ids = { organizationId: "org", membershipId: "mem" };
     const cloud: DataAuthorityState = { kind: "cloud-ready", ...ids, migratedAt: null };
-    const eligible: SetupState = { status: "not-started", eligible: true, reason: null };
+    const eligible: SetupState = { status: "not-started", eligible: true, reason: null, seed: { activeBellScheduleId: null, lunchWave: "none" } };
     const inProgress: SetupState = { status: "in-progress", draft: { operationId: "op", revision: 1, updatedAt: "", payload: createEmptySetupDraft() } };
     const completed: SetupState = { status: "completed", completion: { operationId: "op", completedAt: "", scheduleMode: "own", activeBellScheduleId: "s", courseIds: [], classSectionIds: [], lessonId: null } };
 
     check("cloud + eligible -> guided setup", deriveSetupEntry(cloud, eligible) === "guided-setup");
     check("cloud + draft in progress -> guided setup (resume)", deriveSetupEntry(cloud, inProgress) === "guided-setup");
     check("cloud + completed -> existing app", deriveSetupEntry(cloud, completed) === "existing-app");
-    check("cloud + existing setup -> existing app", deriveSetupEntry(cloud, { status: "not-started", eligible: false, reason: "existing-setup" }) === "existing-app");
+    check("cloud + existing setup -> existing app", deriveSetupEntry(cloud, { status: "not-started", eligible: false, reason: "existing-setup", seed: { activeBellScheduleId: null, lunchWave: "none" } }) === "existing-app");
     check("cloud + state unavailable -> existing app", deriveSetupEntry(cloud, null) === "existing-app");
     check("legacy migration pending -> existing app, whatever the state says", deriveSetupEntry({ kind: "local", ...ids, migratedAt: null }, eligible) === "existing-app");
     for (const kind of ["anonymous", "no-membership", "needs-selection"] as const) {

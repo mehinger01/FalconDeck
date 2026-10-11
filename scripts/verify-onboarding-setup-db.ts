@@ -4,28 +4,29 @@
  * migrations, exercised through the real SupabaseSetupRepository,
  * SetupDraftSession, and fetchAppData().
  *
- * ISOLATED BY CONSTRUCTION: runs against a throwaway in-process Postgres
- * (scripts/support/pgliteSupabase.ts) that every migration in
+ * ISOLATED BY CONSTRUCTION: runs against a throwaway local PostgreSQL 17
+ * server (scripts/support/testDatabase.ts) that every migration in
  * supabase/migrations is applied to from scratch. It never reads
- * .env.local and never opens a network connection - the linked Supabase
- * project is not touched, and the two new migrations are not applied
- * anywhere by running this.
+ * .env.local and never connects to anything but that local server - the
+ * linked Supabase project is not touched, and the two new migrations are
+ * not applied anywhere by running this.
  *
- * What this cannot show (single connection - see the harness's own doc
- * comment): two completions genuinely overlapping in time. "Duplicate
- * submissions" below are issued back to back, which exercises the
- * idempotency ledger but not the advisory lock's wait.
+ * Requests here are issued one at a time, on purpose - each section checks
+ * one rule. Genuinely overlapping requests are the subject of
+ * scripts/verify-onboarding-setup-concurrency.ts.
  *
  *   npm run verify:onboarding-setup-db
  */
 
 import { fetchAppData } from "@/lib/data/supabaseDataRepository";
-import { deepEqual } from "@/lib/data/supabaseMapping";
+import { deepEqual, scheduleBlockCloudId, scheduleBlockOverrideCloudId } from "@/lib/data/supabaseMapping";
 import { SupabaseSetupRepository, type SetupRpcClient } from "@/lib/data/supabaseSetupRepository";
 import type { AppData } from "@/lib/data/types";
 import { getOnboardingStatus } from "@/lib/onboarding/getOnboardingStatus";
 import {
   createEmptySetupDraft,
+  createSetupDraftFromSeed,
+  hasSharedScheduleChanged,
   projectSetupDraftToAppData,
   snapshotSharedBlocks,
   validateSetupDraft,
@@ -46,7 +47,7 @@ import {
   listMigrationFiles,
   type RpcClient,
   type TestDatabase,
-} from "./support/pgliteSupabase";
+} from "./support/testDatabase";
 
 let failures = 0;
 function check(label: string, condition: boolean) {
@@ -649,28 +650,193 @@ async function main() {
     check("...and wrote nothing", operationalRowTotal(await ownedRowCounts(thief.membershipId)) === 0);
   }
 
-  console.log("\n13. Server-side validation of an incomplete or invalid draft");
+  console.log("\n13. The client validator and the database agree on what may be completed");
   {
-    const teacher = await newFounder("validator");
-    const valid = ownScheduleDraft();
-    const attempt = async (draft: SetupDraft) => {
-      const stored = await stateOf(teacher);
-      const session = new SetupDraftSession(teacher.repository, stored.status === "in-progress" ? stored.draft : null, createEmptySetupDraft());
-      session.update(draft);
-      return session.complete();
-    };
-    const ownSchedule = valid.schedule as Extract<SetupDraft["schedule"], { mode: "own" }>;
+    // Built per case from a FRESH draft: ids such as courses.id are global primary
+    // keys, so two accounts can never commit the same draft.
+    const buildCases = (valid: SetupDraft) => {
+      const ownSchedule = valid.schedule as Extract<SetupDraft["schedule"], { mode: "own" }>;
+      const lesson = valid.firstLesson!;
+      const blankLesson = { ...lesson, learningTarget: "", agendaItems: [], resources: [], announcements: [] };
 
-    check("no classes -> rejected", (await attempt({ ...valid, classSections: [] })).kind === "completion-rejected");
-    check("no schedule -> rejected", (await attempt({ ...valid, schedule: null })).kind === "completion-rejected");
-    check("overlapping periods -> rejected", (await attempt({ ...valid, schedule: { ...ownSchedule, blocks: ownSchedule.blocks.map((block) => ({ ...block, startTime: "08:00", endTime: "09:30" })) } })).kind === "completion-rejected");
-    check("no class in any period -> rejected", (await attempt({ ...valid, schedule: { ...ownSchedule, blocks: ownSchedule.blocks.map((block) => ({ ...block, classSectionId: null })) } })).kind === "completion-rejected");
-    check("a lesson for an unknown class -> rejected", (await attempt({ ...valid, firstLesson: { ...valid.firstLesson!, classSectionId: "section-nope" } })).kind === "completion-rejected");
-    check("none of those wrote anything", operationalRowTotal(await ownedRowCounts(teacher.membershipId)) === 0);
-    check("the same draft, corrected, then completes", (await attempt(valid)).kind === "completed");
+      const cases: Array<{ label: string; draft: SetupDraft; completable: boolean; message?: string }> = [
+        { label: "no classes", draft: { ...valid, classSections: [] }, completable: false },
+        { label: "no schedule", draft: { ...valid, schedule: null }, completable: false },
+        { label: "overlapping periods", draft: { ...valid, schedule: { ...ownSchedule, blocks: ownSchedule.blocks.map((block) => ({ ...block, startTime: "08:00", endTime: "09:30" })) } }, completable: false },
+        { label: "no class in any period", draft: { ...valid, schedule: { ...ownSchedule, blocks: ownSchedule.blocks.map((block) => ({ ...block, classSectionId: null })) } }, completable: false },
+        { label: "no first lesson", draft: { ...valid, firstLesson: null }, completable: false, message: "Plan a first lesson before finishing setup." },
+        { label: "a first lesson for an unknown class", draft: { ...valid, firstLesson: { ...lesson, classSectionId: "section-nope" } }, completable: false },
+        { label: "an empty first lesson", draft: { ...valid, firstLesson: blankLesson }, completable: false, message: "Add a learning target or an agenda item to your first lesson." },
+        { label: "a first lesson whose learning target is only whitespace", draft: { ...valid, firstLesson: { ...blankLesson, learningTarget: " \t\n " } }, completable: false, message: "Add a learning target or an agenda item to your first lesson." },
+        { label: "a first lesson with only an agenda item", draft: { ...valid, firstLesson: { ...blankLesson, agendaItems: lesson.agendaItems } }, completable: true },
+        { label: "a first lesson with only a learning target", draft: { ...valid, firstLesson: { ...blankLesson, learningTarget: "I can." } }, completable: true },
+        { label: "a first lesson with only an announcement", draft: { ...valid, firstLesson: { ...blankLesson, announcements: [{ id: generateId("announcement"), text: "Welcome!" }] } }, completable: true },
+      ];
+      return cases;
+    };
+    /** The database message -> the client validator's message for the same problem. */
+    const CLIENT_WORDING: Record<string, string> = {
+      "Plan a first lesson before finishing setup.": "Plan a first lesson for one of your classes.",
+      "Add a learning target or an agenda item to your first lesson.": "Add a learning target or an agenda item to your first lesson.",
+    };
+
+    const caseCount = buildCases(ownScheduleDraft()).length;
+    for (let index = 0; index < caseCount; index += 1) {
+      const testCase = buildCases(ownScheduleDraft())[index];
+      // A fresh account per case: a completion can only happen once.
+      const teacher = await newFounder(`parity-${index}`);
+      const clientIssues = validateSetupDraft(testCase.draft, await loadAppData(teacher));
+      const clientAccepts = clientIssues.length === 0;
+      const session = new SetupDraftSession(teacher.repository, null, createEmptySetupDraft());
+      session.update(testCase.draft);
+      const status = await session.complete();
+      const databaseAccepts = status.kind === "completed";
+      check(`${testCase.label}: client ${testCase.completable ? "accepts" : "refuses"}, database ${testCase.completable ? "accepts" : "refuses"}`,
+        clientAccepts === testCase.completable && databaseAccepts === testCase.completable);
+      if (!testCase.completable) {
+        check("  ...refused as a rejection that wrote nothing", status.kind === "completion-rejected" && operationalRowTotal(await ownedRowCounts(teacher.membershipId)) === 0);
+      }
+      if (testCase.message) {
+        check("  ...with the wording the client validator shows for the same problem", status.kind === "completion-rejected" && status.message === testCase.message && clientIssues.some((issue) => issue.message === CLIENT_WORDING[testCase.message ?? ""]));
+      }
+    }
   }
 
-  console.log("\n14. Existing entry points are unaffected");
+  console.log("\n14. Weekday overrides on a shared schedule are part of the change check");
+  {
+    const secondHour = scheduleBlockCloudId(SHARED_SCHEDULE_ID, "p2");
+    const overrideId = scheduleBlockOverrideCloudId(secondHour, "ov-wed");
+    const teacher = await newJoiner("override-watcher", school.organizationId);
+    const session = new SetupDraftSession(teacher.repository, null, createEmptySetupDraft());
+    let draft = sharedScheduleDraft(await loadAppData(teacher), "course-catalog-algebra");
+    session.update(draft);
+    await session.flush();
+
+    /** What the teaching-day step does after a change: re-read the schedule, keep the teacher's own choices. */
+    const review = async () => {
+      const refreshed = await loadAppData(teacher);
+      const schedule = refreshed.schedules.find((candidate) => candidate.id === SHARED_SCHEDULE_ID)!;
+      const stale = draft.schedule?.mode === "shared" && hasSharedScheduleChanged(draft.schedule, refreshed.schedules);
+      if (draft.schedule?.mode === "shared") {
+        draft = { ...draft, schedule: { ...draft.schedule, expectedBlocks: snapshotSharedBlocks(schedule) } };
+      }
+      session.update(draft);
+      await session.resolveConflict("keep-mine");
+      return stale;
+    };
+    const refusedUnchanged = async () => {
+      const status = await session.complete();
+      const counts = await ownedRowCounts(teacher.membershipId);
+      return status.kind === "conflict" && status.reason === "shared-schedule-changed" && operationalRowTotal(counts) === 0 && counts.setup_drafts === 1;
+    };
+
+    // The school adds a Wednesday-only time for 2nd Hour. No base period changes.
+    await db.admin(
+      `insert into public.schedule_block_overrides (id, schedule_block_id, organization_id, owner_type, owner_membership_id, weekday, start_time, end_time)
+       values ($1, $2, $3, 'organization', null, 'wednesday', '09:10', '10:00')`,
+      [overrideId, secondHour, school.organizationId],
+    );
+    check("an ADDED weekday override refuses completion and writes nothing", await refusedUnchanged());
+    check("...and the client check sees it too, against fresh data", await review());
+
+    await db.admin("update public.schedule_block_overrides set start_time = '09:15' where id = $1", [overrideId]);
+    check("a CHANGED override time refuses completion", await refusedUnchanged());
+    check("...and the client check sees it", await review());
+
+    await db.admin("update public.schedule_block_overrides set label = 'Advisory' where id = $1", [overrideId]);
+    check("a CHANGED override label refuses completion", await refusedUnchanged());
+    check("...and the client check sees it", await review());
+
+    await db.admin("delete from public.schedule_block_overrides where id = $1", [overrideId]);
+    check("a REMOVED override refuses completion", await refusedUnchanged());
+    check("...and the client check sees it", await review());
+
+    // Two overrides, stored in an order that is not weekday order.
+    await db.admin(
+      `insert into public.schedule_block_overrides (id, schedule_block_id, organization_id, owner_type, owner_membership_id, weekday, label)
+       values ($1, $3, $4, 'organization', null, 'wednesday', 'Advisory'), ($2, $3, $4, 'organization', null, 'friday', 'Assembly')`,
+      [overrideId, scheduleBlockOverrideCloudId(secondHour, "ov-fri"), secondHour, school.organizationId],
+    );
+    check("two more overrides refuse completion", await refusedUnchanged());
+    await review();
+    const status = await session.complete();
+    check("once the snapshot matches base periods AND overrides, the same operation completes", status.kind === "completed");
+    check("an unchanged schedule with overrides is not reported as changed", draft.schedule?.mode === "shared" && !hasSharedScheduleChanged(draft.schedule, (await loadAppData(teacher)).schedules));
+    await db.admin("delete from public.schedule_block_overrides where schedule_block_id = $1", [secondHour]);
+  }
+
+  console.log("\n15. Interrupted new accounts resume; established accounts are left alone");
+  {
+    // (a) Picked the school's schedule on the existing /setup/schedule screen, then stopped.
+    // Written the way the ordinary app writes it: the teacher's own row, through RLS.
+    const picker = await newJoiner("picked-a-schedule", school.organizationId);
+    await db.asUser(
+      picker.userId,
+      `insert into public.teacher_schedule_preferences (owner_membership_id, organization_id, lunch_wave, active_bell_schedule_id) values ($1, $2, 'B', $3)`,
+      [picker.membershipId, picker.organizationId, SHARED_SCHEDULE_ID],
+    );
+    const pickerState = await stateOf(picker);
+    check("a new account that only chose a shared schedule is still eligible", pickerState.status === "not-started" && pickerState.eligible);
+    check("...and its existing choice comes back as the seed", pickerState.status === "not-started" && deepEqual(pickerState.seed, { activeBellScheduleId: SHARED_SCHEDULE_ID, lunchWave: "B" }));
+    check("...so it is routed to guided setup", deriveSetupEntry({ kind: "cloud-ready", organizationId: picker.organizationId, membershipId: picker.membershipId, migratedAt: null }, pickerState) === "guided-setup");
+
+    const pickerBase = await loadAppData(picker);
+    const seeded = pickerState.status === "not-started" ? createSetupDraftFromSeed(pickerState.seed, pickerBase.schedules) : createEmptySetupDraft();
+    check("the starting draft already has that schedule selected, with nothing assigned yet", seeded.schedule?.mode === "shared" && seeded.schedule.scheduleId === SHARED_SCHEDULE_ID && seeded.schedule.assignments.length === 0 && seeded.lunchWave === "B");
+
+    const finished = sharedScheduleDraft(pickerBase, "course-catalog-algebra");
+    const pickerSession = new SetupDraftSession(picker.repository, null, seeded);
+    pickerSession.update({ ...finished, lunchWave: seeded.lunchWave });
+    check("it completes", (await pickerSession.complete()).kind === "completed");
+    const pickerCounts = await ownedRowCounts(picker.membershipId);
+    check("...updating its one preferences row rather than adding another", pickerCounts.teacher_schedule_preferences === 1);
+    const pickerLoaded = await loadAppData(picker);
+    check("...with the schedule and lunch wave it had chosen", deepEqual(pickerLoaded.teacherSchedulePreferences, { lunchWave: "B", activeBellScheduleId: SHARED_SCHEDULE_ID }));
+
+    // (b) A brand-new account with nothing chosen: an empty seed.
+    const untouched = await newJoiner("chose-nothing", school.organizationId);
+    const untouchedState = await stateOf(untouched);
+    check("a brand-new account has an empty seed", untouchedState.status === "not-started" && deepEqual(untouchedState.seed, { activeBellScheduleId: null, lunchWave: "none" }));
+    check("...which produces an empty starting draft", untouchedState.status === "not-started" && deepEqual(createSetupDraftFromSeed(untouchedState.seed, pickerBase.schedules), createEmptySetupDraft()));
+
+    // (c) A draft already in progress resumes even if the account has since become "established".
+    const midway = await newFounder("midway");
+    const midwaySession = new SetupDraftSession(midway.repository, null, createEmptySetupDraft());
+    midwaySession.update(ownScheduleDraft());
+    await midwaySession.flush();
+    await midway.client.rpc("import_bell_schedule", {
+      p_organization_id: midway.organizationId, p_id: generateId("schedule"), p_name: "Built elsewhere",
+      p_blocks: [{ id: "b1", label: "1st", kind: "instructional", start_time: "08:00", end_time: "08:50" }], p_time_zone: "America/Detroit",
+    });
+    const midwayState = await stateOf(midway);
+    check("an in-progress draft still resumes", midwayState.status === "in-progress" && deriveSetupEntry({ kind: "cloud-ready", organizationId: midway.organizationId, membershipId: midway.membershipId, migratedAt: null }, midwayState) === "guided-setup");
+
+    // (d) Established: built its own schedule in the existing app, no draft.
+    const builder = await newFounder("built-own-schedule");
+    const ownScheduleId = generateId("schedule");
+    await builder.client.rpc("import_bell_schedule", {
+      p_organization_id: builder.organizationId, p_id: ownScheduleId, p_name: "My own",
+      p_blocks: [{ id: "b1", label: "1st", kind: "instructional", start_time: "08:00", end_time: "08:50" }], p_time_zone: "America/Detroit",
+    });
+    await db.asUser(
+      builder.userId,
+      `insert into public.teacher_schedule_preferences (owner_membership_id, organization_id, lunch_wave, active_bell_schedule_id) values ($1, $2, 'none', $3)`,
+      [builder.membershipId, builder.organizationId, ownScheduleId],
+    );
+    const builderBefore = await loadAppData(builder);
+    const builderState = await stateOf(builder);
+    check("an account that built its own schedule is established (existing-setup)", builderState.status === "not-started" && !builderState.eligible && builderState.reason === "existing-setup");
+    check("...stays in the existing app", deriveSetupEntry({ kind: "cloud-ready", organizationId: builder.organizationId, membershipId: builder.membershipId, migratedAt: null }, builderState) === "existing-app");
+    const builderCreate = await builder.repository.saveDraft(null, createEmptySetupDraft());
+    check("...cannot create a draft", builderCreate.ok && builderCreate.value.status === "ineligible");
+    check("...and its data is exactly as it was", deepEqual(await loadAppData(builder), builderBefore));
+
+    // (e) Legacy: unchanged from section 2, re-checked after everything above.
+    const legacyState = await stateOf(await teacherFor(FIXTURE_LEGACY_USER_ID, FIXTURE_LEGACY_ORGANIZATION_ID));
+    check("a legacy account is still ineligible", legacyState.status === "not-started" && !legacyState.eligible && legacyState.reason === "legacy-account");
+  }
+
+  console.log("\n16. Existing entry points are unaffected");
   {
     const legacyCounts = await ownedRowCounts(FIXTURE_LEGACY_MEMBERSHIP_ID);
     check("the legacy fixture membership has no setup rows and no new data", legacyCounts.setup_drafts === 0 && legacyCounts.setup_completions === 0 && operationalRowTotal(legacyCounts) === 0);

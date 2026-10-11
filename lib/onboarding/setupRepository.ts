@@ -1,4 +1,4 @@
-import type { SetupDraft } from "@/types/setupDraft";
+import type { SetupDraft, SetupSeed } from "@/types/setupDraft";
 import { parseSetupDraft } from "./setupDraft";
 
 /**
@@ -31,7 +31,7 @@ export type SetupIneligibilityReason = "migration-pending" | "legacy-account" | 
 export type SetupState =
   | { status: "completed"; completion: SetupCompletion }
   | { status: "in-progress"; draft: StoredSetupDraft }
-  | { status: "not-started"; eligible: boolean; reason: SetupIneligibilityReason | null };
+  | { status: "not-started"; eligible: boolean; reason: SetupIneligibilityReason | null; seed: SetupSeed };
 
 export type SaveSetupDraftResult =
   | { status: "saved"; operationId: string; revision: number; updatedAt: string }
@@ -114,6 +114,16 @@ function parseIneligibilityReason(value: unknown): SetupIneligibilityReason | nu
   return typeof value === "string" && INELIGIBILITY_REASONS.includes(value) ? (value as SetupIneligibilityReason) : null;
 }
 
+const LUNCH_WAVES: readonly string[] = ["A", "B", "C", "none"];
+
+function parseSeed(value: unknown): SetupSeed | null {
+  if (!isRecord(value)) return null;
+  const { activeBellScheduleId, lunchWave } = value;
+  if (activeBellScheduleId !== null && typeof activeBellScheduleId !== "string") return null;
+  if (typeof lunchWave !== "string" || !LUNCH_WAVES.includes(lunchWave)) return null;
+  return { activeBellScheduleId, lunchWave: lunchWave as SetupSeed["lunchWave"] };
+}
+
 export function parseSetupState(value: unknown): SetupState | null {
   if (!isRecord(value)) return null;
   if (value.status === "completed") {
@@ -125,7 +135,8 @@ export function parseSetupState(value: unknown): SetupState | null {
     return draft && { status: "in-progress", draft };
   }
   if (value.status === "not-started" && typeof value.eligible === "boolean") {
-    return { status: "not-started", eligible: value.eligible, reason: parseIneligibilityReason(value.reason) };
+    const seed = parseSeed(value.seed);
+    return seed && { status: "not-started", eligible: value.eligible, reason: parseIneligibilityReason(value.reason), seed };
   }
   return null;
 }
