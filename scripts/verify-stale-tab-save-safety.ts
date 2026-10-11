@@ -497,6 +497,75 @@ async function main() {
     check("...and a second save updates it in place", (await aloneTab.save(withLunchWave(aloneLoaded, "B"))).ok && (await preferences(alone.membershipId))?.lunch_wave === "B" && (await count("teacher_schedule_preferences", alone.membershipId)) === 1);
   }
 
+  console.log("\n10. A class deleted in another tab: its lesson edit is held back, and nothing else is blocked");
+  {
+    const teacher = await newFounder("deleted-class");
+    const draft = ownScheduleSetupDraft();
+    await completeGuidedSetup(teacher, draft);
+    const sectionId = draft.classSections[0].id;
+    const lessonId = draft.firstLesson!.id;
+    const finalFiveMessage = async () =>
+      (await db.admin<{ final_five_message: string }>("select final_five_message from public.classroom_experience_settings where owner_membership_id = $1", [teacher.membershipId]))[0]?.final_five_message ?? null;
+
+    const deleter = openTab(teacher);
+    const stale = openTab(teacher);
+    const deleterData = await deleter.load();
+    const staleData = await stale.load();
+    precondition("the stale tab loaded the class and its lesson", staleData.classSections.length === 1 && staleData.lessons.length === 1);
+
+    // The other tab deletes the class and what hangs off it.
+    const deleted = await deleter.save({
+      ...deleterData,
+      classSections: [],
+      lessons: [],
+      classPresentationSettings: [],
+      schedules: deleterData.schedules.map((schedule) => ({ ...schedule, blocks: schedule.blocks.map((block) => ({ ...block, classSectionId: null })) })),
+    });
+    precondition("the other tab's delete succeeded", deleted.ok && !(await exists("class_sections", sectionId)) && !(await exists("lessons", lessonId)));
+
+    // The stale tab edits that class's lesson and, in the same save, an unrelated setting.
+    const edited: AppData = {
+      ...staleData,
+      lessons: staleData.lessons.map((lesson) => ({ ...lesson, learningTarget: "Edited in the stale tab" })),
+      classroomExperienceSettings: { ...staleData.classroomExperienceSettings, finalFiveMessage: "Pack up" },
+    };
+    const first = await stale.save(edited);
+    check("the save is not reported as a success", !first.ok);
+    check("...it reports the lesson as held back, naming the class", !first.ok && first.reason === "held-back" && first.message.includes("Geometry - 1st Hour") && first.message.includes("NOT saved"));
+    check("the unrelated setting in the same save IS saved", (await finalFiveMessage()) === "Pack up");
+    check("the deleted class is not re-created", !(await exists("class_sections", sectionId)));
+    check("the lesson is not written", !(await exists("lessons", lessonId)));
+
+    // Retrying the very same data: same answer every time, never a database error, never a success.
+    const retries = [await stale.save(edited), await stale.save(edited), await stale.save(edited)];
+    check("three retries each report the same held-back lesson", retries.every((result) => !result.ok && result.reason === "held-back"));
+    check("...and still do not re-create the class or write the lesson", !(await exists("class_sections", sectionId)) && !(await exists("lessons", lessonId)));
+
+    // Later, unrelated edits keep saving while the lesson stays unsaved.
+    const later = withLunchWave({ ...edited, classroomExperienceSettings: { ...edited.classroomExperienceSettings, finalFiveMessage: "Chairs up" } }, "C");
+    const laterResult = await stale.save(later);
+    check("a later unrelated edit is saved", (await finalFiveMessage()) === "Chairs up" && (await preferences(teacher.membershipId))?.lunch_wave === "C");
+    check("...and that save still reports the lesson as unsaved", !laterResult.ok && laterResult.reason === "held-back");
+    check("the tab's own copy of the lesson edit is untouched by all of this", later.lessons[0].learningTarget === "Edited in the stale tab" && later.lessons[0].id === lessonId);
+
+    // A brand-new lesson for the deleted class is held back the same way.
+    const withNewLesson: AppData = { ...later, lessons: [...later.lessons, { ...later.lessons[0], id: generateId("lesson"), date: "2026-10-13" }] };
+    const newLessonResult = await stale.save(withNewLesson);
+    check("a new lesson for the deleted class is held back too", !newLessonResult.ok && newLessonResult.reason === "held-back" && newLessonResult.message.includes("2 lessons") && (await count("lessons", teacher.membershipId)) === 0);
+
+    // Once the teacher lets the lesson edits go, saving reports success again.
+    const reverted = await stale.save({ ...later, lessons: staleData.lessons });
+    check("with the lesson edit withdrawn, the save succeeds", reverted.ok);
+
+    // A lesson for a class that still exists is never held back.
+    const other = await newFounder("deleted-class-control");
+    await completeGuidedSetup(other, ownScheduleSetupDraft());
+    const otherTab = openTab(other);
+    const otherData = await otherTab.load();
+    const ordinary = await otherTab.save({ ...otherData, lessons: otherData.lessons.map((lesson) => ({ ...lesson, learningTarget: "Ordinary edit" })) });
+    check("an ordinary lesson edit, class intact, saves normally", ordinary.ok && (await db.admin("select 1 from public.lessons where owner_membership_id = $1 and learning_target = 'Ordinary edit'", [other.membershipId])).length === 1);
+  }
+
   await db.close();
   console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}`);
   process.exit(failures === 0 ? 0 : 1);

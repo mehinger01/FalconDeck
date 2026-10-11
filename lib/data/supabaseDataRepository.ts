@@ -774,6 +774,74 @@ export function rebaseline(baseline: AppData, remote: AppData, uncertain: Uncert
 }
 
 // ---------------------------------------------------------------------------
+// Lessons for a class that was deleted somewhere else
+// ---------------------------------------------------------------------------
+
+/**
+ * Class sections this tab still shows that the database no longer has, and
+ * that this tab did not itself try to change: deleted in another tab or on
+ * another device. `baseline` is what this tab last knew the database held,
+ * so a section in it really did exist; a section a failed save of this
+ * tab's own may have half-written is `uncertain` and is not counted.
+ */
+export function classSectionsDeletedElsewhere(baseline: AppData, remote: AppData, uncertain: UncertainWrites): string[] {
+  const remoteIds = new Set(remote.classSections.map(idKey));
+  return baseline.classSections
+    .map(idKey)
+    .filter((id) => !remoteIds.has(id) && !uncertain.classSections.has(id));
+}
+
+/**
+ * The lesson edits in `next` that cannot be written because their class
+ * was deleted elsewhere. Writing one fails its foreign key - every time -
+ * and because applyDiff() stops at the first failure, it would keep
+ * everything after it in the write order from ever being saved.
+ *
+ * A lesson is held back only while this save is not itself writing the
+ * class row (`prev` and `next` agree on it): the class is not re-created
+ * on the lesson's behalf.
+ */
+export function lessonsHeldBack(prev: AppData, next: AppData, deletedElsewhere: ReadonlySet<string>): DailyLesson[] {
+  if (deletedElsewhere.size === 0) return [];
+  const prevSections = new Map(prev.classSections.map((section) => [section.id, section]));
+  const nextSections = new Map(next.classSections.map((section) => [section.id, section]));
+  const prevLessons = new Map(prev.lessons.map((lesson) => [lesson.id, lesson]));
+  return next.lessons.filter((lesson) => {
+    if (!deletedElsewhere.has(lesson.classSectionId)) return false;
+    const section = nextSections.get(lesson.classSectionId);
+    if (!section || !Map_.deepEqual(prevSections.get(section.id), section)) return false;
+    const prior = prevLessons.get(lesson.id);
+    return !prior || !Map_.deepEqual(prior, lesson);
+  });
+}
+
+/** `next` as it can be written: each held-back lesson left exactly as `prev` has it (or absent), so applyDiff() does not touch it. */
+function withoutHeldBackLessons(prev: AppData, next: AppData, held: DailyLesson[]): AppData {
+  if (held.length === 0) return next;
+  const heldIds = new Set(held.map(idKey));
+  const prevLessons = new Map(prev.lessons.map((lesson) => [lesson.id, lesson]));
+  return {
+    ...next,
+    lessons: next.lessons.flatMap((lesson) => {
+      if (!heldIds.has(lesson.id)) return [lesson];
+      const prior = prevLessons.get(lesson.id);
+      return prior ? [prior] : [];
+    }),
+  };
+}
+
+function heldBackMessage(next: AppData, held: DailyLesson[]): string {
+  const sectionIds = new Set(held.map((lesson) => lesson.classSectionId));
+  const names = next.classSections.filter((section) => sectionIds.has(section.id)).map((section) => `"${section.name}"`);
+  const lessons = held.length === 1 ? "1 lesson" : `${held.length} lessons`;
+  const classes = names.length === 1 ? `the class ${names[0]}` : `the classes ${names.join(", ")}`;
+  return (
+    `Your changes to ${lessons} for ${classes} are NOT saved: that class was deleted in another tab or on another device. ` +
+    "Everything else you changed was saved. The lesson is still here in this tab - copy anything you need from it before you reload."
+  );
+}
+
+// ---------------------------------------------------------------------------
 // The repository itself
 // ---------------------------------------------------------------------------
 
@@ -798,6 +866,8 @@ export class SupabaseDataRepository implements DataRepository {
   private lastSnapshot: AppData | null = null;
   /** Rows one or more failed saves may have half-written; null when the last save succeeded. */
   private uncertain: UncertainWrites | null = null;
+  /** Class sections found to have been deleted elsewhere (see classSectionsDeletedElsewhere); forgotten on load(). */
+  private readonly deletedElsewhere = new Set<string>();
 
   /**
    * At most one critical section (read baseline -> applyDiff -> advance
@@ -823,6 +893,7 @@ export class SupabaseDataRepository implements DataRepository {
     const data = await fetchAppData(this.client, this.ctx);
     this.lastSnapshot = structuredClone(data);
     this.uncertain = null;
+    this.deletedElsewhere.clear();
     return data;
   }
 
@@ -835,12 +906,24 @@ export class SupabaseDataRepository implements DataRepository {
     });
   }
 
-  private async runCriticalSection(data: AppData): Promise<SaveResult> {
-    this.inFlight = true;
-    // The baseline this attempt is diffed against - kept outside the try so
-    // a failure can record exactly which rows the attempt would have
-    // touched.
+  /** Records class sections `remote` shows were deleted elsewhere; true when it found one not already known. */
+  private noteDeletedElsewhere(remote: AppData): boolean {
+    if (!this.lastSnapshot || !this.uncertain) return false;
+    let found = false;
+    for (const id of classSectionsDeletedElsewhere(this.lastSnapshot, remote, this.uncertain)) {
+      if (!this.deletedElsewhere.has(id)) found = true;
+      this.deletedElsewhere.add(id);
+    }
+    return found;
+  }
+
+  /** One read-baseline -> applyDiff -> advance-snapshot pass. `reread` is the database as just read, when the caller already has it. */
+  private async attempt(data: AppData, reread?: AppData): Promise<SaveResult> {
+    // The baseline this attempt is diffed against, and what it set out to
+    // write - kept outside the try so a failure can record exactly which
+    // rows the attempt would have touched.
     let prev: AppData | null = null;
+    let writable = data;
     try {
       // A save before any load() has no baseline of its own: the database
       // as it stands is the only honest starting point.
@@ -850,18 +933,45 @@ export class SupabaseDataRepository implements DataRepository {
       // are re-read so this attempt corrects them from the truth. Only
       // those rows: see rebaseline() for why the re-read state is never
       // adopted wholesale.
-      prev = this.uncertain
-        ? rebaseline(this.lastSnapshot, await fetchAppData(this.client, this.ctx), this.uncertain)
-        : this.lastSnapshot;
+      if (this.uncertain) {
+        const remote = reread ?? (await fetchAppData(this.client, this.ctx));
+        this.noteDeletedElsewhere(remote);
+        prev = rebaseline(this.lastSnapshot, remote, this.uncertain);
+      } else {
+        prev = this.lastSnapshot;
+      }
 
-      await applyDiff(this.client, this.ctx, prev, data);
+      // Lesson edits for a class deleted elsewhere are left out of the
+      // write (see lessonsHeldBack) so they cannot block everything else.
+      const held = lessonsHeldBack(prev, data, this.deletedElsewhere);
+      writable = withoutHeldBackLessons(prev, data, held);
+
+      // The failed attempt that revealed the deleted class may have got as
+      // far as writing a held-back lesson's `lessons` row before its link
+      // to the class was refused. That row is invisible to every load (a
+      // lesson is read through its class link) and belongs to no class.
+      // Listing it in `prev` makes this diff delete it.
+      const prevLessonIds = new Set(prev.lessons.map(idKey));
+      const halfWritten = held.filter((lesson) => this.uncertain?.lessons.has(lesson.id) && !prevLessonIds.has(lesson.id));
+      if (halfWritten.length > 0) prev = { ...prev, lessons: [...prev.lessons, ...halfWritten] };
+
+      await applyDiff(this.client, this.ctx, prev, writable);
 
       // Only advance the snapshot after every write above succeeded -
-      // Decision 2's core requirement.
-      this.lastSnapshot = structuredClone(data);
+      // Decision 2's core requirement. It advances to what was WRITTEN,
+      // plus, for each held-back lesson, the version this tab last knew
+      // was saved: the lesson stays different from the snapshot, so it is
+      // recognized as unsaved again on every later save, and is no longer
+      // reported once the teacher puts it back the way it was.
+      const writtenLessonIds = new Set(writable.lessons.map(idKey));
+      const heldIds = new Set(held.map(idKey));
+      const lastSaved = this.lastSnapshot.lessons.filter((lesson) => heldIds.has(lesson.id) && !writtenLessonIds.has(lesson.id));
+      this.lastSnapshot = structuredClone({ ...writable, lessons: [...writable.lessons, ...lastSaved] });
       this.uncertain = null;
 
-      return { ok: true };
+      // Never { ok: true } while an edit is held back: the caller would
+      // show "saved" for work that is not.
+      return held.length === 0 ? { ok: true } : { ok: false, reason: "held-back", message: heldBackMessage(data, held) };
     } catch (error) {
       // applyDiff is not atomic - it issues a sequence of independent
       // upserts/deletes, so a failure partway through may have already
@@ -880,7 +990,7 @@ export class SupabaseDataRepository implements DataRepository {
       // teacher's unsaved edits are retried, never dropped.
       if (prev) {
         this.uncertain ??= noUncertainWrites();
-        recordAttemptedWrites(this.uncertain, prev, data);
+        recordAttemptedWrites(this.uncertain, prev, writable);
       }
       return {
         ok: false,
@@ -890,6 +1000,23 @@ export class SupabaseDataRepository implements DataRepository {
             ? error.message
             : "Unknown error saving to Supabase.",
       };
+    }
+  }
+
+  private async runCriticalSection(data: AppData): Promise<SaveResult> {
+    this.inFlight = true;
+    try {
+      const result = await this.attempt(data);
+      if (result.ok || !this.uncertain || !this.lastSnapshot) return result;
+
+      // The attempt failed. If a fresh read shows why - a class this tab
+      // still shows was deleted elsewhere - try once more straight away
+      // with that class's lessons held back, so the rest of this save is
+      // not left waiting for the teacher's next edit. Any other failure is
+      // returned as it is; nothing here retries in a loop.
+      const reread = await fetchAppData(this.client, this.ctx).catch(() => null);
+      if (!reread || !this.noteDeletedElsewhere(reread)) return result;
+      return await this.attempt(data, reread);
     } finally {
       this.inFlight = false;
       const promoted = this.pending;

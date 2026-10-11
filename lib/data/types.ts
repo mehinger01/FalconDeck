@@ -39,7 +39,13 @@ export interface AppData {
 }
 
 /** A reason code callers can use to tailor messaging (e.g. "try a smaller image" only makes sense for quota-exceeded). */
-export type SaveFailureReason = "quota-exceeded" | "unavailable" | "serialization-failed" | "unknown";
+export type SaveFailureReason =
+  | "quota-exceeded"
+  | "unavailable"
+  | "serialization-failed"
+  /** Everything else in this save was written; the edits named in `message` were held back and are still unsaved. */
+  | "held-back"
+  | "unknown";
 
 export type SaveResult = { ok: true } | { ok: false; reason: SaveFailureReason; message: string };
 
