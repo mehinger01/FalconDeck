@@ -1,5 +1,5 @@
 import { deepEqual } from "@/lib/data/supabaseMapping";
-import type { SetupDraft } from "@/types/setupDraft";
+import type { SetupDraft, SetupSeed } from "@/types/setupDraft";
 import type {
   SetupCompletion,
   SetupIneligibilityReason,
@@ -32,7 +32,8 @@ export type SetupConflictReason =
   | "stale-revision"
   | "draft-missing"
   | "operation-mismatch"
-  | "shared-schedule-changed";
+  | "shared-schedule-changed"
+  | "preferences-changed";
 
 export type SetupSessionStatus =
   /** Nothing unsaved, nothing in flight, nothing saved yet this session. */
@@ -41,8 +42,12 @@ export type SetupSessionStatus =
   | { kind: "saved" }
   /** The latest edits are NOT saved. Retried by retrySave() or the next edit. */
   | { kind: "save-failed"; message: string }
-  /** Autosave is paused. `serverDraft` is what is stored now, when there is one. */
-  | { kind: "conflict"; reason: SetupConflictReason; serverDraft: StoredSetupDraft | null }
+  /**
+   * Autosave is paused. `serverDraft` is what is stored now, when there is
+   * one. `preferences` is set only for "preferences-changed": the schedule
+   * and lunch wave now in force.
+   */
+  | { kind: "conflict"; reason: SetupConflictReason; serverDraft: StoredSetupDraft | null; preferences?: SetupSeed }
   | { kind: "ineligible"; reason: SetupIneligibilityReason }
   | { kind: "completing" }
   /** The server refused; nothing was committed. */
@@ -126,6 +131,12 @@ export class SetupDraftSession {
    * the draft - the stored draft is this tab's own, pointing at periods
    * that have since changed. The caller rebuilds the schedule step via
    * update() (held while the conflict stands) and then calls "keep-mine".
+   *
+   * "preferences-changed" is the same shape: the stored draft is this tab's
+   * own, but it would replace a schedule or lunch wave chosen elsewhere
+   * since. The caller brings the draft into line with the `preferences`
+   * reported (via update()) and then calls "keep-mine"; there is no way to
+   * insist on the draft's older choice.
    */
   resolveConflict(choice: "use-server" | "keep-mine"): Promise<void> {
     if (this.status.kind !== "conflict") return Promise.resolve();
@@ -199,6 +210,7 @@ export class SetupDraftSession {
         kind: "conflict",
         reason: outcome.reason,
         serverDraft: "draft" in outcome ? outcome.draft : null,
+        ...(outcome.reason === "preferences-changed" ? { preferences: outcome.preferences } : {}),
       });
     }
     return this.status;

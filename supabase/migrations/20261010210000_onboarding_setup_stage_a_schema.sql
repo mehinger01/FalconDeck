@@ -35,6 +35,14 @@ create table public.setup_drafts (
   operation_id uuid not null default gen_random_uuid(),
   revision integer not null default 1 check (revision >= 1),
   payload jsonb not null check (jsonb_typeof(payload) = 'object'),
+  -- The membership's teacher_schedule_preferences as they stood when this
+  -- draft was created (no row = NULL / 'none'). Written once, by
+  -- save_setup_draft(), from the database - never from the caller - and
+  -- never changed afterwards. No foreign key and no default, on purpose: it
+  -- is a record of what was seen, which must survive that schedule being
+  -- deleted, and a draft can only be inserted by code that supplies it.
+  baseline_active_bell_schedule_id text,
+  baseline_lunch_wave text not null check (baseline_lunch_wave in ('A', 'B', 'C', 'none')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (operation_id)
@@ -57,6 +65,9 @@ create table public.setup_completions (
   -- different operations for the same membership can never both commit.
   unique (owner_membership_id)
 );
+
+comment on column public.setup_drafts.baseline_lunch_wave is
+  'With baseline_active_bell_schedule_id: the schedule preferences in force when the draft was created. complete_setup() refuses to replace preferences that have since been changed outside guided setup to anything the draft does not itself ask for.';
 
 comment on table public.setup_completions is
   'Idempotency ledger for complete_setup(): written in the same transaction as the rows it describes. A retry of a committed operation_id returns result unchanged and writes nothing.';

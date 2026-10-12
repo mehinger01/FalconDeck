@@ -60,8 +60,9 @@ export function parseSetupDraft(value: unknown): SetupDraft | null {
 /**
  * A shared schedule's periods as recorded in a draft - the exact value
  * complete_setup() compares against the live schedule. Includes each
- * period's weekday overrides (label/kind/time), since a period that moves
- * only on one weekday is still a change to the teacher's day. An
+ * period's custom-kind label and lunch-window flag, and its weekday
+ * overrides (label/kind/time), since a period that moves only on one
+ * weekday is still a change to the teacher's day. An
  * override's classSectionId is deliberately left out: on an
  * organization-owned schedule it is never a teacher's assignment.
  */
@@ -72,11 +73,14 @@ export function snapshotSharedBlocks(schedule: BellSchedule): SharedBlockSnapsho
     kind: block.kind,
     startTime: block.startTime,
     endTime: block.endTime,
+    customKindLabel: block.customKindLabel ?? null,
+    isLunchWindow: block.isLunchWindow ?? false,
     overrides: block.overrides
       .map((override) => ({
         weekday: override.weekday,
         label: override.label ?? null,
         kind: override.kind ?? null,
+        customKindLabel: override.customKindLabel ?? null,
         startTime: override.startTime ?? null,
         endTime: override.endTime ?? null,
       }))

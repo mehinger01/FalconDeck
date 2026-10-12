@@ -33,6 +33,14 @@
 -- or serialization error instead of committing twice. See
 -- scripts/verify-onboarding-setup-concurrency.ts.
 --
+-- PRECEDENCE: setup done through the ordinary screens always wins over an
+-- unfinished draft. Once a membership is ineligible (see
+-- setup_ineligibility_reason), get_setup_state() stops reporting its draft,
+-- save_setup_draft() refuses to create or revise one, and complete_setup()
+-- refuses to commit it. The draft row itself is kept - it is simply no
+-- longer reachable. Only a committed completion outranks this: its result
+-- is still returned, and a retry of it is still replayed.
+--
 -- What complete_setup() never does: it never writes bell_schedules,
 -- schedule_blocks, or schedule_block_overrides rows for an
 -- organization-owned schedule (a shared schedule gets
@@ -172,6 +180,12 @@ revoke execute on function public.setup_draft_json(public.setup_drafts, boolean)
 --   { status: 'not-started', eligible, reason, seed: { activeBellScheduleId, lunchWave } }
 -- `seed` is what the membership already chose in the existing setup
 -- screens (null / 'none' for a brand-new account).
+--
+-- 'in-progress' is reported only while the membership is still eligible. A
+-- membership that has since been set up through the ordinary screens gets
+-- 'not-started' with eligible = false, exactly as if it had never started a
+-- draft: the draft cannot be completed any more, so it is not offered for
+-- resuming.
 -- ---------------------------------------------------------------------------
 
 create function public.get_setup_state(p_organization_id uuid)
@@ -196,14 +210,16 @@ begin
     return jsonb_build_object('status', 'completed', 'completion', v_completion);
   end if;
 
-  select d.* into v_draft
-  from public.setup_drafts d
-  where d.owner_membership_id = v_membership_id;
-  if found then
-    return jsonb_build_object('status', 'in-progress', 'draft', public.setup_draft_json(v_draft, true));
-  end if;
-
   v_reason := public.setup_ineligibility_reason(v_membership_id);
+
+  if v_reason is null then
+    select d.* into v_draft
+    from public.setup_drafts d
+    where d.owner_membership_id = v_membership_id;
+    if found then
+      return jsonb_build_object('status', 'in-progress', 'draft', public.setup_draft_json(v_draft, true));
+    end if;
+  end if;
 
   select p.active_bell_schedule_id, p.lunch_wave into v_active_schedule_id, v_lunch_wave
   from public.teacher_schedule_preferences p
@@ -228,6 +244,14 @@ $$;
 --   { status: 'conflict',   reason: 'draft-missing' }
 --   { status: 'completed',  completion }
 --   { status: 'ineligible', reason }
+-- 'ineligible' is returned for a revision as well as for a first save: a
+-- draft whose account has since been set up through the ordinary screens
+-- is not written to again.
+--
+-- Creating a draft also records the membership's current schedule
+-- preferences as the draft's baseline (see setup_drafts). A revision never
+-- touches the baseline.
+--
 -- The payload is stored as given: a draft is allowed to be incomplete, so
 -- content is validated only by complete_setup(). Only its type and size are
 -- checked here.
@@ -248,6 +272,8 @@ declare
   v_completion jsonb;
   v_draft public.setup_drafts;
   v_reason text;
+  v_baseline_schedule_id text;
+  v_baseline_lunch_wave text;
 begin
   if p_payload is null or jsonb_typeof(p_payload) <> 'object' then
     raise exception 'Setup draft must be a JSON object.' using errcode = '22023';
@@ -265,6 +291,12 @@ begin
     return jsonb_build_object('status', 'completed', 'completion', v_completion);
   end if;
 
+  -- Checked for a revision too, not only for a first save.
+  v_reason := public.setup_ineligibility_reason(v_membership_id);
+  if v_reason is not null then
+    return jsonb_build_object('status', 'ineligible', 'reason', v_reason);
+  end if;
+
   select d.* into v_draft
   from public.setup_drafts d
   where d.owner_membership_id = v_membership_id;
@@ -275,13 +307,14 @@ begin
         'status', 'conflict', 'reason', 'draft-exists', 'draft', public.setup_draft_json(v_draft, true));
     end if;
 
-    v_reason := public.setup_ineligibility_reason(v_membership_id);
-    if v_reason is not null then
-      return jsonb_build_object('status', 'ineligible', 'reason', v_reason);
-    end if;
+    select p.active_bell_schedule_id, p.lunch_wave into v_baseline_schedule_id, v_baseline_lunch_wave
+    from public.teacher_schedule_preferences p
+    where p.owner_membership_id = v_membership_id;
 
-    insert into public.setup_drafts (owner_membership_id, organization_id, payload)
-    values (v_membership_id, p_organization_id, p_payload)
+    insert into public.setup_drafts (
+      owner_membership_id, organization_id, payload, baseline_active_bell_schedule_id, baseline_lunch_wave
+    )
+    values (v_membership_id, p_organization_id, p_payload, v_baseline_schedule_id, coalesce(v_baseline_lunch_wave, 'none'))
     returning * into v_draft;
 
     return jsonb_build_object('status', 'saved', 'draft', public.setup_draft_json(v_draft, false));
@@ -327,6 +360,7 @@ $$;
 --   { status: 'conflict',  reason: 'shared-schedule-changed' | 'draft-missing' }
 --   { status: 'conflict',  reason: 'already-completed', completion }
 --   { status: 'conflict',  reason: 'no-longer-eligible', ineligibility }
+--   { status: 'conflict',  reason: 'preferences-changed', preferences: { activeBellScheduleId, lunchWave } }
 -- ---------------------------------------------------------------------------
 
 create function public.complete_setup(
@@ -369,6 +403,8 @@ declare
   v_sorted_end time;
   v_result jsonb;
   v_ineligibility text;
+  v_current_schedule_id text;
+  v_current_lunch_wave text;
 begin
   if p_operation_id is null then
     raise exception 'Operation id is required.' using errcode = '22023';
@@ -498,10 +534,16 @@ begin
 
   if v_mode = 'shared' then
     v_schedule_id := v_schedule ->> 'scheduleId';
+    -- A draft that names no schedule is wrong in itself, not a schedule that
+    -- changed: there is nothing for the teacher to review.
+    if coalesce(btrim(v_schedule_id), '') = '' then
+      raise exception 'Choose your school''s schedule before finishing setup.' using errcode = '22023';
+    end if;
 
     -- (5a) The shared schedule must still be exactly what the teacher was
-    -- shown: same blocks, same order, same times/labels/kinds, and the same
-    -- weekday overrides on each block (a period that moves or is renamed
+    -- shown: same blocks, same order, same times/labels/kinds (including a
+    -- custom kind's own label and whether a block is the lunch window), and
+    -- the same weekday overrides on each block (a period that moves or is renamed
     -- only on Wednesdays is still a change to the teacher's day). Anything
     -- else (edited, emptied, deleted, no longer shared) is reported as a
     -- conflict so the teacher reviews the new periods - never silently
@@ -534,11 +576,14 @@ begin
       'kind', sb.kind,
       'startTime', public.setup_time_text(sb.start_time),
       'endTime', public.setup_time_text(sb.end_time),
+      'customKindLabel', sb.custom_kind_label,
+      'isLunchWindow', sb.is_lunch_window,
       'overrides', coalesce((
         select jsonb_agg(jsonb_build_object(
           'weekday', o.weekday,
           'label', o.label,
           'kind', o.kind,
+          'customKindLabel', o.custom_kind_label,
           'startTime', public.setup_time_text(o.start_time),
           'endTime', public.setup_time_text(o.end_time)
         ) order by o.weekday)
@@ -559,11 +604,14 @@ begin
       'kind', e.value ->> 'kind',
       'startTime', e.value ->> 'startTime',
       'endTime', e.value ->> 'endTime',
+      'customKindLabel', e.value ->> 'customKindLabel',
+      'isLunchWindow', coalesce(e.value -> 'isLunchWindow' = 'true'::jsonb, false),
       'overrides', coalesce((
         select jsonb_agg(jsonb_build_object(
           'weekday', o.value ->> 'weekday',
           'label', o.value ->> 'label',
           'kind', o.value ->> 'kind',
+          'customKindLabel', o.value ->> 'customKindLabel',
           'startTime', o.value ->> 'startTime',
           'endTime', o.value ->> 'endTime'
         ) order by o.value ->> 'weekday')
@@ -734,6 +782,55 @@ begin
     raise exception 'Add a learning target or an agenda item to your first lesson.' using errcode = '22023';
   end if;
 
+  -- (7b) Schedule preferences changed outside guided setup since this draft
+  -- was created. The write below replaces the membership's active schedule
+  -- and lunch wave, so it must not replace a newer choice the draft knows
+  -- nothing about. For each of the two values separately: if it is no
+  -- longer what it was when the draft was created (the draft's baseline),
+  -- and it is also not what this draft is about to write, completion is
+  -- refused and the current values are returned. A draft that has since
+  -- been brought into line with the new value writes that same value, so
+  -- nothing newer is lost and it completes.
+  --
+  -- This is the last check, so every return above and this one happen
+  -- before any operational write.
+  --
+  -- Holding the answer until commit, against the ordinary save path (which
+  -- takes no setup lock - it writes this table directly, an UPDATE of the
+  -- changed columns or, when the membership has no row yet, an INSERT):
+  --   * FOR UPDATE here waits for an ordinary UPDATE that is in flight and,
+  --     under READ COMMITTED, then reads the row as that UPDATE left it; an
+  --     UPDATE arriving later waits for this function. It then either lands
+  --     on top of what this function wrote ("completed, then edited") or,
+  --     when this function made a newly created private schedule active, is
+  --     rejected by teacher_schedule_preferences' own WITH CHECK policy,
+  --     whose schedule lookup still uses the UPDATE's earlier snapshot. That
+  --     is a failed ordinary save, retried by its caller - never a silent
+  --     overwrite in either direction.
+  --   * When there is no row to lock, the membership row lock taken in (1b)
+  --     does the same job for the INSERT: that INSERT needs a KEY SHARE lock
+  --     on the membership row for its foreign key.
+  select p.active_bell_schedule_id, p.lunch_wave into v_current_schedule_id, v_current_lunch_wave
+  from public.teacher_schedule_preferences p
+  where p.owner_membership_id = v_membership_id
+  for update;
+  v_current_lunch_wave := coalesce(v_current_lunch_wave, 'none');
+
+  if (v_current_schedule_id is distinct from v_draft.baseline_active_bell_schedule_id
+      and v_current_schedule_id is distinct from v_schedule_id)
+    or (v_current_lunch_wave <> v_draft.baseline_lunch_wave
+      and v_current_lunch_wave <> v_lunch_wave)
+  then
+    return jsonb_build_object(
+      'status', 'conflict',
+      'reason', 'preferences-changed',
+      'preferences', jsonb_build_object(
+        'activeBellScheduleId', v_current_schedule_id,
+        'lunchWave', v_current_lunch_wave
+      )
+    );
+  end if;
+
   -- (8) Writes - parent before child. Every owner/organization value below
   -- is p_organization_id or the membership resolved above, never a payload
   -- value.
@@ -853,9 +950,9 @@ end;
 $$;
 
 comment on function public.get_setup_state(uuid) is
-  'Guided setup: read-only state for the caller''s membership in p_organization_id - completed (with the stored result), in-progress (with the draft), or not-started (with eligibility).';
+  'Guided setup: read-only state for the caller''s membership in p_organization_id - completed (with the stored result), in-progress (with the draft, only while the membership is still eligible), or not-started (with eligibility).';
 comment on function public.save_setup_draft(uuid, integer, jsonb) is
-  'Guided setup: creates (p_expected_revision NULL) or revises the caller''s draft. A revision mismatch is returned as a conflict carrying the current draft, never applied.';
+  'Guided setup: creates (p_expected_revision NULL) or revises the caller''s draft. A revision mismatch is returned as a conflict carrying the current draft, never applied. Refused as ineligible, for a first save or a revision, once the membership has been set up through the ordinary screens.';
 comment on function public.complete_setup(uuid, uuid, integer) is
   'Guided setup: atomically commits the caller''s STORED draft - teacher-owned courses, class sections, either a private schedule with its blocks or teacher_period_assignments onto a shared schedule, schedule preferences, and a prepared first lesson - then records the result and deletes the draft. Idempotent on p_operation_id: a retry of a committed operation returns the stored result and writes nothing. Never writes organization-owned rows.';
 

@@ -28,6 +28,12 @@ export interface StoredSetupDraft {
 
 export type SetupIneligibilityReason = "migration-pending" | "legacy-account" | "existing-setup";
 
+/**
+ * `in-progress` is reported only while the membership is still eligible. An
+ * account that was set up through the ordinary screens after starting a
+ * draft comes back as `not-started` with `eligible: false`: its draft is
+ * kept server-side but can no longer be resumed, saved, or completed.
+ */
 export type SetupState =
   | { status: "completed"; completion: SetupCompletion }
   | { status: "in-progress"; draft: StoredSetupDraft }
@@ -46,7 +52,14 @@ export type CompleteSetupResult =
   | { status: "conflict"; reason: "shared-schedule-changed" | "draft-missing" }
   | { status: "conflict"; reason: "already-completed"; completion: SetupCompletion }
   /** The account was set up through the ordinary screens after this draft was started. Nothing was written. */
-  | { status: "conflict"; reason: "no-longer-eligible"; ineligibility: SetupIneligibilityReason };
+  | { status: "conflict"; reason: "no-longer-eligible"; ineligibility: SetupIneligibilityReason }
+  /**
+   * The active schedule or lunch wave was changed outside guided setup after
+   * this draft was created, to something this draft would replace. Nothing
+   * was written. `preferences` is what is stored now; a draft brought into
+   * line with it completes.
+   */
+  | { status: "conflict"; reason: "preferences-changed"; preferences: SetupSeed };
 
 /**
  * `rejected`: the server answered and refused - nothing was applied.
@@ -188,6 +201,10 @@ export function parseCompleteSetupResult(value: unknown): CompleteSetupResult | 
     if (value.reason === "no-longer-eligible") {
       const ineligibility = parseIneligibilityReason(value.ineligibility);
       return ineligibility && { status: "conflict", reason: "no-longer-eligible", ineligibility };
+    }
+    if (value.reason === "preferences-changed") {
+      const preferences = parseSeed(value.preferences);
+      return preferences && { status: "conflict", reason: "preferences-changed", preferences };
     }
   }
   return null;

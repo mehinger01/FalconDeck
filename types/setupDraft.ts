@@ -37,6 +37,7 @@ export interface SharedOverrideSnapshot {
   weekday: Weekday;
   label: string | null;
   kind: BlockKind | null;
+  customKindLabel: string | null;
   startTime: string | null;
   endTime: string | null;
 }
@@ -49,6 +50,10 @@ export interface SharedBlockSnapshot {
   kind: BlockKind;
   startTime: string;
   endTime: string;
+  /** The label of a "custom" kind; `null` when the period has none. */
+  customKindLabel: string | null;
+  /** Whether this period is the window a teacher's lunch wave sits inside - it changes how the teacher's day is split. */
+  isLunchWindow: boolean;
   /** Sorted by weekday name, so two snapshots of the same schedule are always deep-equal. */
   overrides: SharedOverrideSnapshot[];
 }

@@ -118,7 +118,7 @@ function sharedScheduleSetupDraft(scheduleId: string): SetupDraft {
     schedule: {
       mode: "shared",
       scheduleId,
-      expectedBlocks: [{ id: "p1", label: "1st Hour", kind: "instructional", startTime: "08:00", endTime: "08:50", overrides: [] }],
+      expectedBlocks: [{ id: "p1", label: "1st Hour", kind: "instructional", startTime: "08:00", endTime: "08:50", customKindLabel: null, isLunchWindow: false, overrides: [] }],
       assignments: [{ id: crypto.randomUUID(), blockId: "p1", classSectionId: draft.classSections[0].id }],
     },
   };

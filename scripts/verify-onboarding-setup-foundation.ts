@@ -254,6 +254,9 @@ async function main() {
     check("draft-missing needs no draft", parseSaveSetupDraftResult({ status: "conflict", reason: "draft-missing" })?.status === "conflict");
     check("shared-schedule-changed parses", parseCompleteSetupResult({ status: "conflict", reason: "shared-schedule-changed" })?.status === "conflict");
     check("completed without 'replayed' is refused", parseCompleteSetupResult({ status: "completed", completion }) === null);
+    const preferencesChanged = { status: "conflict", reason: "preferences-changed", preferences: { activeBellScheduleId: null, lunchWave: "A" } };
+    check("preferences-changed parses with the preferences now in force", deepEqual(parseCompleteSetupResult(preferencesChanged), preferencesChanged));
+    check("preferences-changed without usable preferences is refused", parseCompleteSetupResult({ ...preferencesChanged, preferences: undefined }) === null && parseCompleteSetupResult({ ...preferencesChanged, preferences: { activeBellScheduleId: null, lunchWave: "Z" } }) === null);
     check("parseSetupDraft refuses non-objects and wrong versions", parseSetupDraft(null) === null && parseSetupDraft("x") === null && parseSetupDraft({ version: 1 }) === null);
     check("parseSetupDraft round-trips an empty draft", deepEqual(parseSetupDraft(JSON.parse(JSON.stringify(createEmptySetupDraft()))), createEmptySetupDraft()));
   }
@@ -310,15 +313,20 @@ async function main() {
     check("an added weekday override is flagged, with no base period changed", draft.schedule?.mode === "shared" && hasSharedScheduleChanged(draft.schedule, [withOverrides([wednesday])]));
     const snapshot = snapshotSharedBlocks(withOverrides([wednesday, friday]));
     check("a snapshot records overrides sorted by weekday, with explicit nulls for fields not overridden", deepEqual(snapshot[1].overrides, [
-      { weekday: "friday", label: "Assembly", kind: null, startTime: null, endTime: null },
-      { weekday: "wednesday", label: null, kind: null, startTime: "09:10", endTime: "10:00" },
+      { weekday: "friday", label: "Assembly", kind: null, customKindLabel: null, startTime: null, endTime: null },
+      { weekday: "wednesday", label: null, kind: null, customKindLabel: null, startTime: "09:10", endTime: "10:00" },
     ]));
-    check("...and survives JSON unchanged (no undefined keys to lose)", deepEqual(JSON.parse(JSON.stringify(snapshot)), snapshot) && Object.keys(snapshot[1].overrides[0]).length === 5);
+    check("a snapshot records each period's custom kind label and lunch-window flag, explicitly", snapshot.every((block) => block.customKindLabel === null && block.isLunchWindow === false));
+    check("...and survives JSON unchanged (no undefined keys to lose)", deepEqual(JSON.parse(JSON.stringify(snapshot)), snapshot) && Object.keys(snapshot[1].overrides[0]).length === 6);
     check("override order in the source does not matter", deepEqual(snapshotSharedBlocks(withOverrides([friday, wednesday])), snapshot));
     const draftWithOverrides = { mode: "shared" as const, scheduleId: shared.id, expectedBlocks: snapshot, assignments: [] };
     check("a schedule whose overrides are unchanged is not flagged", !hasSharedScheduleChanged(draftWithOverrides, [withOverrides([friday, wednesday])]));
     check("a changed override time is flagged", hasSharedScheduleChanged(draftWithOverrides, [withOverrides([{ ...wednesday, startTime: "09:15" }, friday])]));
     check("a removed override is flagged", hasSharedScheduleChanged(draftWithOverrides, [withOverrides([friday])]));
+    const withSecondHour = (change: Partial<BellSchedule["blocks"][number]>): BellSchedule => ({ ...shared, blocks: shared.blocks.map((block) => (block.id === "p2" ? { ...block, ...change } : block)) });
+    check("a period becoming the lunch window is flagged", draft.schedule?.mode === "shared" && hasSharedScheduleChanged(draft.schedule, [withSecondHour({ isLunchWindow: true })]));
+    check("a changed custom kind label is flagged", draft.schedule?.mode === "shared" && hasSharedScheduleChanged(draft.schedule, [withSecondHour({ customKindLabel: "Advisory" })]));
+    check("a changed custom kind label on a weekday override is flagged", hasSharedScheduleChanged(draftWithOverrides, [withOverrides([wednesday, { ...friday, customKindLabel: "Pep Rally" }])]));
     check("an override's class assignment is not part of the snapshot", deepEqual(snapshotSharedBlocks(withOverrides([{ ...wednesday, classSectionId: "anything" }, friday])), snapshot));
 
     const seeded = createSetupDraftFromSeed({ activeBellScheduleId: shared.id, lunchWave: "B" }, reference.schedules);
@@ -371,6 +379,7 @@ async function main() {
     check("cloud + eligible -> guided setup", deriveSetupEntry(cloud, eligible) === "guided-setup");
     check("cloud + draft in progress -> guided setup (resume)", deriveSetupEntry(cloud, inProgress) === "guided-setup");
     check("cloud + completed -> existing app", deriveSetupEntry(cloud, completed) === "existing-app");
+    // Also what the server reports for an account that started a draft and was then set up in the ordinary screens.
     check("cloud + existing setup -> existing app", deriveSetupEntry(cloud, { status: "not-started", eligible: false, reason: "existing-setup", seed: { activeBellScheduleId: null, lunchWave: "none" } }) === "existing-app");
     check("cloud + state unavailable -> existing app", deriveSetupEntry(cloud, null) === "existing-app");
     check("legacy migration pending -> existing app, whatever the state says", deriveSetupEntry({ kind: "local", ...ids, migratedAt: null }, eligible) === "existing-app");

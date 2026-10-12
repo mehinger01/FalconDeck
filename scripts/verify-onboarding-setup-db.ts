@@ -799,17 +799,22 @@ async function main() {
     check("a brand-new account has an empty seed", untouchedState.status === "not-started" && deepEqual(untouchedState.seed, { activeBellScheduleId: null, lunchWave: "none" }));
     check("...which produces an empty starting draft", untouchedState.status === "not-started" && deepEqual(createSetupDraftFromSeed(untouchedState.seed, pickerBase.schedules), createEmptySetupDraft()));
 
-    // (c) A draft already in progress resumes even if the account has since become "established".
+    // (c) A draft is in progress, and then the account is set up in the existing app. Existing setup wins:
+    // the draft is no longer offered for resuming. (Section 18 covers what else is refused.)
     const midway = await newFounder("midway");
     const midwaySession = new SetupDraftSession(midway.repository, null, createEmptySetupDraft());
     midwaySession.update(ownScheduleDraft());
     await midwaySession.flush();
+    const midwayAuthority = { kind: "cloud-ready" as const, organizationId: midway.organizationId, membershipId: midway.membershipId, migratedAt: null };
+    const midwayBefore = await stateOf(midway);
+    check("a draft in progress resumes while the account is still eligible", midwayBefore.status === "in-progress" && deriveSetupEntry(midwayAuthority, midwayBefore) === "guided-setup");
     await midway.client.rpc("import_bell_schedule", {
       p_organization_id: midway.organizationId, p_id: generateId("schedule"), p_name: "Built elsewhere",
       p_blocks: [{ id: "b1", label: "1st", kind: "instructional", start_time: "08:00", end_time: "08:50" }], p_time_zone: "America/Detroit",
     });
     const midwayState = await stateOf(midway);
-    check("an in-progress draft still resumes", midwayState.status === "in-progress" && deriveSetupEntry({ kind: "cloud-ready", organizationId: midway.organizationId, membershipId: midway.membershipId, migratedAt: null }, midwayState) === "guided-setup");
+    check("once the account has built its own schedule, the draft is no longer reported", midwayState.status === "not-started" && !midwayState.eligible && midwayState.reason === "existing-setup");
+    check("...and entry goes to the existing app, not back into guided setup", deriveSetupEntry(midwayAuthority, midwayState) === "existing-app");
 
     // (d) Established: built its own schedule in the existing app, no draft.
     const builder = await newFounder("built-own-schedule");
@@ -883,7 +888,8 @@ async function main() {
     check("asking again gives the same answer and still writes nothing", again.ok && again.value.status === "conflict" && again.value.reason === "no-longer-eligible" && JSON.stringify(await ownedRowCounts(teacher.membershipId)) === JSON.stringify(before));
 
     // The session a screen would use ends up "ineligible", not offering a side to choose.
-    const session = new SetupDraftSession(teacher.repository, await storedDraftOf(teacher), createEmptySetupDraft());
+    const stored: StoredSetupDraft = { operationId: seeded.value.operationId, revision: seeded.value.revision, updatedAt: seeded.value.updatedAt, payload: draft };
+    const session = new SetupDraftSession(teacher.repository, stored, createEmptySetupDraft());
     const status = await session.complete();
     check("SetupDraftSession reports it as ineligible", status.kind === "ineligible" && status.reason === "existing-setup");
 
@@ -903,6 +909,219 @@ async function main() {
     check("...and writes nothing", JSON.stringify(await ownedRowCounts(done.membershipId)) === JSON.stringify(committed));
     const otherOperation = await done.repository.completeSetup(crypto.randomUUID(), 1);
     check("a different operation for that account is still 'already-completed'", otherOperation.ok && otherOperation.value.status === "conflict" && otherOperation.value.reason === "already-completed");
+  }
+
+  console.log("\n18. Setup done in the ordinary screens outranks an unfinished draft");
+  {
+    const teacher = await newFounder("draft-then-ordinary");
+    const authority = { kind: "cloud-ready" as const, organizationId: teacher.organizationId, membershipId: teacher.membershipId, migratedAt: null };
+    const draft = ownScheduleDraft();
+    const seeded = await teacher.repository.saveDraft(null, draft);
+    if (!seeded.ok || seeded.value.status !== "saved") throw new Error("could not seed the draft");
+    const draftRow = async () =>
+      (await db.admin<{ revision: number; payload: SetupDraft }>("select revision, payload from public.setup_drafts where owner_membership_id = $1", [teacher.membershipId]))[0];
+
+    // The teacher sets the account up in the ordinary screens instead: a course and a class, through RLS.
+    const courseId = generateId("course");
+    await db.asUser(teacher.userId, `insert into public.courses (id, organization_id, owner_type, owner_membership_id, name) values ($1, $2, 'teacher', $3, 'Algebra')`, [courseId, teacher.organizationId, teacher.membershipId]);
+    await db.asUser(teacher.userId, `insert into public.class_sections (id, organization_id, owner_membership_id, course_id, name) values ($1, $2, $3, $4, 'Algebra - 2nd Hour')`, [generateId("section"), teacher.organizationId, teacher.membershipId, courseId]);
+    const before = await ownedRowCounts(teacher.membershipId);
+    const storedBefore = await draftRow();
+
+    const state = await stateOf(teacher);
+    check("get_setup_state no longer reports the draft: not-started, not eligible, existing-setup", state.status === "not-started" && !state.eligible && state.reason === "existing-setup");
+    check("deriveSetupEntry sends the account to the existing app", deriveSetupEntry(authority, state) === "existing-app");
+
+    const revise = await teacher.repository.saveDraft(seeded.value.revision, { ...draft, step: "first-lesson" });
+    check("revising the draft is refused as ineligible", revise.ok && revise.value.status === "ineligible" && revise.value.reason === "existing-setup");
+    const recreate = await teacher.repository.saveDraft(null, createEmptySetupDraft());
+    check("creating a draft is refused as ineligible (not reported as draft-exists)", recreate.ok && recreate.value.status === "ineligible");
+    const complete = await teacher.repository.completeSetup(seeded.value.operationId, seeded.value.revision);
+    check("completing it is refused as no-longer-eligible", complete.ok && complete.value.status === "conflict" && complete.value.reason === "no-longer-eligible");
+
+    const storedAfter = await draftRow();
+    check("the abandoned draft is retained, exactly as it was", storedAfter?.revision === storedBefore.revision && deepEqual(storedAfter.payload, storedBefore.payload));
+    check("none of those attempts wrote anything", JSON.stringify(await ownedRowCounts(teacher.membershipId)) === JSON.stringify(before));
+    const stateAgain = await stateOf(teacher);
+    check("...and none of them made the draft resumable again", stateAgain.status === "not-started" && !stateAgain.eligible && deriveSetupEntry(authority, stateAgain) === "existing-app");
+
+    // A tab that still has the draft open: its next autosave stops, it does not reopen the flow.
+    const openTab = new SetupDraftSession(teacher.repository, { operationId: seeded.value.operationId, revision: seeded.value.revision, updatedAt: seeded.value.updatedAt, payload: draft }, createEmptySetupDraft());
+    openTab.update({ ...draft, step: "review" });
+    await openTab.flush();
+    const tabStatus = openTab.getSnapshot().status;
+    check("a tab still editing that draft is told it is ineligible", tabStatus.kind === "ineligible" && tabStatus.reason === "existing-setup");
+    check("...and its edit was not stored", (await draftRow())?.revision === storedBefore.revision);
+  }
+
+  console.log("\n19. Schedule preferences changed outside guided setup are not replaced");
+  {
+    const ALT_SCHEDULE_ID = "schedule-shared-alternate";
+    await db.admin(
+      `insert into public.bell_schedules (id, organization_id, owner_type, owner_membership_id, name, is_default, source)
+       values ($1, $2, 'organization', null, 'Alternate Day', false, 'built-in')`,
+      [ALT_SCHEDULE_ID, school.organizationId],
+    );
+    await db.admin(
+      `insert into public.schedule_blocks (id, bell_schedule_id, organization_id, owner_type, owner_membership_id, position, label, kind, start_time, end_time)
+       values ($1, $2, $3, 'organization', null, 0, '1st Hour', 'instructional', '08:30', '09:20')`,
+      [scheduleBlockCloudId(ALT_SCHEDULE_ID, "p1"), ALT_SCHEDULE_ID, school.organizationId],
+    );
+    const preferencesOf = async (teacher: Teacher) =>
+      (await db.admin<{ lunch_wave: string; active_bell_schedule_id: string | null }>("select lunch_wave, active_bell_schedule_id from public.teacher_schedule_preferences where owner_membership_id = $1", [teacher.membershipId]))[0] ?? null;
+    const baselineOf = async (teacher: Teacher) =>
+      (await db.admin<{ baseline_lunch_wave: string; baseline_active_bell_schedule_id: string | null }>("select baseline_lunch_wave, baseline_active_bell_schedule_id from public.setup_drafts where owner_membership_id = $1", [teacher.membershipId]))[0];
+    /** An interrupted account: chose the school's schedule and lunch wave B in the ordinary screens, then started a draft that keeps both. */
+    const interrupted = async (label: string) => {
+      const teacher = await newJoiner(label, school.organizationId);
+      await db.asUser(teacher.userId, `insert into public.teacher_schedule_preferences (owner_membership_id, organization_id, lunch_wave, active_bell_schedule_id) values ($1, $2, 'B', $3)`, [teacher.membershipId, teacher.organizationId, SHARED_SCHEDULE_ID]);
+      const draft: SetupDraft = { ...sharedScheduleDraft(await loadAppData(teacher), "course-catalog-algebra"), lunchWave: "B" };
+      const session = new SetupDraftSession(teacher.repository, null, createEmptySetupDraft());
+      session.update(draft);
+      await session.flush();
+      return { teacher, draft, session };
+    };
+
+    // (a) Only the lunch wave changes after the draft was created.
+    const lunch = await interrupted("lunch-wave-changed");
+    check("the draft records the preferences in force when it was created", deepEqual(await baselineOf(lunch.teacher), { baseline_lunch_wave: "B", baseline_active_bell_schedule_id: SHARED_SCHEDULE_ID }));
+    await db.asUser(lunch.teacher.userId, "update public.teacher_schedule_preferences set lunch_wave = 'A' where owner_membership_id = $1", [lunch.teacher.membershipId]);
+    const lunchBefore = await ownedRowCounts(lunch.teacher.membershipId);
+    const lunchStatus = await lunch.session.complete();
+    check("a lunch-wave-only change refuses completion as preferences-changed", lunchStatus.kind === "conflict" && lunchStatus.reason === "preferences-changed");
+    check("...reporting the preferences now in force", lunchStatus.kind === "conflict" && deepEqual(lunchStatus.preferences, { activeBellScheduleId: SHARED_SCHEDULE_ID, lunchWave: "A" }));
+    check("...writing nothing", JSON.stringify(await ownedRowCounts(lunch.teacher.membershipId)) === JSON.stringify(lunchBefore) && lunchBefore.class_sections === 0);
+    check("...and leaving the newer lunch wave in place", deepEqual(await preferencesOf(lunch.teacher), { lunch_wave: "A", active_bell_schedule_id: SHARED_SCHEDULE_ID }));
+
+    // Saving the draft again must not move the baseline - otherwise any autosave would wave the change through.
+    lunch.session.update({ ...lunch.draft, step: "first-lesson" });
+    await lunch.session.resolveConflict("keep-mine");
+    check("a draft save does not reset the baseline", deepEqual(await baselineOf(lunch.teacher), { baseline_lunch_wave: "B", baseline_active_bell_schedule_id: SHARED_SCHEDULE_ID }));
+    const lunchAgain = await lunch.session.complete();
+    check("...so completion is still refused after it", lunchAgain.kind === "conflict" && lunchAgain.reason === "preferences-changed" && (await ownedRowCounts(lunch.teacher.membershipId)).class_sections === 0);
+
+    // The teacher's draft is brought into line with the newer choice; nothing newer is lost by completing it.
+    lunch.session.update({ ...lunch.draft, lunchWave: "A" });
+    await lunch.session.resolveConflict("keep-mine");
+    const lunchDone = await lunch.session.complete();
+    check("a draft that adopts the newer lunch wave completes", lunchDone.kind === "completed");
+    check("...keeping that lunch wave", deepEqual(await preferencesOf(lunch.teacher), { lunch_wave: "A", active_bell_schedule_id: SHARED_SCHEDULE_ID }));
+
+    // A retry of that committed operation is replayed even though preferences have moved on again.
+    await db.asUser(lunch.teacher.userId, "update public.teacher_schedule_preferences set lunch_wave = 'C' where owner_membership_id = $1", [lunch.teacher.membershipId]);
+    const committedCounts = await ownedRowCounts(lunch.teacher.membershipId);
+    const operationId = lunchDone.kind === "completed" ? lunchDone.completion.operationId : "";
+    const replay = await lunch.teacher.repository.completeSetup(operationId, 1);
+    check("a retry of the committed operation is replayed, not refused", replay.ok && replay.value.status === "completed" && replay.value.replayed && lunchDone.kind === "completed" && deepEqual(replay.value.completion, lunchDone.completion));
+    check("...writes nothing, and does not put the old lunch wave back", JSON.stringify(await ownedRowCounts(lunch.teacher.membershipId)) === JSON.stringify(committedCounts) && (await preferencesOf(lunch.teacher))?.lunch_wave === "C");
+
+    // (b) Only the active schedule changes after the draft was created.
+    const schedule = await interrupted("schedule-changed");
+    await db.asUser(schedule.teacher.userId, "update public.teacher_schedule_preferences set active_bell_schedule_id = $2 where owner_membership_id = $1", [schedule.teacher.membershipId, ALT_SCHEDULE_ID]);
+    const scheduleBefore = await ownedRowCounts(schedule.teacher.membershipId);
+    const scheduleStatus = await schedule.session.complete();
+    check("a schedule-only change refuses completion as preferences-changed", scheduleStatus.kind === "conflict" && scheduleStatus.reason === "preferences-changed");
+    check("...reporting the schedule now in force", scheduleStatus.kind === "conflict" && deepEqual(scheduleStatus.preferences, { activeBellScheduleId: ALT_SCHEDULE_ID, lunchWave: "B" }));
+    check("...writing nothing", JSON.stringify(await ownedRowCounts(schedule.teacher.membershipId)) === JSON.stringify(scheduleBefore) && scheduleBefore.class_sections === 0 && scheduleBefore.teacher_period_assignments === 0);
+    check("...and leaving the newer schedule active", deepEqual(await preferencesOf(schedule.teacher), { lunch_wave: "B", active_bell_schedule_id: ALT_SCHEDULE_ID }));
+
+    // The draft is rebuilt against the schedule the teacher chose since, and then completes onto it.
+    const refreshed = await loadAppData(schedule.teacher);
+    const alternate = refreshed.schedules.find((candidate) => candidate.id === ALT_SCHEDULE_ID)!;
+    schedule.session.update({
+      ...schedule.draft,
+      schedule: {
+        mode: "shared",
+        scheduleId: ALT_SCHEDULE_ID,
+        expectedBlocks: snapshotSharedBlocks(alternate),
+        assignments: [{ id: crypto.randomUUID(), blockId: alternate.blocks[0].id, classSectionId: schedule.draft.classSections[0].id }],
+      },
+    });
+    await schedule.session.resolveConflict("keep-mine");
+    check("a draft rebuilt on the newer schedule completes", (await schedule.session.complete()).kind === "completed");
+    check("...with that schedule still active", deepEqual(await preferencesOf(schedule.teacher), { lunch_wave: "B", active_bell_schedule_id: ALT_SCHEDULE_ID }));
+
+    // (c) No preferences row existed when the draft was created; the ordinary screens create one afterwards.
+    const fresh = await newFounder("preferences-created-later");
+    const freshDraft = ownScheduleDraft();
+    const freshSeed = await fresh.repository.saveDraft(null, freshDraft);
+    if (!freshSeed.ok || freshSeed.value.status !== "saved") throw new Error("could not seed the draft");
+    check("with no preferences row, the baseline is 'no schedule, no lunch wave'", deepEqual(await baselineOf(fresh), { baseline_lunch_wave: "none", baseline_active_bell_schedule_id: null }));
+    await db.asUser(fresh.userId, `insert into public.teacher_schedule_preferences (owner_membership_id, organization_id, lunch_wave) values ($1, $2, 'C')`, [fresh.membershipId, fresh.organizationId]);
+    const freshRefused = await fresh.repository.completeSetup(freshSeed.value.operationId, freshSeed.value.revision);
+    check("a lunch wave chosen afterwards, where there was no row, is also protected", freshRefused.ok && freshRefused.value.status === "conflict" && freshRefused.value.reason === "preferences-changed" && deepEqual(freshRefused.value.preferences, { activeBellScheduleId: null, lunchWave: "C" }));
+    check("...and nothing was written", (await ownedRowCounts(fresh.membershipId)).class_sections === 0 && (await preferencesOf(fresh))?.lunch_wave === "C");
+    // The draft itself asks for lunch wave B; put the stored value back to the baseline and it completes as before.
+    await db.asUser(fresh.userId, "update public.teacher_schedule_preferences set lunch_wave = 'none' where owner_membership_id = $1", [fresh.membershipId]);
+    const freshDone = await fresh.repository.completeSetup(freshSeed.value.operationId, freshSeed.value.revision);
+    check("preferences that are back at the baseline do not block completion", freshDone.ok && freshDone.value.status === "completed" && deepEqual(await preferencesOf(fresh), { lunch_wave: "B", active_bell_schedule_id: freshDraft.schedule?.mode === "own" ? freshDraft.schedule.id : null }));
+  }
+
+  console.log("\n20. The rest of a shared schedule's periods is part of the change check");
+  {
+    const secondHour = scheduleBlockCloudId(SHARED_SCHEDULE_ID, "p2");
+    const overrideId = scheduleBlockOverrideCloudId(secondHour, "ov-thu");
+    const teacher = await newJoiner("lunch-window-watcher", school.organizationId);
+    const session = new SetupDraftSession(teacher.repository, null, createEmptySetupDraft());
+    let draft = sharedScheduleDraft(await loadAppData(teacher), "course-catalog-algebra");
+    session.update(draft);
+    await session.flush();
+
+    const review = async () => {
+      const refreshed = await loadAppData(teacher);
+      const current = refreshed.schedules.find((candidate) => candidate.id === SHARED_SCHEDULE_ID)!;
+      const stale = draft.schedule?.mode === "shared" && hasSharedScheduleChanged(draft.schedule, refreshed.schedules);
+      if (draft.schedule?.mode === "shared") {
+        draft = { ...draft, schedule: { ...draft.schedule, expectedBlocks: snapshotSharedBlocks(current) } };
+      }
+      session.update(draft);
+      await session.resolveConflict("keep-mine");
+      return stale;
+    };
+    const refusedUnchanged = async () => {
+      const status = await session.complete();
+      const counts = await ownedRowCounts(teacher.membershipId);
+      return status.kind === "conflict" && status.reason === "shared-schedule-changed" && operationalRowTotal(counts) === 0 && counts.setup_drafts === 1;
+    };
+
+    await db.admin("update public.schedule_blocks set is_lunch_window = true where id = $1", [secondHour]);
+    check("a period BECOMING the lunch window refuses completion and writes nothing", await refusedUnchanged());
+    check("...and the client check sees it, against fresh data", await review());
+
+    await db.admin("update public.schedule_blocks set custom_kind_label = 'Advisory' where id = $1", [secondHour]);
+    check("a CHANGED custom kind label refuses completion", await refusedUnchanged());
+    check("...and the client check sees it", await review());
+
+    await db.admin(
+      `insert into public.schedule_block_overrides (id, schedule_block_id, organization_id, owner_type, owner_membership_id, weekday, custom_kind_label)
+       values ($1, $2, $3, 'organization', null, 'thursday', 'Assembly')`,
+      [overrideId, secondHour, school.organizationId],
+    );
+    await review();
+    await db.admin("update public.schedule_block_overrides set custom_kind_label = 'Pep Rally' where id = $1", [overrideId]);
+    check("a CHANGED custom kind label on a weekday override refuses completion", await refusedUnchanged());
+    check("...and the client check sees it", await review());
+
+    const status = await session.complete();
+    check("once the snapshot matches those fields too, the same operation completes", status.kind === "completed");
+    await db.admin("delete from public.schedule_block_overrides where id = $1", [overrideId]);
+    await db.admin("update public.schedule_blocks set is_lunch_window = false, custom_kind_label = null where id = $1", [secondHour]);
+  }
+
+  console.log("\n21. A shared-schedule draft that names no schedule is a validation error");
+  {
+    const teacher = await newJoiner("no-schedule-id", school.organizationId);
+    const complete = sharedScheduleDraft(await loadAppData(teacher), "course-catalog-algebra");
+    for (const [label, scheduleId] of [["missing", undefined], ["blank", "  "]] as const) {
+      const broken = { ...complete, schedule: { ...complete.schedule, scheduleId } } as unknown as SetupDraft;
+      const current = await stateOf(teacher);
+      const saved = await teacher.repository.saveDraft(current.status === "in-progress" ? current.draft.revision : null, broken);
+      if (!saved.ok || saved.value.status !== "saved") throw new Error("could not save the draft");
+      const outcome = await teacher.repository.completeSetup(saved.value.operationId, saved.value.revision);
+      check(`a ${label} scheduleId is rejected as a validation error, not reported as shared-schedule-changed`, !outcome.ok && outcome.kind === "rejected" && outcome.message.includes("Choose your school's schedule"));
+    }
+    const counts = await ownedRowCounts(teacher.membershipId);
+    check("...and nothing was written", operationalRowTotal(counts) === 0 && counts.setup_completions === 0 && counts.setup_drafts === 1);
   }
 
   await db.close();

@@ -5,10 +5,15 @@ import type { SetupState } from "./setupRepository";
  * Which setup experience a signed-in request belongs in.
  *
  * "guided-setup" is a new-account entry point only. Everything else -
- * every legacy account, every account that already has classes or an
- * active schedule, every account whose setup state could not be read -
+ * every legacy account, every account that already has classes or a
+ * schedule of its own, every account whose setup state could not be read -
  * resolves to "existing-app", which means exactly today's behavior
  * (/setup, ActiveScheduleGate, MigrationSetupCard), unchanged.
+ *
+ * Setup done in the ordinary screens outranks an unfinished draft: the
+ * server reports such an account as `not-started` and not eligible, never
+ * `in-progress` (see get_setup_state), so it lands in "existing-app" here
+ * rather than in a guided setup that could not be finished.
  */
 export type SetupEntry = "guided-setup" | "existing-app";
 

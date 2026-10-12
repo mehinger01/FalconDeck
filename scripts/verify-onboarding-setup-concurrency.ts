@@ -145,7 +145,7 @@ async function sharedScheduleTeacher(label: string): Promise<{ teacher: Teacher;
     schedule: {
       mode: "shared",
       scheduleId,
-      expectedBlocks: [{ id: "p1", label: "1st Hour", kind: "instructional", startTime: "08:00", endTime: "08:50", overrides: [] }],
+      expectedBlocks: [{ id: "p1", label: "1st Hour", kind: "instructional", startTime: "08:00", endTime: "08:50", customKindLabel: null, isLunchWindow: false, overrides: [] }],
       assignments: [{ id: crypto.randomUUID(), blockId: "p1", classSectionId: base.classSections[0].id }],
     },
   });
@@ -333,7 +333,7 @@ async function main() {
       }
     };
     check("a second draft row for one membership is impossible", await expectUnique(
-      `insert into public.setup_drafts (owner_membership_id, organization_id, payload) values ($1, $2, '{}'::jsonb)`, [teacher.membershipId, teacher.organizationId]));
+      `insert into public.setup_drafts (owner_membership_id, organization_id, payload, baseline_lunch_wave) values ($1, $2, '{}'::jsonb, 'none')`, [teacher.membershipId, teacher.organizationId]));
     await teacher.repository.completeSetup(operationId, revision);
     check("a second completion for one membership is impossible", await expectUnique(
       `insert into public.setup_completions (operation_id, owner_membership_id, organization_id, result) values (gen_random_uuid(), $1, $2, '{}'::jsonb)`, [teacher.membershipId, teacher.organizationId]));
@@ -443,7 +443,100 @@ async function main() {
     check("...and the result is exactly 'completed, then edited': the assignment follows the re-timed period", assigned?.start_time === "08:05:00");
   }
 
-  console.log("\n10. Nothing is left behind");
+  console.log("\n10. An ordinary preference write while setup completes");
+  {
+    // The ordinary save writes teacher_schedule_preferences directly and
+    // takes no setup lock: an UPDATE of the changed columns when the row
+    // exists, an INSERT when it does not (patchOrCreateRow in
+    // lib/data/supabaseDataRepository.ts). Both statements are reproduced
+    // here. Completion must never replace what they wrote.
+    const preferences = async (membershipId: string) =>
+      (await db.admin<{ lunch_wave: string; active_bell_schedule_id: string | null }>("select lunch_wave, active_bell_schedule_id from public.teacher_schedule_preferences where owner_membership_id = $1", [membershipId]))[0] ?? null;
+    const nothingCommitted = async (membershipId: string) =>
+      (await countRows("class_sections", membershipId)) === 0 &&
+      (await countRows("bell_schedules", membershipId)) === 0 &&
+      (await countRows("lessons", membershipId)) === 0 &&
+      (await countRows("setup_completions", membershipId)) === 0 &&
+      (await countRows("setup_drafts", membershipId)) === 1;
+    const preferencesChanged = (outcome: CompleteOutcome, lunchWave: string) =>
+      outcome.ok && outcome.value.status === "conflict" && outcome.value.reason === "preferences-changed" && outcome.value.preferences.lunchWave === lunchWave;
+    /** A teacher whose preferences row exists (no schedule, no lunch wave) before the draft is created. */
+    const withPreferencesRow = async (label: string) => {
+      const teacher = await newFounder(label);
+      await db.admin("insert into public.teacher_schedule_preferences (owner_membership_id, organization_id) values ($1, $2)", [teacher.membershipId, teacher.organizationId]);
+      return { teacher, draft: await seedDraft(teacher, completeDraft()) };
+    };
+
+    // (a) An UPDATE of the lunch wave is in flight, uncommitted, when completion runs.
+    const updating = await withPreferencesRow("racing-preference-update");
+    const editor = await db.connect();
+    await editor.query("begin");
+    await editor.query("update public.teacher_schedule_preferences set lunch_wave = 'B' where owner_membership_id = $1", [updating.teacher.membershipId]);
+    const duringUpdate = updating.teacher.repository.completeSetup(updating.draft.operationId, updating.draft.revision);
+    check("the completion waits for the in-flight preference UPDATE instead of deciding without it", await waitForRowLockWait(1));
+    await editor.query("commit");
+    editor.release();
+    check("...and then returns preferences-changed, reporting the new lunch wave", preferencesChanged(await duringUpdate, "B"));
+    check("nothing from the draft was written, and the new lunch wave stands", (await nothingCommitted(updating.teacher.membershipId)) && (await preferences(updating.teacher.membershipId))?.lunch_wave === "B");
+
+    // (b) The membership has no preferences row; the INSERT creating one is in flight when completion runs.
+    const inserting = await newFounder("racing-preference-insert");
+    const insertingDraft = await seedDraft(inserting, completeDraft());
+    const creator = await db.connect();
+    await creator.query("begin");
+    await creator.query("insert into public.teacher_schedule_preferences (owner_membership_id, organization_id, lunch_wave) values ($1, $2, 'A') on conflict (owner_membership_id) do nothing", [inserting.membershipId, inserting.organizationId]);
+    const duringInsert = inserting.repository.completeSetup(insertingDraft.operationId, insertingDraft.revision);
+    check("the completion waits for the in-flight preference INSERT (there is no row yet to lock)", await waitForRowLockWait(1));
+    await creator.query("commit");
+    creator.release();
+    check("...and then returns preferences-changed, reporting the new lunch wave", preferencesChanged(await duringInsert, "A"));
+    check("nothing from the draft was written, and the new row stands", (await nothingCommitted(inserting.membershipId)) && (await preferences(inserting.membershipId))?.lunch_wave === "A");
+
+    // (c) Nothing held: the ordinary UPDATE (as the teacher, through RLS) and the completion are simply fired
+    // together, several times. Three endings are correct, and in none of them is the teacher's newer lunch
+    // wave silently dropped:
+    //   - the UPDATE ran first: completion is refused as preferences-changed;
+    //   - completion ran first and the UPDATE landed on top of it;
+    //   - completion ran first and the UPDATE, having waited for it, was REJECTED by the database: the row it
+    //     waited for now names the schedule completion just created, and teacher_schedule_preferences' own
+    //     WITH CHECK policy looks that schedule up with the UPDATE's earlier snapshot, which cannot see it.
+    //     That is an error the ordinary save reports and retries - not a lost write. The retry is made here.
+    const ROUNDS = 12;
+    const updateLunchWave = (teacher: Teacher) =>
+      db.asUser(teacher.userId, "update public.teacher_schedule_preferences set lunch_wave = 'C' where owner_membership_id = $1 returning owner_membership_id", [teacher.membershipId]);
+    let refused = 0;
+    let landedOnTop = 0;
+    let rejectedThenRetried = 0;
+    let wrong = 0;
+    for (let round = 0; round < ROUNDS; round += 1) {
+      const racing = await withPreferencesRow(`racing-preference-free-${round}`);
+      const [outcome, ordinary] = await Promise.all([
+        racing.teacher.repository.completeSetup(racing.draft.operationId, racing.draft.revision),
+        updateLunchWave(racing.teacher).then(
+          (rows) => ({ ok: true as const, rows: rows.length }),
+          (error: { code?: string }) => ({ ok: false as const, code: error.code }),
+        ),
+      ]);
+      if (ordinary.ok && ordinary.rows === 1 && preferencesChanged(outcome, "C")) {
+        refused += 1;
+      } else if (ordinary.ok && ordinary.rows === 1 && completedFresh(outcome)) {
+        landedOnTop += 1;
+      } else if (!ordinary.ok && ordinary.code === "42501" && completedFresh(outcome)) {
+        // Still the completion's own lunch wave, never a half-applied edit; the retry then succeeds.
+        const untouched = (await preferences(racing.teacher.membershipId))?.lunch_wave === "none";
+        const retried = await updateLunchWave(racing.teacher);
+        if (untouched && retried.length === 1) rejectedThenRetried += 1;
+        else wrong += 1;
+      } else {
+        wrong += 1;
+      }
+      if ((await preferences(racing.teacher.membershipId))?.lunch_wave !== "C") wrong += 1;
+    }
+    console.log(`  (${ROUNDS} rounds: completion refused ${refused}; update landed on top ${landedOnTop}; update rejected by the database, then retried ${rejectedThenRetried})`);
+    check("every round ended one of the three correct ways, with the newer lunch wave stored", wrong === 0 && refused + landedOnTop + rejectedThenRetried === ROUNDS);
+  }
+
+  console.log("\n11. Nothing is left behind");
   {
     const [locks] = await db.admin<{ count: number }>("select count(*)::int as count from pg_locks where locktype = 'advisory'");
     check("no advisory lock is still held", locks.count === 0);
