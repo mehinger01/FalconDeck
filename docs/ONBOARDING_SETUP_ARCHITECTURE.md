@@ -74,6 +74,11 @@ Consequences:
   specific commit happened — neither is a readiness flag.
 - Drafts are scoped to a membership, not a user or a browser, so setup resumes on
   another device.
+- A draft also carries a **preferences baseline**: the membership's active schedule
+  and lunch wave as they stood when the draft was created (`baseline_active_bell_schedule_id`,
+  `baseline_lunch_wave`; no row means no schedule and `none`). `save_setup_draft`
+  reads it from the database when it inserts the draft. The caller cannot supply it,
+  and a later save never changes it. §8.4 describes what it is for.
 
 **Access.** Both new tables have RLS enabled, **no policies, and no table
 privileges** for `anon` or `authenticated`. They are reachable only through three
@@ -212,6 +217,8 @@ should be to try again — which asks about the same operation.
 | Operation replay | A completion whose operation id is already recorded returns that record. |
 | `setup_drafts` primary key | One draft per membership. |
 | `setup_completions` primary key and `UNIQUE (owner_membership_id)` | One record per operation; one completed setup per membership. |
+| Membership row lock (`FOR UPDATE`), taken by `complete_setup` | Makes the eligibility re-check hold until commit against the ordinary save path, which never takes the advisory lock: every insert of a class, schedule or preferences row for the membership needs a key-share lock on that row. |
+| Preferences row lock (`FOR UPDATE`), taken by `complete_setup` just before it writes | Makes the preferences-baseline check hold until commit against an ordinary `UPDATE` of that row. |
 
 The constraints are the backstop for anything the lock does not cover. The one
 known case: a caller whose transaction is REPEATABLE READ and took its snapshot
@@ -236,6 +243,10 @@ releases it.
 | Two memberships | Neither waits for the other |
 | 10 × 16 unsynchronized completions; 10 × 16 unsynchronized saves | Same outcomes every round |
 | Constraints with the lock out of the picture; REPEATABLE READ caller | Duplicate impossible; caller errors, one committed setup |
+| An ordinary class insert in flight when completion runs | Completion waits for it, then returns `no-longer-eligible`; nothing written |
+| An ordinary preference `UPDATE` in flight when completion runs | Completion waits for it, then returns `preferences-changed`; nothing written |
+| An ordinary preference `INSERT` (no row yet) in flight when completion runs | Completion waits for it, then returns `preferences-changed`; nothing written |
+| 12 unsynchronized rounds of completion against an ordinary lunch-wave `UPDATE` | Every round: the newer lunch wave is what is stored. Either completion is refused, or it commits first and the `UPDATE` is rejected by the database and succeeds when retried (see §8.3) |
 
 With the advisory lock removed, 18 of those checks fail — the suite detects its
 absence.
@@ -254,6 +265,33 @@ Not exercised, because no Supabase environment other than production exists:
 Run `verify:onboarding-setup-concurrency`'s scenarios against a disposable Supabase
 project before these migrations are applied to production.
 
+**Known limits of the preferences protection.** These are stated rather than
+covered:
+
+- **An ordinary save can be rejected when it overlaps a completion.** Observed in
+  the unsynchronized test, in every round where completion won the race. The
+  ordinary `UPDATE` waits for the completion; the row it then finds names the
+  private schedule the completion has just created; and
+  `teacher_schedule_preferences`' own `WITH CHECK` policy looks that schedule up
+  with the `UPDATE`'s earlier snapshot, which cannot see it. The statement fails
+  with `42501`. Nothing is overwritten in either direction and the same save
+  succeeds when repeated, but the teacher's save does fail once, and outside two
+  settings screens a failed save is not shown (§9.2). It does not happen when the
+  completion's schedule is a shared one that already existed.
+- **A deadlock is possible, and has not been reproduced.** When the membership has
+  no preferences row, the ordinary path inserts one: Postgres writes the row and
+  only then takes the key-share lock on the membership row for its foreign key.
+  `complete_setup` takes its locks in the other order. If it locks the membership
+  row inside that one statement, each waits for the other; Postgres would end one
+  of them with a deadlock error after its timeout (one second by default). Either
+  way nothing is half-written - the completion can be retried and the ordinary save
+  is retried by its caller - but no test produces this interleaving, because it
+  falls inside a single statement.
+- **The baseline is taken when the draft is created, not when the seed was read.**
+  A preference changed between `get_setup_state` returning the seed and the first
+  draft save becomes part of the baseline and is not reported.
+- All of this was run with direct PostgreSQL connections, like the rest of §8.2.
+
 ### 8.4 Two tabs, and a shared schedule that changed
 
 **Two tabs on the same draft.** The second tab's save names an old revision and is
@@ -262,12 +300,16 @@ way. After one tab completes, any other tab's next save is answered `completed`,
 and a new draft cannot be created.
 
 **A shared schedule that changed.** When a teacher picks a shared schedule the
-draft records it as shown: each period's id, label, kind and times in order, **and
-each period's weekday overrides** (weekday, label, kind, times). At completion the
-function rebuilds the same structure from the live rows and compares. Any
-difference — a moved, added or removed period; an added, changed or removed weekday
-override; the schedule deleted or marked as needing configuration — returns
-`conflict: shared-schedule-changed` and writes nothing. The teacher reviews, the
+draft records it as shown: each period's id, label, kind, custom-kind label,
+lunch-window flag and times in order, **and each period's weekday overrides**
+(weekday, label, kind, custom-kind label, times). At completion the function
+rebuilds the same structure from the live rows and compares. Any difference — a
+moved, added or removed period; a period that became or stopped being the lunch
+window; a changed custom-kind label; an added, changed or removed weekday override;
+the schedule deleted or marked as needing configuration — returns
+`conflict: shared-schedule-changed` and writes nothing. A draft that names no
+schedule at all is a different thing: there is nothing to review, so it is refused
+as a validation error. The teacher reviews, the
 draft is updated, and the same operation is submitted again.
 `hasSharedScheduleChanged` makes the same comparison on the client so it can be
 shown on resume. An override's class assignment is not compared: on an
@@ -301,8 +343,31 @@ and leaves the preferences chosen in the ordinary screens alone;
 commit by locking the membership row `FOR UPDATE`: an ordinary save's class or
 schedule insert takes a key-share lock on that row for its foreign key, so one in
 flight is waited for and seen, and a later one waits for the completion
-(concurrency §8). `save_setup_draft` does not re-check on a revision: a draft is
-scratch data and writing it changes nothing operational.
+(concurrency §8).
+
+Existing setup outranks the unfinished draft everywhere, not only at completion.
+`get_setup_state` stops reporting the draft and answers `not-started`, not eligible;
+`save_setup_draft` returns `ineligible` for a revision as well as for a first save;
+`deriveSetupEntry` therefore sends the account to the existing app (§10). The draft
+row is kept, unchanged and unreachable - there is no discard. Only a committed
+completion ranks higher: its result is still returned and its retry still replayed.
+The eligibility check in `save_setup_draft` is not locked: a save that overlaps the
+ordinary insert can still be accepted once. That changes nothing operational, and
+the next save or completion is refused.
+
+**Schedule preferences changed meanwhile.** An *interrupted* account (§10) stays
+eligible, so the ordinary screens can still change its active schedule or lunch
+wave after a draft exists, and completion writes both. `complete_setup` therefore
+compares the stored preferences with the draft's baseline (§3) as its last check,
+before any write. For the active schedule and the lunch wave separately: if the
+value is no longer the baseline **and** is not the value this draft is about to
+write, it returns `conflict: preferences-changed` with the current values and
+writes nothing. A draft saved again does not escape this - saving never moves the
+baseline. A draft that has been brought into line with the newer value completes,
+because it then writes that same value. There is deliberately no way to insist on
+the draft's older choice; in particular, a draft that builds a private schedule
+cannot complete while a different schedule has been made active elsewhere.
+`SetupDraftSession` reports the conflict with the current preferences attached.
 
 ---
 
@@ -429,7 +494,9 @@ and is not implemented.
 ## 10. Entry: new and interrupted accounts only
 
 `get_setup_state` reports one of `completed`, `in-progress`, or `not-started` with
-an eligibility verdict and a **seed**.
+an eligibility verdict and a **seed**. It checks them in that order of authority: a
+committed completion first, then eligibility, and a draft only for a membership
+that is still eligible.
 
 A membership is **established** — ineligible, keeps today's screens — when any of
 these hold:
@@ -438,13 +505,17 @@ these hold:
 - it owns a class section
 - it owns a bell schedule of its own
 
+An established membership is never reported as `in-progress`, whether or not it
+once started a draft.
+
 Otherwise it is eligible. That deliberately includes an **interrupted** new
 account: one that chose its school's schedule on the existing `/setup/schedule`
 screen and went no further. Its only footprint is a preferences row, which — with
 no schedule of its own — can only name an organization schedule. `get_setup_state`
 returns that choice as `seed: { activeBellScheduleId, lunchWave }`, and
 `createSetupDraftFromSeed` starts the draft with that schedule already selected and
-the lunch wave kept. Completion upserts the same preferences row.
+the lunch wave kept. Completion upserts the same preferences row - unless that row
+has been changed again since the draft was created (§8.4).
 
 `deriveSetupEntry(authority, setupState)`:
 
@@ -452,7 +523,8 @@ the lunch wave kept. Completion upserts the same preferences row.
 |---|---|
 | New cloud account, nothing chosen | guided setup, empty draft |
 | New cloud account that only chose a shared schedule | guided setup, seeded with that choice |
-| Draft in progress (whatever else has happened since) | guided setup, resumed |
+| Draft in progress, account still eligible | guided setup, resumed |
+| Draft in progress, then set up through the ordinary screens | existing app - the draft is kept but no longer offered |
 | Setup completed | existing app |
 | Cloud account with classes or its own schedule | existing app |
 | Legacy account, migrated | existing app |
@@ -490,10 +562,20 @@ the lunch wave kept. Completion upserts the same preferences row.
    its own wording for anything it does not recognise.
 7. **One completion per membership, and no discard.** There is no "start over" or
    "run setup again". A draft can be overwritten but not deleted by the client;
-   abandoned drafts do not expire.
+   abandoned drafts do not expire. A draft whose account was then set up through
+   the ordinary screens stays in the table, unreachable.
 8. **`lib/data/supabase.types.ts` is not regenerated.** The new functions are
    called through a narrow local type, as `import_bell_schedule` is.
 9. **Draft size is capped at 256 KB** and drafts carry no uploaded files.
+10. **The preferences protection has limits** - an ordinary save that can be
+    rejected once, an unreproduced deadlock, and the moment the baseline is taken.
+    See §8.3. A `preferences-changed` conflict can only be resolved by changing the
+    draft or the stored preferences; there is no "replace anyway".
+11. **Follow-ups left for a later pass.** `timeZone`, `colorHex`, a course
+    `description` and the elements of the first lesson's arrays are stored without
+    validation beyond the draft size cap. And `complete_setup` answers differently
+    for another membership's operation id (`42501`) than for an unknown one
+    (`draft-missing`), which reveals that such an id exists; ids are random UUIDs.
 
 ---
 
@@ -510,7 +592,12 @@ the lunch wave kept. Completion upserts the same preferences row.
 | Shared schedule preserved; changed base period detected | db §10, §11 |
 | Client and database completion rules agree; first lesson required | db §13 |
 | Weekday override changes detected | db §14; foundation §7 |
+| Lunch-window and custom-kind-label changes detected | db §20; foundation §7 |
+| A shared-schedule draft naming no schedule is a validation error | db §21 |
 | Interrupted accounts resume; established and legacy accounts unchanged | db §2, §15, §16; foundation §8 |
+| Draft started, then ordinary setup: entry bypasses guided setup; saves and completion cannot reopen it; draft retained | db §15c, §17, §18 |
+| Schedule-only and lunch-wave-only preference changes after draft creation; baseline survives saves; committed operations still replay | db §19 |
+| Ordinary preference writes overlapping a completion | concurrency §10 |
 | Genuinely overlapping requests | `verify:onboarding-setup-concurrency` |
 | Stale ordinary tab cannot overwrite or delete what it never loaded; unsaved edits survive a failed save | `verify:stale-tab-save-safety` |
 | Lesson edit for a class deleted elsewhere is held back, reported, and blocks nothing else | stale-tab §10 |
