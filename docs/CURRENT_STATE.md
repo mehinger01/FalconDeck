@@ -21,9 +21,13 @@ most points below.
   `20260928002032` / `20260928002124` but are named `20260927150000` /
   `20260927150100` in `supabase/migrations`. A `supabase db push` would treat those
   two files as unapplied. See "Migration version reconciliation" below.
-- **Not applied anywhere:** `20261010210000_onboarding_setup_stage_a_schema.sql` and
-  `20261010210100_onboarding_setup_stage_b_rpcs.sql` (streamlined onboarding — see
-  `docs/ONBOARDING_SETUP_ARCHITECTURE.md`).
+- **Not applied anywhere:** `20261010210000_onboarding_setup_stage_a_schema.sql`,
+  `20261010210100_onboarding_setup_stage_b_rpcs.sql` and
+  `20261010210200_teacher_schedule_preferences_write_rpc.sql` (streamlined
+  onboarding — see `docs/ONBOARDING_SETUP_ARCHITECTURE.md`). **Deploy order:** the
+  ordinary save now writes schedule preferences through
+  `save_teacher_schedule_preferences`, so the third migration must be applied before
+  or with any deploy of this code.
 - Tables: the 19-table V2 foundation plus `transition_overrides`. RLS is enabled on
   every table; every policy is scoped `to authenticated`; `anon` has no table
   privileges.
@@ -132,8 +136,8 @@ try to re-run both files (the first would fail on `column "warmup" already exist
    - `npm run verify:onboarding-setup-db` — applies all migrations from scratch.
    - `npm run verify:transition-content-stage-b`.
    - `supabase migration list --linked` — every row should show the same version
-     locally and remotely, except the two unapplied onboarding migrations.
-   - `supabase db push --dry-run` — should list only those two.
+     locally and remotely, except the three unapplied onboarding migrations.
+   - `supabase db push --dry-run` — should list only those three.
 4. Only after step 3 is clean is a real `db push` safe to consider, as its own
    decision.
 

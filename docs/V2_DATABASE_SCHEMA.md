@@ -12,7 +12,8 @@ PostgreSQL target, not just type-compatibility.
 foreign key and an RLS ownership check); `lessons.warmup`; the
 `transition_overrides` table; the `join_existing_school` and `import_bell_schedule`
 functions. Proposed and not yet applied: `setup_drafts` (including its preferences
-baseline columns), `setup_completions` and their three functions (`docs/ONBOARDING_SETUP_ARCHITECTURE.md`). The migration
+baseline columns), `setup_completions` and their three functions, and
+`save_teacher_schedule_preferences` / `lock_own_membership` (`docs/ONBOARDING_SETUP_ARCHITECTURE.md`). The migration
 files are the authority for all of these. §2.20's claim that
 `bootstrap_organization` is the only privileged write function is no longer true.
 

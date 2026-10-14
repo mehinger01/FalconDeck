@@ -78,7 +78,9 @@ Consequences:
   and lunch wave as they stood when the draft was created (`baseline_active_bell_schedule_id`,
   `baseline_lunch_wave`; no row means no schedule and `none`). `save_setup_draft`
   reads it from the database when it inserts the draft. The caller cannot supply it,
-  and a later save never changes it. §8.4 describes what it is for.
+  and a later save never changes it. The save that creates the draft must also name
+  the seed the draft was built from, and is refused if that is no longer what is
+  stored (§8.4). §8.4 describes what the baseline is for.
 
 **Access.** Both new tables have RLS enabled, **no policies, and no table
 privileges** for `anon` or `authenticated`. They are reachable only through three
@@ -217,8 +219,9 @@ should be to try again — which asks about the same operation.
 | Operation replay | A completion whose operation id is already recorded returns that record. |
 | `setup_drafts` primary key | One draft per membership. |
 | `setup_completions` primary key and `UNIQUE (owner_membership_id)` | One record per operation; one completed setup per membership. |
-| Membership row lock (`FOR UPDATE`), taken by `complete_setup` | Makes the eligibility re-check hold until commit against the ordinary save path, which never takes the advisory lock: every insert of a class, schedule or preferences row for the membership needs a key-share lock on that row. |
-| Preferences row lock (`FOR UPDATE`), taken by `complete_setup` just before it writes | Makes the preferences-baseline check hold until commit against an ordinary `UPDATE` of that row. |
+| Membership row lock (`FOR UPDATE`), taken by `complete_setup` | Makes the eligibility re-check hold until commit against the ordinary save path, which never takes the advisory lock: every insert of a class or schedule for the membership needs a key-share lock on that row. |
+| Membership row lock (`FOR NO KEY UPDATE`), taken by `save_teacher_schedule_preferences` before it touches the preferences row | The ordinary save's only way of writing `teacher_schedule_preferences`. Ordinary preference writes and completion therefore take the same lock first and the preferences row second, and whichever goes second works from a fresh snapshot. It does not block class or schedule inserts. |
+| Preferences row lock (`FOR UPDATE`), taken by `complete_setup` just before it writes | Additionally covers a writer outside that protocol that is updating the row (§8.3). |
 
 The constraints are the backstop for anything the lock does not cover. The one
 known case: a caller whose transaction is REPEATABLE READ and took its snapshot
@@ -244,9 +247,15 @@ releases it.
 | 10 × 16 unsynchronized completions; 10 × 16 unsynchronized saves | Same outcomes every round |
 | Constraints with the lock out of the picture; REPEATABLE READ caller | Duplicate impossible; caller errors, one committed setup |
 | An ordinary class insert in flight when completion runs | Completion waits for it, then returns `no-longer-eligible`; nothing written |
-| An ordinary preference `UPDATE` in flight when completion runs | Completion waits for it, then returns `preferences-changed`; nothing written |
-| An ordinary preference `INSERT` (no row yet) in flight when completion runs | Completion waits for it, then returns `preferences-changed`; nothing written |
-| 12 unsynchronized rounds of completion against an ordinary lunch-wave `UPDATE` | Every round: the newer lunch wave is what is stored. Either completion is refused, or it commits first and the `UPDATE` is rejected by the database and succeeds when retried (see §8.3) |
+| Ordinary preference write first (row exists), completion second | Completion waits, without having touched `teacher_schedule_preferences`; then `preferences-changed`; nothing written; the newer value stands |
+| Completion first, ordinary save second (row exists; completion activated a schedule it created) | The real repository save waits, without having touched the table; then succeeds; the newer lunch wave lands on top; the operation still replays |
+| Ordinary first-row creation first, completion second | As the first row: completion waits untouched, then `preferences-changed` |
+| Completion first (creating the row), ordinary first-row save second | The save waits untouched - the same lock order on both sides; then succeeds; one row, newer lunch wave on top |
+| Control: completion first, a direct table `UPDATE` second | The direct `UPDATE` waits already holding the table, then is rejected by RLS (`42501`) - the behaviour the protocol removes |
+| 8 unsynchronized rounds of completion and an ordinary write (supplementary) | Every round: completion refused or the write landed on top; no write rejected |
+
+Each ordering case is made deterministic, not raced: one side runs in a transaction
+the test holds open, and while the other waits the test reads `pg_locks` for it.
 
 With the advisory lock removed, 18 of those checks fail — the suite detects its
 absence.
@@ -265,31 +274,37 @@ Not exercised, because no Supabase environment other than production exists:
 Run `verify:onboarding-setup-concurrency`'s scenarios against a disposable Supabase
 project before these migrations are applied to production.
 
-**Known limits of the preferences protection.** These are stated rather than
-covered:
+**One protocol for preference writes.** The ordinary save used to write
+`teacher_schedule_preferences` directly. Overlapping a completion, that produced a
+rejected save (the `UPDATE` re-checked RLS with a snapshot from before the
+completion's new schedule existed) and an opposite lock order for the first row (the
+`INSERT` wrote the row, then waited for the membership row). It now calls
+`save_teacher_schedule_preferences`
+(`20261010210200_teacher_schedule_preferences_write_rpc.sql`), which takes the
+membership row lock first and then runs the same update-then-create-if-missing
+statements. It is `SECURITY INVOKER`, so those statements run under the table's
+existing RLS unchanged. Only the lock is taken by a small `SECURITY DEFINER` helper,
+because locking a row needs the right to update it and the membership table's update
+policy is admin-only. Both observed problems are gone for writes made this way
+(§8.2), and so is the client-side gap between the update and the create.
 
-- **An ordinary save can be rejected when it overlaps a completion.** Observed in
-  the unsynchronized test, in every round where completion won the race. The
-  ordinary `UPDATE` waits for the completion; the row it then finds names the
-  private schedule the completion has just created; and
-  `teacher_schedule_preferences`' own `WITH CHECK` policy looks that schedule up
-  with the `UPDATE`'s earlier snapshot, which cannot see it. The statement fails
-  with `42501`. Nothing is overwritten in either direction and the same save
-  succeeds when repeated, but the teacher's save does fail once, and outside two
-  settings screens a failed save is not shown (§9.2). It does not happen when the
-  completion's schedule is a shared one that already existed.
-- **A deadlock is possible, and has not been reproduced.** When the membership has
-  no preferences row, the ordinary path inserts one: Postgres writes the row and
-  only then takes the key-share lock on the membership row for its foreign key.
-  `complete_setup` takes its locks in the other order. If it locks the membership
-  row inside that one statement, each waits for the other; Postgres would end one
-  of them with a deadlock error after its timeout (one second by default). Either
-  way nothing is half-written - the completion can be retried and the ordinary save
-  is retried by its caller - but no test produces this interleaving, because it
-  falls inside a single statement.
-- **The baseline is taken when the draft is created, not when the seed was read.**
-  A preference changed between `get_setup_state` returning the seed and the first
-  draft save becomes part of the baseline and is not reported.
+**Known limits.** Stated rather than covered:
+
+- **Writers outside the protocol.** A client bundle from before this change, a
+  direct API call, and the one-time legacy migration
+  (`lib/data/migration/migrateLocalData.ts`, which upserts the row) still write the
+  table directly. RLS still governs them, but they can still be rejected while a
+  completion commits (§8.2 control), and a direct first-row insert can still take
+  its locks in the opposite order. The legacy migration only runs for legacy
+  accounts, which are never eligible for guided setup. Direct writes were not
+  revoked; that would be a wider change.
+- **Deploy order.** The ordinary save now depends on the new function. Applying the
+  migration has to come before, or with, shipping this client code; otherwise every
+  preference save fails.
+- **`save_setup_draft`'s eligibility and seed checks take no lock.** A save that
+  overlaps an ordinary write can still be accepted once. Nothing operational is
+  written, and the completion check catches any change committed after the
+  baseline was read.
 - All of this was run with direct PostgreSQL connections, like the rest of §8.2.
 
 ### 8.4 Two tabs, and a shared schedule that changed
@@ -369,6 +384,17 @@ the draft's older choice; in particular, a draft that builds a private schedule
 cannot complete while a different schedule has been made active elsewhere.
 `SetupDraftSession` reports the conflict with the current preferences attached.
 
+The baseline itself is checked when it is taken. The save that creates a draft names
+the seed the draft was built from (`get_setup_state`'s `seed`). If the stored
+preferences are no longer exactly that, nothing is created and the same
+`preferences-changed` answer returns what they are now. Otherwise the draft would
+start with the older choices while its baseline recorded the newer ones, and
+completion - comparing against that baseline - would replace them without a
+conflict. The named seed is only compared; the baseline is still read from the
+database. `SetupDraftSession.adoptPreferences(rebuilt)` resolves either conflict: the
+reported preferences become the seed and the rebuilt draft is saved. Re-sending the
+old draft with the old seed is simply refused again.
+
 ---
 
 ## 9. The operational app after completion
@@ -418,7 +444,9 @@ diff, the write ordering, the queue and the coalescing are untouched.
    of the comparison entirely and can no longer be mistaken for a deletion.
 2. **The two one-row-per-teacher tables are written column by column.**
    `teacher_schedule_preferences` and `classroom_experience_settings` are now
-   updated with only the columns this tab changed, instead of upserted whole. A
+   updated with only the columns this tab changed, instead of upserted whole.
+   (For `teacher_schedule_preferences` the same statements now run inside
+   `save_teacher_schedule_preferences` - §8.3.) A
    tab that changes the lunch wave sends the lunch wave. If no row exists yet, it
    is created with an insert that does nothing when a row is already there, and
    the changed columns are then applied — so if another tab creates the row in
@@ -567,10 +595,11 @@ has been changed again since the draft was created (§8.4).
 8. **`lib/data/supabase.types.ts` is not regenerated.** The new functions are
    called through a narrow local type, as `import_bell_schedule` is.
 9. **Draft size is capped at 256 KB** and drafts carry no uploaded files.
-10. **The preferences protection has limits** - an ordinary save that can be
-    rejected once, an unreproduced deadlock, and the moment the baseline is taken.
-    See §8.3. A `preferences-changed` conflict can only be resolved by changing the
-    draft or the stored preferences; there is no "replace anyway".
+10. **The preferences protection has limits** - writers outside the
+    `save_teacher_schedule_preferences` protocol, the deploy order it creates, and
+    unlocked checks in `save_setup_draft`. See §8.3. A `preferences-changed` conflict
+    can only be resolved by changing the draft or the stored preferences; there is
+    no "replace anyway".
 11. **Follow-ups left for a later pass.** `timeZone`, `colorHex`, a course
     `description` and the elements of the first lesson's arrays are stored without
     validation beyond the draft size cap. And `complete_setup` answers differently
@@ -597,7 +626,10 @@ has been changed again since the draft was created (§8.4).
 | Interrupted accounts resume; established and legacy accounts unchanged | db §2, §15, §16; foundation §8 |
 | Draft started, then ordinary setup: entry bypasses guided setup; saves and completion cannot reopen it; draft retained | db §15c, §17, §18 |
 | Schedule-only and lunch-wave-only preference changes after draft creation; baseline survives saves; committed operations still replay | db §19 |
-| Ordinary preference writes overlapping a completion | concurrency §10 |
+| Ordinary preference writes and completion, each order, first row and existing row | concurrency §10 |
+| Preferences changed between reading the seed and the first draft save; baseline cannot be chosen by the caller | db §22 |
+| Ordinary preference writes keep their authorization | db §23 |
+| The ordinary save writes preferences only through the RPC | stale-tab §9 |
 | Genuinely overlapping requests | `verify:onboarding-setup-concurrency` |
 | Stale ordinary tab cannot overwrite or delete what it never loaded; unsaved edits survive a failed save | `verify:stale-tab-save-safety` |
 | Lesson edit for a class deleted elsewhere is held back, reported, and blocks nothing else | stale-tab §10 |
