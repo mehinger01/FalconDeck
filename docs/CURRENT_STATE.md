@@ -27,7 +27,8 @@ most points below.
   onboarding — see `docs/ONBOARDING_SETUP_ARCHITECTURE.md`). **Deploy order:** the
   ordinary save now writes schedule preferences through
   `save_teacher_schedule_preferences`, so the third migration must be applied before
-  or with any deploy of this code.
+  or with any deploy of this code. Sequence, verification and rollback:
+  `docs/ONBOARDING_SETUP_RELEASE.md`.
 - Tables: the 19-table V2 foundation plus `transition_overrides`. RLS is enabled on
   every table; every policy is scoped `to authenticated`; `anon` has no table
   privileges.

@@ -260,19 +260,27 @@ the test holds open, and while the other waits the test reads `pg_locks` for it.
 With the advisory lock removed, 18 of those checks fail — the suite detects its
 absence.
 
-### 8.3 Concurrency verification still pending
+### 8.3 Concurrency through PostgREST, and what is still pending
 
-Not exercised, because no Supabase environment other than production exists:
+**Through PostgREST.** These were run on a local integration stack:
+PostgreSQL 17.10, Supabase Auth v2.197.0, PostgREST v14.5, Supabase's role layout
+and default privileges, and a gateway standing in for Kong.
+`docs/ONBOARDING_SETUP_RELEASE.md` §5 describes the stack.
 
-- The same scenarios through **PostgREST and Supabase's connection pooler**. The
-  design relies on each RPC being one transaction at READ COMMITTED on a session
-  that honours transaction-level advisory locks. That is PostgREST's documented
-  behaviour, and transaction-level locks are safe under transaction pooling, but it
-  has not been observed on a Supabase project.
+- **Lock order over HTTP.** One side was held open on a direct connection and the
+  other was a live PostgREST request (`complete_setup` or the ordinary save), in both
+  directions and for the first row. Each time the request waited without having
+  touched `teacher_schedule_preferences`, then gave the same outcome as §8.2.
+- **The existing suite on the same database.** `verify:onboarding-setup-concurrency`
+  passed against the stack's database (71 checks), over direct connections.
+
+Still not exercised:
+
+- **Supabase's pooler (Supavisor) and Kong.** The design relies on each RPC being
+  one transaction at READ COMMITTED. Transaction-level advisory and row locks are
+  safe under transaction pooling, but this has not been observed on a Supabase
+  project.
 - Real network latency and client retry timing.
-
-Run `verify:onboarding-setup-concurrency`'s scenarios against a disposable Supabase
-project before these migrations are applied to production.
 
 **One protocol for preference writes.** The ordinary save used to write
 `teacher_schedule_preferences` directly. Overlapping a completion, that produced a
@@ -509,8 +517,8 @@ any other failed save. That is existing behavior and needs UI work to change.
 - **A field or row the stale tab's user explicitly edits is still last-write-wins.**
   If they change the lunch wave, their lunch wave replaces the newer one. That is
   their edit, not a side effect, but it is not conflict detection.
-- **It is not verified through PostgREST**, only against the same SQL the engine's
-  calls produce (§8.3 applies here too).
+- **Verified through PostgREST only on the local integration stack** (§8.3), not on
+  a Supabase project.
 
 **If a server-side guarantee is wanted later:** a *completion fence* — a trigger
 on the teacher-owned tables that refuses a direct write from any client not
@@ -571,8 +579,10 @@ has been changed again since the draft was created (§8.4).
    and an explicitly edited field is last-write-wins. Edits to a class deleted
    elsewhere are handled for lessons only, and no screen but two shows a failed
    save (§9.2).
-2. **Concurrency through PostgREST and the Supabase pooler is unverified** — §8.3.
-3. **No disposable Supabase project exists.** The repo links only production.
+2. **Concurrency through the Supabase pooler is unverified.** Through PostgREST it
+   was verified on a local integration stack (§8.3).
+3. **No disposable Supabase project exists.** The repo links only production, and
+   the integration stack is not the `supabase/postgres` image.
    A Supabase preview branch would not work as-is:
    `20260922000000_organization_memberships_account_origin.sql` refuses to apply
    unless two specific production rows exist. The test harness seeds those rows.
