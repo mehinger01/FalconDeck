@@ -21,6 +21,11 @@
  * version as production, but no PostgREST, GoTrue, pooler, or Supabase
  * default privileges. `rpc()` reproduces only PostgREST's role/claims
  * handling and its `{ data, error }` result shape.
+ *
+ * Opt-in alternative: with FALCON_TEST_DATABASE_URL set to a database on this
+ * machine (e.g. the local integration stack in
+ * docs/ONBOARDING_SETUP_INTEGRATION.md), the same suites run against that
+ * already-migrated database instead. Unset - the default - nothing changes.
  */
 
 import EmbeddedPostgres from "embedded-postgres";
@@ -31,6 +36,8 @@ import { join } from "node:path";
 import { Pool, types, type PoolClient } from "pg";
 
 const MIGRATIONS_DIR = join(process.cwd(), "supabase/migrations");
+/** Opt-in: run against an existing, already-migrated database on this machine instead (see attachExternal). */
+const EXTERNAL_DATABASE_VARIABLE = "FALCON_TEST_DATABASE_URL";
 const IDENTIFIER = /^[a-z_][a-z0-9_]*$/;
 
 // Match what PostgREST puts on the wire: `date` as "YYYY-MM-DD" text,
@@ -212,6 +219,8 @@ function isTempDirCleanupError(error: unknown): boolean {
 }
 
 export async function createTestDatabase(): Promise<TestDatabase> {
+  const external = process.env[EXTERNAL_DATABASE_VARIABLE];
+  if (external) return attachExternal(external);
   const port = await freePort();
   const server = new EmbeddedPostgres({
     databaseDir: mkdtempSync(join(tmpdir(), "falcon-deck-pg-")),
@@ -274,6 +283,33 @@ export async function createTestDatabase(): Promise<TestDatabase> {
     throw error;
   }
 
+  return attach(pool, shutDown, false);
+}
+
+/**
+ * Opt-in only: an already-migrated database on this machine instead of a new
+ * embedded server - used to run the database suites against the local
+ * integration stack (docs/ONBOARDING_SETUP_INTEGRATION.md). Nothing is
+ * created, migrated or dropped; close() only ends the pool. Refuses any host
+ * other than this machine, so it cannot be pointed at a hosted project.
+ */
+function attachExternal(connectionString: string): TestDatabase {
+  let host: string;
+  try {
+    host = new URL(connectionString).hostname;
+  } catch {
+    throw new Error(`${EXTERNAL_DATABASE_VARIABLE} is not a connection URL.`);
+  }
+  if (!["127.0.0.1", "localhost", "[::1]", "::1"].includes(host)) {
+    throw new Error(`${EXTERNAL_DATABASE_VARIABLE} must point at this machine; got host "${host}".`);
+  }
+  console.log(`(using the existing database at ${host} from ${EXTERNAL_DATABASE_VARIABLE}; migrations are not applied)`);
+  const pool = new Pool({ connectionString, max: 32 });
+  pool.on("error", () => {});
+  return attach(pool, () => pool.end(), true);
+}
+
+function attach(pool: Pool, shutDown: () => Promise<void>, external: boolean): TestDatabase {
   const primaryKeys = new Map<string, string[]>();
   async function primaryKeyColumns(table: string): Promise<string[]> {
     const cached = primaryKeys.get(table);
@@ -424,7 +460,13 @@ export async function createTestDatabase(): Promise<TestDatabase> {
       };
     },
     async createUser(email) {
-      const result = await pool.query("insert into auth.users (email) values ($1) returning id", [email]);
+      // An external database has Supabase Auth's real auth.users: no id
+      // default, and emails must be unique across runs.
+      const result = external
+        ? await pool.query("insert into auth.users (id, email) values (gen_random_uuid(), $1) returning id", [
+            email.replace("@", `+${crypto.randomUUID().slice(0, 8)}@`),
+          ])
+        : await pool.query("insert into auth.users (email) values ($1) returning id", [email]);
       return result.rows[0].id as string;
     },
     close: shutDown,

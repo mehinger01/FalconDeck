@@ -141,7 +141,7 @@ migration was applied in order; Auth applied its own migrations.
     PostgREST request, in both directions and for the first row.
 - **Direct database connection to the same stack:** the existing
   `verify:onboarding-setup-concurrency` (71) and `verify:onboarding-setup-db` (225),
-  pointed at it through a temporary, uncommitted harness override.
+  pointed at it with the opt-in `FALCON_TEST_DATABASE_URL`.
 - **Browser** (`next dev` against the stack): chose a school schedule on
   `/setup/schedule`, then changed the lunch wave and active schedule on
   `/schedule`. Each change reached the database through the RPC and survived a
@@ -156,3 +156,7 @@ migration was applied in order; Auth applied its own migrations.
 
 The browser run used a minimized window: clicks were dispatched through the DOM,
 not real pointer input.
+
+To rerun all of this: `docs/ONBOARDING_SETUP_INTEGRATION.md`. The checks are
+`scripts/integration/onboarding-setup-http.ts` and
+`scripts/integration/deployed-client-compat.ts`.
