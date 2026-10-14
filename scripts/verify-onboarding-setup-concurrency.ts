@@ -18,13 +18,19 @@
  *   npm run verify:onboarding-setup-concurrency
  */
 
+import { SupabaseDataRepository } from "@/lib/data/supabaseDataRepository";
 import { deepEqual } from "@/lib/data/supabaseMapping";
 import { SupabaseSetupRepository } from "@/lib/data/supabaseSetupRepository";
+import type { AppData } from "@/lib/data/types";
 import { createEmptySetupDraft } from "@/lib/onboarding/setupDraft";
 import type { CompleteSetupResult, SaveSetupDraftResult, SetupCallResult } from "@/lib/onboarding/setupRepository";
 import { generateId } from "@/lib/store/id";
-import type { SetupDraft } from "@/types/setupDraft";
-import { createTestDatabase, type TestDatabase } from "./support/testDatabase";
+import type { SetupDraft, SetupSeed } from "@/types/setupDraft";
+import type { PoolClient } from "pg";
+import { createTestDatabase, type RpcClient, type TestDatabase } from "./support/testDatabase";
+
+/** The seed of an account that has chosen nothing yet: no preferences row. */
+const EMPTY_SEED: SetupSeed = { activeBellScheduleId: null, lunchWave: "none" };
 
 let failures = 0;
 function check(label: string, condition: boolean) {
@@ -43,6 +49,7 @@ interface Teacher {
   userId: string;
   organizationId: string;
   membershipId: string;
+  client: RpcClient;
   repository: SupabaseSetupRepository;
 }
 
@@ -55,7 +62,64 @@ async function newFounder(label: string): Promise<Teacher> {
     "select id, organization_id from public.organization_memberships where user_id = $1",
     [userId],
   );
-  return { userId, organizationId: row.organization_id, membershipId: row.id, repository: new SupabaseSetupRepository(client, row.organization_id) };
+  return { userId, organizationId: row.organization_id, membershipId: row.id, client, repository: new SupabaseSetupRepository(client, row.organization_id) };
+}
+
+/**
+ * A transaction opened as `userId` - the authenticated role, the user's JWT
+ * claim, READ COMMITTED - exactly as the test client runs each request, but
+ * left open so the test decides when it commits. Statements run in it are
+ * the production functions themselves.
+ */
+async function openUserTransaction(userId: string): Promise<{ connection: PoolClient; pid: number; commit: () => Promise<void> }> {
+  const connection = await db.connect();
+  await connection.query("begin isolation level read committed");
+  await connection.query("set local role authenticated");
+  await connection.query("select set_config('request.jwt.claims', $1, true)", [JSON.stringify({ sub: userId, role: "authenticated" })]);
+  const pid = (await connection.query<{ pid: number }>("select pg_backend_pid() as pid")).rows[0].pid;
+  return {
+    connection,
+    pid,
+    commit: async () => {
+      await connection.query("commit");
+      connection.release();
+    },
+  };
+}
+
+/** The backend running a statement that matches `pattern`, once it is waiting on a lock held by `holderPid`. */
+async function waitingBehind(holderPid: number, pattern: string): Promise<number | null> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const [row] = await db.admin<{ pid: number }>(
+      `select pid from pg_stat_activity
+       where wait_event_type = 'Lock' and query ~ $1 and $2 = any (pg_blocking_pids(pid))`,
+      [pattern, holderPid],
+    );
+    if (row) return row.pid;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return null;
+}
+
+/** Relations a backend holds or awaits any lock on. */
+async function relationsLockedBy(pid: number): Promise<string[]> {
+  const rows = await db.admin<{ relation: string }>(
+    "select distinct relation::regclass::text as relation from pg_locks where pid = $1 and relation is not null",
+    [pid],
+  );
+  return rows.map((row) => row.relation);
+}
+
+/** The ordinary app's repository for this teacher - the real save path, over the test client. */
+function ordinaryTab(teacher: Teacher): SupabaseDataRepository {
+  return new SupabaseDataRepository(teacher.client as unknown as ConstructorParameters<typeof SupabaseDataRepository>[0], {
+    organizationId: teacher.organizationId,
+    membershipId: teacher.membershipId,
+  });
+}
+
+function withLunchWave(data: AppData, lunchWave: AppData["teacherSchedulePreferences"]["lunchWave"]): AppData {
+  return { ...data, teacherSchedulePreferences: { ...data.teacherSchedulePreferences, lunchWave } };
 }
 
 function completeDraft(lunchWave: SetupDraft["lunchWave"] = "none"): SetupDraft {
@@ -79,7 +143,7 @@ function completeDraft(lunchWave: SetupDraft["lunchWave"] = "none"): SetupDraft 
 
 /** Saves `draft` as a new draft and returns its operation id and revision. */
 async function seedDraft(teacher: Teacher, draft: SetupDraft): Promise<{ operationId: string; revision: number }> {
-  const result = await teacher.repository.saveDraft(null, draft);
+  const result = await teacher.repository.saveDraft(null, draft, EMPTY_SEED);
   if (!result.ok || result.value.status !== "saved") throw new Error("could not seed a draft");
   return { operationId: result.value.operationId, revision: result.value.revision };
 }
@@ -215,7 +279,7 @@ async function main() {
     const waves: Array<SetupDraft["lunchWave"]> = ["A", "B", "C"];
     const payloads = Array.from({ length: OVERLAP }, (_, index) => ({ ...createEmptySetupDraft(), lunchWave: waves[index % 3], courses: [{ id: `course-${index}`, name: `Writer ${index}` }] }));
     const release = await holdSetupLock(teacher.membershipId);
-    const requests = payloads.map((payload) => teacher.repository.saveDraft(revision, payload));
+    const requests = payloads.map((payload) => teacher.repository.saveDraft(revision, payload, null));
     check(`all ${OVERLAP} are open at once, blocked on the membership's lock`, await waitForBlocked(OVERLAP));
     await release();
     const outcomes = await Promise.all(requests);
@@ -236,7 +300,7 @@ async function main() {
   {
     const teacher = await newFounder("create-race");
     const release = await holdSetupLock(teacher.membershipId);
-    const requests = Array.from({ length: OVERLAP }, () => teacher.repository.saveDraft(null, createEmptySetupDraft()));
+    const requests = Array.from({ length: OVERLAP }, () => teacher.repository.saveDraft(null, createEmptySetupDraft(), EMPTY_SEED));
     check(`all ${OVERLAP} are open at once, blocked on the membership's lock`, await waitForBlocked(OVERLAP));
     await release();
     const outcomes = await Promise.all(requests);
@@ -254,7 +318,7 @@ async function main() {
     const saveFirst = await newFounder("save-then-complete");
     const first = await seedDraft(saveFirst, completeDraft());
     let release = await holdSetupLock(saveFirst.membershipId);
-    const save = saveFirst.repository.saveDraft(first.revision, completeDraft("B"));
+    const save = saveFirst.repository.saveDraft(first.revision, completeDraft("B"), null);
     await waitForBlocked(1);
     const complete = saveFirst.repository.completeSetup(first.operationId, first.revision);
     check("both are open at once", await waitForBlocked(2));
@@ -270,7 +334,7 @@ async function main() {
     release = await holdSetupLock(completeFirst.membershipId);
     const completeEarly = completeFirst.repository.completeSetup(second.operationId, second.revision);
     await waitForBlocked(1);
-    const saveLate = completeFirst.repository.saveDraft(second.revision, completeDraft("C"));
+    const saveLate = completeFirst.repository.saveDraft(second.revision, completeDraft("C"), null);
     check("both are open at once", await waitForBlocked(2));
     await release();
     const [completeEarlyOutcome, saveLateOutcome] = await Promise.all([completeEarly, saveLate]);
@@ -285,9 +349,9 @@ async function main() {
     const free = await newFounder("free");
     const held = await seedDraft(blocked, createEmptySetupDraft());
     const release = await holdSetupLock(blocked.membershipId);
-    const waiting = blocked.repository.saveDraft(held.revision, createEmptySetupDraft());
+    const waiting = blocked.repository.saveDraft(held.revision, createEmptySetupDraft(), null);
     await waitForBlocked(1);
-    const unaffected = await free.repository.saveDraft(null, createEmptySetupDraft());
+    const unaffected = await free.repository.saveDraft(null, createEmptySetupDraft(), EMPTY_SEED);
     check("another membership saves immediately while the first is still waiting", saved(unaffected) && (await blockedSetupRequests()) === 1);
     await release();
     check("the first then proceeds", saved(await waiting));
@@ -313,7 +377,7 @@ async function main() {
     for (let round = 0; round < rounds; round += 1) {
       const teacher = await newFounder(`free-save-${round}`);
       const { revision } = await seedDraft(teacher, createEmptySetupDraft());
-      const outcomes = await Promise.all(Array.from({ length: burst }, (_, index) => teacher.repository.saveDraft(revision, { ...createEmptySetupDraft(), courses: [{ id: `c-${index}`, name: `W${index}` }] })));
+      const outcomes = await Promise.all(Array.from({ length: burst }, (_, index) => teacher.repository.saveDraft(revision, { ...createEmptySetupDraft(), courses: [{ id: `c-${index}`, name: `W${index}` }] }, null)));
       const [stored] = await db.admin<{ revision: number }>("select revision from public.setup_drafts where owner_membership_id = $1", [teacher.membershipId]);
       if (outcomes.filter(saved).length === 1 && outcomes.filter((outcome) => saveConflict(outcome, "stale-revision")).length === burst - 1 && stored.revision === revision + 1) oneWinner += 1;
     }
@@ -443,13 +507,18 @@ async function main() {
     check("...and the result is exactly 'completed, then edited': the assignment follows the re-timed period", assigned?.start_time === "08:05:00");
   }
 
-  console.log("\n10. An ordinary preference write while setup completes");
+  console.log("\n10. Ordinary preference writes and completion, each order, deterministically");
   {
-    // The ordinary save writes teacher_schedule_preferences directly and
-    // takes no setup lock: an UPDATE of the changed columns when the row
-    // exists, an INSERT when it does not (patchOrCreateRow in
-    // lib/data/supabaseDataRepository.ts). Both statements are reproduced
-    // here. Completion must never replace what they wrote.
+    // The ordinary save writes teacher_schedule_preferences only through
+    // save_teacher_schedule_preferences(), which takes the membership row
+    // lock complete_setup() takes, before it touches the preferences row.
+    // Each case below runs one side in a transaction the test holds open,
+    // starts the other, and inspects pg_locks while it waits: the waiting
+    // side must not have touched teacher_schedule_preferences at all - so
+    // neither side can hold that row while waiting for the membership row.
+    // Ordinary-side calls are the production function, or (when it goes
+    // second) the real SupabaseDataRepository save.
+    const PREFERENCES = "teacher_schedule_preferences";
     const preferences = async (membershipId: string) =>
       (await db.admin<{ lunch_wave: string; active_bell_schedule_id: string | null }>("select lunch_wave, active_bell_schedule_id from public.teacher_schedule_preferences where owner_membership_id = $1", [membershipId]))[0] ?? null;
     const nothingCommitted = async (membershipId: string) =>
@@ -458,82 +527,131 @@ async function main() {
       (await countRows("lessons", membershipId)) === 0 &&
       (await countRows("setup_completions", membershipId)) === 0 &&
       (await countRows("setup_drafts", membershipId)) === 1;
-    const preferencesChanged = (outcome: CompleteOutcome, lunchWave: string) =>
-      outcome.ok && outcome.value.status === "conflict" && outcome.value.reason === "preferences-changed" && outcome.value.preferences.lunchWave === lunchWave;
-    /** A teacher whose preferences row exists (no schedule, no lunch wave) before the draft is created. */
-    const withPreferencesRow = async (label: string) => {
+    const preferencesChanged = (outcome: CompleteOutcome, expected: SetupSeed) =>
+      outcome.ok && outcome.value.status === "conflict" && outcome.value.reason === "preferences-changed" && deepEqual(outcome.value.preferences, expected);
+    const ownScheduleId = (draft: SetupDraft) => (draft.schedule?.mode === "own" ? draft.schedule.id : null);
+    /** A teacher with a saved own-schedule draft; `withRow` gives them a preferences row (no schedule, no lunch wave) first. */
+    const teacherWithDraft = async (label: string, withRow: boolean) => {
       const teacher = await newFounder(label);
-      await db.admin("insert into public.teacher_schedule_preferences (owner_membership_id, organization_id) values ($1, $2)", [teacher.membershipId, teacher.organizationId]);
-      return { teacher, draft: await seedDraft(teacher, completeDraft()) };
+      if (withRow) {
+        await db.admin("insert into public.teacher_schedule_preferences (owner_membership_id, organization_id) values ($1, $2)", [teacher.membershipId, teacher.organizationId]);
+      }
+      const draft = completeDraft();
+      return { teacher, draft, seeded: await seedDraft(teacher, draft) };
     };
+    const ordinaryWrite = (connection: PoolClient, teacher: Teacher, lunchWave: string) =>
+      connection.query("select public.save_teacher_schedule_preferences($1, $2, null, array['lunch_wave'])", [teacher.organizationId, lunchWave]);
 
-    // (a) An UPDATE of the lunch wave is in flight, uncommitted, when completion runs.
-    const updating = await withPreferencesRow("racing-preference-update");
-    const editor = await db.connect();
-    await editor.query("begin");
-    await editor.query("update public.teacher_schedule_preferences set lunch_wave = 'B' where owner_membership_id = $1", [updating.teacher.membershipId]);
-    const duringUpdate = updating.teacher.repository.completeSetup(updating.draft.operationId, updating.draft.revision);
-    check("the completion waits for the in-flight preference UPDATE instead of deciding without it", await waitForRowLockWait(1));
-    await editor.query("commit");
-    editor.release();
-    check("...and then returns preferences-changed, reporting the new lunch wave", preferencesChanged(await duringUpdate, "B"));
-    check("nothing from the draft was written, and the new lunch wave stands", (await nothingCommitted(updating.teacher.membershipId)) && (await preferences(updating.teacher.membershipId))?.lunch_wave === "B");
+    // (a) Ordinary UPDATE first, completion second.
+    {
+      const { teacher, seeded } = await teacherWithDraft("order-update-then-complete", true);
+      const ordinary = await openUserTransaction(teacher.userId);
+      await ordinaryWrite(ordinary.connection, teacher, "B");
+      const completing = teacher.repository.completeSetup(seeded.operationId, seeded.revision);
+      const waiter = await waitingBehind(ordinary.pid, "complete_setup");
+      check("(a) UPDATE first: completion waits behind the ordinary write", waiter !== null);
+      check("(a) ...before it has touched teacher_schedule_preferences", waiter !== null && !(await relationsLockedBy(waiter)).includes(PREFERENCES));
+      await ordinary.commit();
+      const outcome = await completing;
+      check("(a) ...then returns preferences-changed with the newer lunch wave", preferencesChanged(outcome, { activeBellScheduleId: null, lunchWave: "B" }));
+      check("(a) nothing from the draft was written; the newer lunch wave stands", (await nothingCommitted(teacher.membershipId)) && (await preferences(teacher.membershipId))?.lunch_wave === "B");
+    }
 
-    // (b) The membership has no preferences row; the INSERT creating one is in flight when completion runs.
-    const inserting = await newFounder("racing-preference-insert");
-    const insertingDraft = await seedDraft(inserting, completeDraft());
-    const creator = await db.connect();
-    await creator.query("begin");
-    await creator.query("insert into public.teacher_schedule_preferences (owner_membership_id, organization_id, lunch_wave) values ($1, $2, 'A') on conflict (owner_membership_id) do nothing", [inserting.membershipId, inserting.organizationId]);
-    const duringInsert = inserting.repository.completeSetup(insertingDraft.operationId, insertingDraft.revision);
-    check("the completion waits for the in-flight preference INSERT (there is no row yet to lock)", await waitForRowLockWait(1));
-    await creator.query("commit");
-    creator.release();
-    check("...and then returns preferences-changed, reporting the new lunch wave", preferencesChanged(await duringInsert, "A"));
-    check("nothing from the draft was written, and the new row stands", (await nothingCommitted(inserting.membershipId)) && (await preferences(inserting.membershipId))?.lunch_wave === "A");
+    // (b) Completion first, ordinary UPDATE second - the case that used to be rejected by RLS, because the
+    // completion makes a schedule it has just created active.
+    {
+      const { teacher, draft, seeded } = await teacherWithDraft("order-complete-then-update", true);
+      const tab = ordinaryTab(teacher);
+      const loaded = await tab.load();
+      const completion = await openUserTransaction(teacher.userId);
+      const committed = await completion.connection.query<{ result: { status: string } }>("select public.complete_setup($1, $2, $3) as result", [teacher.organizationId, seeded.operationId, seeded.revision]);
+      check("(b) completion first: it has completed, not yet committed", committed.rows[0].result.status === "completed");
+      const saving = tab.save(withLunchWave(loaded, "C"));
+      const waiter = await waitingBehind(completion.pid, "save_teacher_schedule_preferences");
+      check("(b) the ordinary save waits behind the completion", waiter !== null);
+      check("(b) ...before it has touched teacher_schedule_preferences", waiter !== null && !(await relationsLockedBy(waiter)).includes(PREFERENCES));
+      await completion.commit();
+      const saved = await saving;
+      check("(b) ...then succeeds - no RLS rejection", saved.ok);
+      check("(b) the newer lunch wave is stored, on top of the schedule the completion made active", deepEqual(await preferences(teacher.membershipId), { lunch_wave: "C", active_bell_schedule_id: ownScheduleId(draft) }));
+      const replay = await teacher.repository.completeSetup(seeded.operationId, seeded.revision);
+      check("(b) a retry of the completed operation is still replayed", completedReplay(replay));
+      check("(b) ...and does not put the older lunch wave back", (await preferences(teacher.membershipId))?.lunch_wave === "C");
+    }
 
-    // (c) Nothing held: the ordinary UPDATE (as the teacher, through RLS) and the completion are simply fired
-    // together, several times. Three endings are correct, and in none of them is the teacher's newer lunch
-    // wave silently dropped:
-    //   - the UPDATE ran first: completion is refused as preferences-changed;
-    //   - completion ran first and the UPDATE landed on top of it;
-    //   - completion ran first and the UPDATE, having waited for it, was REJECTED by the database: the row it
-    //     waited for now names the schedule completion just created, and teacher_schedule_preferences' own
-    //     WITH CHECK policy looks that schedule up with the UPDATE's earlier snapshot, which cannot see it.
-    //     That is an error the ordinary save reports and retries - not a lost write. The retry is made here.
-    const ROUNDS = 12;
-    const updateLunchWave = (teacher: Teacher) =>
-      db.asUser(teacher.userId, "update public.teacher_schedule_preferences set lunch_wave = 'C' where owner_membership_id = $1 returning owner_membership_id", [teacher.membershipId]);
+    // (b, control) The same ordering with the old direct table UPDATE, which takes no membership lock.
+    // It shows the two checks above can fail: this writer is already holding teacher_schedule_preferences
+    // while it waits, and is then rejected by the table's WITH CHECK policy. It is also what any writer
+    // outside the protocol (an older client bundle, a direct API call) still gets.
+    {
+      const { teacher, seeded } = await teacherWithDraft("order-complete-then-direct-update", true);
+      const completion = await openUserTransaction(teacher.userId);
+      await completion.connection.query("select public.complete_setup($1, $2, $3)", [teacher.organizationId, seeded.operationId, seeded.revision]);
+      const direct = db
+        .asUser(teacher.userId, "update public.teacher_schedule_preferences set lunch_wave = 'C' where owner_membership_id = $1", [teacher.membershipId])
+        .then(() => null, (error: { code?: string }) => error.code ?? "error");
+      const waiter = await waitingBehind(completion.pid, "update public.teacher_schedule_preferences");
+      check("(control) a direct UPDATE waits holding teacher_schedule_preferences - the check above can tell", waiter !== null && (await relationsLockedBy(waiter)).includes(PREFERENCES));
+      await completion.commit();
+      check("(control) ...and is then rejected by RLS (42501), as before this protocol", (await direct) === "42501");
+    }
+
+    // (c) Ordinary first-row INSERT first, completion second.
+    {
+      const { teacher, seeded } = await teacherWithDraft("order-insert-then-complete", false);
+      const ordinary = await openUserTransaction(teacher.userId);
+      await ordinaryWrite(ordinary.connection, teacher, "A");
+      check("(c) INSERT first: the ordinary write created the row (uncommitted)", (await ordinary.connection.query("select 1 from public.teacher_schedule_preferences where owner_membership_id = $1", [teacher.membershipId])).rowCount === 1);
+      const completing = teacher.repository.completeSetup(seeded.operationId, seeded.revision);
+      const waiter = await waitingBehind(ordinary.pid, "complete_setup");
+      check("(c) completion waits behind the ordinary write", waiter !== null);
+      check("(c) ...before it has touched teacher_schedule_preferences", waiter !== null && !(await relationsLockedBy(waiter)).includes(PREFERENCES));
+      await ordinary.commit();
+      const outcome = await completing;
+      check("(c) ...then returns preferences-changed with the newer lunch wave", preferencesChanged(outcome, { activeBellScheduleId: null, lunchWave: "A" }));
+      check("(c) nothing from the draft was written; the new row stands", (await nothingCommitted(teacher.membershipId)) && (await preferences(teacher.membershipId))?.lunch_wave === "A");
+    }
+
+    // (d) Completion first (it creates the row), ordinary first-row write second. With direct table
+    // writes the ordinary INSERT took its row first and the membership lock last - the opposite order.
+    {
+      const { teacher, draft, seeded } = await teacherWithDraft("order-complete-then-insert", false);
+      const tab = ordinaryTab(teacher);
+      const loaded = await tab.load();
+      const completion = await openUserTransaction(teacher.userId);
+      await completion.connection.query("select public.complete_setup($1, $2, $3)", [teacher.organizationId, seeded.operationId, seeded.revision]);
+      const saving = tab.save(withLunchWave(loaded, "C"));
+      const waiter = await waitingBehind(completion.pid, "save_teacher_schedule_preferences");
+      check("(d) completion first: the ordinary save waits behind it", waiter !== null);
+      check("(d) ...before it has touched teacher_schedule_preferences - the lock order is the same on both sides", waiter !== null && !(await relationsLockedBy(waiter)).includes(PREFERENCES));
+      await completion.commit();
+      const saved = await saving;
+      check("(d) ...then succeeds", saved.ok);
+      check("(d) one row: the newer lunch wave on top of the schedule the completion made active", (await countRows("teacher_schedule_preferences", teacher.membershipId)) === 1 &&
+        deepEqual(await preferences(teacher.membershipId), { lunch_wave: "C", active_bell_schedule_id: ownScheduleId(draft) }));
+      check("(d) a retry of the completed operation is still replayed", completedReplay(await teacher.repository.completeSetup(seeded.operationId, seeded.revision)));
+    }
+
+    // (e) Supplementary, not the evidence for ordering: the same two writers fired together with nothing
+    // held. Every round must end as (a) or (b) did - never a rejected ordinary write.
+    const ROUNDS = 8;
     let refused = 0;
     let landedOnTop = 0;
-    let rejectedThenRetried = 0;
     let wrong = 0;
     for (let round = 0; round < ROUNDS; round += 1) {
-      const racing = await withPreferencesRow(`racing-preference-free-${round}`);
-      const [outcome, ordinary] = await Promise.all([
-        racing.teacher.repository.completeSetup(racing.draft.operationId, racing.draft.revision),
-        updateLunchWave(racing.teacher).then(
-          (rows) => ({ ok: true as const, rows: rows.length }),
-          (error: { code?: string }) => ({ ok: false as const, code: error.code }),
-        ),
+      const { teacher, seeded } = await teacherWithDraft(`order-free-${round}`, true);
+      const [outcome, written] = await Promise.all([
+        teacher.repository.completeSetup(seeded.operationId, seeded.revision),
+        teacher.client.rpc("save_teacher_schedule_preferences", { p_organization_id: teacher.organizationId, p_lunch_wave: "C", p_active_bell_schedule_id: null, p_changed_columns: ["lunch_wave"] }),
       ]);
-      if (ordinary.ok && ordinary.rows === 1 && preferencesChanged(outcome, "C")) {
-        refused += 1;
-      } else if (ordinary.ok && ordinary.rows === 1 && completedFresh(outcome)) {
-        landedOnTop += 1;
-      } else if (!ordinary.ok && ordinary.code === "42501" && completedFresh(outcome)) {
-        // Still the completion's own lunch wave, never a half-applied edit; the retry then succeeds.
-        const untouched = (await preferences(racing.teacher.membershipId))?.lunch_wave === "none";
-        const retried = await updateLunchWave(racing.teacher);
-        if (untouched && retried.length === 1) rejectedThenRetried += 1;
-        else wrong += 1;
-      } else {
-        wrong += 1;
-      }
-      if ((await preferences(racing.teacher.membershipId))?.lunch_wave !== "C") wrong += 1;
+      if (written.error) wrong += 1;
+      else if (preferencesChanged(outcome, { activeBellScheduleId: null, lunchWave: "C" })) refused += 1;
+      else if (completedFresh(outcome)) landedOnTop += 1;
+      else wrong += 1;
+      if ((await preferences(teacher.membershipId))?.lunch_wave !== "C") wrong += 1;
     }
-    console.log(`  (${ROUNDS} rounds: completion refused ${refused}; update landed on top ${landedOnTop}; update rejected by the database, then retried ${rejectedThenRetried})`);
-    check("every round ended one of the three correct ways, with the newer lunch wave stored", wrong === 0 && refused + landedOnTop + rejectedThenRetried === ROUNDS);
+    console.log(`  (${ROUNDS} unsynchronized rounds: completion refused ${refused}; ordinary write landed on top ${landedOnTop})`);
+    check("(e) every unsynchronized round ended one of those two ways, with no rejected write", wrong === 0 && refused + landedOnTop === ROUNDS);
   }
 
   console.log("\n11. Nothing is left behind");

@@ -37,7 +37,10 @@ import {
   type SetupState,
 } from "@/lib/onboarding/setupRepository";
 import type { BellSchedule } from "@/types/schedule";
-import type { SetupDraft } from "@/types/setupDraft";
+import type { SetupDraft, SetupSeed } from "@/types/setupDraft";
+
+/** The seed of an account that has chosen nothing yet: no preferences row. */
+const EMPTY_SEED: SetupSeed = { activeBellScheduleId: null, lunchWave: "none" };
 
 let failures = 0;
 function check(label: string, condition: boolean) {
@@ -126,7 +129,7 @@ async function main() {
     const repository = new FakeSetupRepository();
     let release: () => void = () => {};
     repository.gate = new Promise<void>((resolve) => (release = resolve));
-    const session = new SetupDraftSession(repository, null, createEmptySetupDraft());
+    const session = new SetupDraftSession(repository, null, createEmptySetupDraft(), EMPTY_SEED);
     const seen: string[] = [];
     session.subscribe(() => seen.push(session.getSnapshot().status.kind));
 
@@ -149,7 +152,7 @@ async function main() {
   console.log("\n2. A failed save is visible, keeps the edit, and recovers");
   {
     const repository = new FakeSetupRepository();
-    const session = new SetupDraftSession(repository, null, createEmptySetupDraft());
+    const session = new SetupDraftSession(repository, null, createEmptySetupDraft(), EMPTY_SEED);
     repository.failNextSave = "rejected";
     session.update(draftWithWave("A"));
     await session.flush();
@@ -163,7 +166,7 @@ async function main() {
     check("...and, once saved, completes", refused.kind === "completed");
 
     const second = new FakeSetupRepository();
-    const retrying = new SetupDraftSession(second, null, createEmptySetupDraft());
+    const retrying = new SetupDraftSession(second, null, createEmptySetupDraft(), EMPTY_SEED);
     second.failNextSave = "rejected";
     retrying.update(draftWithWave("B"));
     await retrying.flush();
@@ -176,12 +179,12 @@ async function main() {
   console.log("\n3. Conflicts pause autosave until a side is chosen");
   {
     const repository = new FakeSetupRepository();
-    const first = new SetupDraftSession(repository, null, createEmptySetupDraft());
+    const first = new SetupDraftSession(repository, null, createEmptySetupDraft(), EMPTY_SEED);
     first.update(draftWithWave("A"));
     await first.flush();
 
     // A second tab that never saw the first tab's draft.
-    const second = new SetupDraftSession(repository, null, createEmptySetupDraft());
+    const second = new SetupDraftSession(repository, null, createEmptySetupDraft(), EMPTY_SEED);
     second.update(draftWithWave("B"));
     await second.flush();
     const status = second.getSnapshot().status;
@@ -196,7 +199,7 @@ async function main() {
     check("'keep-mine' saves this tab's draft on top of the stored revision", repository.stored?.payload.lunchWave === "C" && repository.stored.revision === 2);
     check("...and resumes normal saving", second.getSnapshot().status.kind === "saved");
 
-    const completedElsewhere = new SetupDraftSession(repository, { operationId: "op-1", revision: 2, updatedAt: "", payload: draftWithWave("C") }, createEmptySetupDraft());
+    const completedElsewhere = new SetupDraftSession(repository, { operationId: "op-1", revision: 2, updatedAt: "", payload: draftWithWave("C") }, createEmptySetupDraft(), null);
     await second.complete();
     completedElsewhere.update(draftWithWave("none"));
     await completedElsewhere.flush();
@@ -209,7 +212,7 @@ async function main() {
   {
     const repository = new FakeSetupRepository();
     repository.saveDraft = async () => ({ ok: true, value: { status: "ineligible", reason: "existing-setup" } });
-    const session = new SetupDraftSession(repository, null, createEmptySetupDraft());
+    const session = new SetupDraftSession(repository, null, createEmptySetupDraft(), EMPTY_SEED);
     session.update(draftWithWave("A"));
     await session.flush();
     const status = session.getSnapshot().status;
@@ -255,7 +258,9 @@ async function main() {
     check("shared-schedule-changed parses", parseCompleteSetupResult({ status: "conflict", reason: "shared-schedule-changed" })?.status === "conflict");
     check("completed without 'replayed' is refused", parseCompleteSetupResult({ status: "completed", completion }) === null);
     const preferencesChanged = { status: "conflict", reason: "preferences-changed", preferences: { activeBellScheduleId: null, lunchWave: "A" } };
-    check("preferences-changed parses with the preferences now in force", deepEqual(parseCompleteSetupResult(preferencesChanged), preferencesChanged));
+    check("a draft save's preferences-changed parses with the preferences now in force", deepEqual(parseSaveSetupDraftResult(preferencesChanged), preferencesChanged));
+    check("...and is refused without usable preferences", parseSaveSetupDraftResult({ ...preferencesChanged, preferences: { activeBellScheduleId: 3, lunchWave: "A" } }) === null);
+    check("preferences-changed parses with the preferences now in force",deepEqual(parseCompleteSetupResult(preferencesChanged), preferencesChanged));
     check("preferences-changed without usable preferences is refused", parseCompleteSetupResult({ ...preferencesChanged, preferences: undefined }) === null && parseCompleteSetupResult({ ...preferencesChanged, preferences: { activeBellScheduleId: null, lunchWave: "Z" } }) === null);
     check("parseSetupDraft refuses non-objects and wrong versions", parseSetupDraft(null) === null && parseSetupDraft("x") === null && parseSetupDraft({ version: 1 }) === null);
     check("parseSetupDraft round-trips an empty draft", deepEqual(parseSetupDraft(JSON.parse(JSON.stringify(createEmptySetupDraft()))), createEmptySetupDraft()));
@@ -404,7 +409,7 @@ async function main() {
     check("the setup repository never touches a DataRepository or the reducer", !/DataRepository|lib\/store|applyDiff/.test(read("lib/data/supabaseSetupRepository.ts").replace(/\/\*[\s\S]*?\*\//g, "")));
 
     const untouched = ["lib/data/supabaseDataRepository.ts", "lib/store/AppDataProvider.tsx", "lib/store/CutoverAppDataProvider.tsx", "lib/store/selectDataRepository.ts", "lib/auth/dal.ts", "lib/auth/dataAuthority.ts", "lib/data/types.ts"];
-    check("the general save engine, provider, and authority code do not reference setup drafts", untouched.every((path) => !/setup_drafts|setupDraft|SetupRepository|complete_setup/.test(read(path))));
+    check("the general save engine, provider, and authority code do not reference setup drafts", untouched.every((path) => !/setup_drafts|setupDraft|SetupRepository|complete_setup/.test(read(path).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, ""))));
 
     const rpcs = read("supabase/migrations/20261010210100_onboarding_setup_stage_b_rpcs.sql");
     const code = rpcs.replace(/--.*$/gm, "");
@@ -412,7 +417,7 @@ async function main() {
     check("complete_setup has no UPDATE or DELETE on a schedule table", !/(update|delete from)\s+public\.(bell_schedules|schedule_blocks|schedule_block_overrides)/.test(code));
     check("every function pins search_path", (code.match(/create function/g) ?? []).length === (code.match(/set search_path = pg_catalog/g) ?? []).length);
     check("no function takes a membership or user id from the caller", !/p_(membership|user|owner)_id/.test(code.replace(/setup_ineligibility_reason\(p_membership_id uuid\)[\s\S]*?\$\$;/, "")));
-    for (const fn of ["get_setup_state(uuid)", "save_setup_draft(uuid, integer, jsonb)", "complete_setup(uuid, uuid, integer)"]) {
+    for (const fn of ["get_setup_state(uuid)", "save_setup_draft(uuid, integer, jsonb, jsonb)", "complete_setup(uuid, uuid, integer)"]) {
       const quoted = fn.replace(/[()]/g, "\\$&");
       check(`${fn}: revoked from public and anon, granted to authenticated`,
         new RegExp(`revoke execute on function public\\.${quoted} from public;`).test(code) &&

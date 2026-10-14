@@ -25,8 +25,11 @@ import { SupabaseSetupRepository } from "@/lib/data/supabaseSetupRepository";
 import type { AppData } from "@/lib/data/types";
 import { createEmptySetupDraft } from "@/lib/onboarding/setupDraft";
 import { generateId } from "@/lib/store/id";
-import type { SetupDraft } from "@/types/setupDraft";
+import type { SetupDraft, SetupSeed } from "@/types/setupDraft";
 import { createTestDatabase, type RpcClient, type SelectBuilder, type TestDatabase } from "./support/testDatabase";
+
+/** The seed of an account that has chosen nothing yet: no preferences row. */
+const EMPTY_SEED: SetupSeed = { activeBellScheduleId: null, lunchWave: "none" };
 
 let failures = 0;
 function check(label: string, condition: boolean) {
@@ -126,7 +129,7 @@ function sharedScheduleSetupDraft(scheduleId: string): SetupDraft {
 
 async function completeGuidedSetup(teacher: Teacher, draft: SetupDraft): Promise<void> {
   const repository = new SupabaseSetupRepository(teacher.client, teacher.organizationId);
-  const saved = await repository.saveDraft(null, draft);
+  const saved = await repository.saveDraft(null, draft, EMPTY_SEED);
   if (!saved.ok || saved.value.status !== "saved") throw new Error("could not save the draft");
   const completed = await repository.completeSetup(saved.value.operationId, saved.value.revision);
   if (!completed.ok || completed.value.status !== "completed") throw new Error("setup did not complete");
@@ -164,7 +167,14 @@ function flakyClient(client: RpcClient, table: string): { client: RpcClient; fai
       armed = true;
     },
     client: {
-      rpc: (name, args) => client.rpc(name, args),
+      // The ordinary save writes teacher_schedule_preferences through this RPC.
+      async rpc(name, args) {
+        if (armed && table === "teacher_schedule_preferences" && name === "save_teacher_schedule_preferences") {
+          armed = false;
+          return failed;
+        }
+        return client.rpc(name, args);
+      },
       from(name) {
         const builder = client.from(name);
         if (name !== table) return builder;
@@ -433,26 +443,44 @@ async function main() {
 
   console.log("\n9. The settings row is created by another tab between this tab's UPDATE and its fallback");
   {
-    // teacher_schedule_preferences: the row does not exist when this tab's
-    // UPDATE runs (so it matches nothing); guided setup then creates it,
-    // with an active schedule; only then does this tab's fallback run.
+    // teacher_schedule_preferences: there is no longer a client-side gap to
+    // put another write in. The update-then-create-if-missing sequence runs
+    // inside save_teacher_schedule_preferences(), after it has taken the
+    // membership lock complete_setup() also takes - see
+    // verify:onboarding-setup-concurrency section 11 for those two
+    // overlapping. What is checked here is that the ordinary save really goes
+    // that way: one RPC, and no direct write to the table at all.
     const teacher = await newFounder("gap-preferences");
     const draft = ownScheduleSetupDraft();
-    let updatesSeen = 0;
-    const tab = openTab(
-      teacher,
-      clientWithGapAfterFirstUpdate(teacher.client, "teacher_schedule_preferences", async () => {
-        updatesSeen += 1;
-        precondition("no preferences row existed when this tab's UPDATE ran", (await preferences(teacher.membershipId)) === null);
-        await completeGuidedSetup(teacher, draft);
-      }),
-    );
+    const directWrites: string[] = [];
+    const rpcCalls: string[] = [];
+    const observed: RpcClient = {
+      rpc: (name, args) => {
+        rpcCalls.push(name);
+        return teacher.client.rpc(name, args);
+      },
+      from(name) {
+        const builder = teacher.client.from(name);
+        if (name !== "teacher_schedule_preferences") return builder;
+        for (const method of ["upsert", "update", "delete"] as const) {
+          const original = builder[method].bind(builder) as (...args: never[]) => SelectBuilder;
+          (builder as unknown as Record<string, unknown>)[method] = (...args: never[]) => {
+            directWrites.push(method);
+            return original(...args);
+          };
+        }
+        return builder;
+      },
+    };
+    const tab = openTab(teacher, observed);
     const loaded = await tab.load();
+    await completeGuidedSetup(teacher, draft);
     const result = await tab.save(withLunchWave(loaded, "A"));
-    precondition("the gap was actually exercised", updatesSeen === 1);
     check("the save succeeds", result.ok);
+    check("...through save_teacher_schedule_preferences, once", rpcCalls.filter((name) => name === "save_teacher_schedule_preferences").length === 1);
+    check("...with no direct write to teacher_schedule_preferences", directWrites.length === 0);
     const after = await preferences(teacher.membershipId);
-    check("the active schedule the other tab wrote in the gap survives", after?.active_bell_schedule_id === (draft.schedule?.mode === "own" ? draft.schedule.id : ""));
+    check("the active schedule guided setup wrote survives", after?.active_bell_schedule_id === (draft.schedule?.mode === "own" ? draft.schedule.id : ""));
     check("this tab's own edit - the lunch wave - is saved", after?.lunch_wave === "A");
     check("there is still exactly one preferences row", (await count("teacher_schedule_preferences", teacher.membershipId)) === 1);
 

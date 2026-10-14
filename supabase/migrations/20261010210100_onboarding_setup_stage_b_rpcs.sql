@@ -9,7 +9,7 @@
 -- membership id is never accepted as a parameter.
 --
 --   get_setup_state(p_organization_id)
---   save_setup_draft(p_organization_id, p_expected_revision, p_payload)
+--   save_setup_draft(p_organization_id, p_expected_revision, p_payload, p_expected_preferences)
 --   complete_setup(p_organization_id, p_operation_id, p_expected_revision)
 --
 -- RESULT CONVENTION: every expected outcome - including a conflict - is
@@ -242,6 +242,7 @@ $$;
 --   { status: 'saved',      draft: { operationId, revision, updatedAt } }
 --   { status: 'conflict',   reason: 'draft-exists' | 'stale-revision', draft: {... payload} }
 --   { status: 'conflict',   reason: 'draft-missing' }
+--   { status: 'conflict',   reason: 'preferences-changed', preferences: { activeBellScheduleId, lunchWave } }
 --   { status: 'completed',  completion }
 --   { status: 'ineligible', reason }
 -- 'ineligible' is returned for a revision as well as for a first save: a
@@ -252,6 +253,14 @@ $$;
 -- preferences as the draft's baseline (see setup_drafts). A revision never
 -- touches the baseline.
 --
+-- p_expected_preferences is required when creating, and ignored for a
+-- revision: the { activeBellScheduleId, lunchWave } the caller built its
+-- first draft from - get_setup_state()'s `seed`. If the stored preferences
+-- are no longer exactly that, nothing is created and 'preferences-changed'
+-- returns what they are now, so the caller can rebuild its draft from them
+-- and try again. The value is only ever compared: the baseline is still
+-- read from the database, so a caller cannot choose it.
+--
 -- The payload is stored as given: a draft is allowed to be incomplete, so
 -- content is validated only by complete_setup(). Only its type and size are
 -- checked here.
@@ -260,7 +269,8 @@ $$;
 create function public.save_setup_draft(
   p_organization_id uuid,
   p_expected_revision integer,
-  p_payload jsonb
+  p_payload jsonb,
+  p_expected_preferences jsonb default null
 )
 returns jsonb
 language plpgsql
@@ -307,14 +317,36 @@ begin
         'status', 'conflict', 'reason', 'draft-exists', 'draft', public.setup_draft_json(v_draft, true));
     end if;
 
+    if p_expected_preferences is null or jsonb_typeof(p_expected_preferences) <> 'object' then
+      raise exception 'The schedule preferences this draft was started from are required.' using errcode = '22023';
+    end if;
+
     select p.active_bell_schedule_id, p.lunch_wave into v_baseline_schedule_id, v_baseline_lunch_wave
     from public.teacher_schedule_preferences p
     where p.owner_membership_id = v_membership_id;
+    v_baseline_lunch_wave := coalesce(v_baseline_lunch_wave, 'none');
+
+    -- The seed the caller's draft was built from must still be what is
+    -- stored. Otherwise the draft would carry the older choices while its
+    -- baseline recorded the newer ones - and completion, comparing against
+    -- that baseline, would then replace the newer ones without a conflict.
+    if v_baseline_schedule_id is distinct from (p_expected_preferences ->> 'activeBellScheduleId')
+      or v_baseline_lunch_wave is distinct from (p_expected_preferences ->> 'lunchWave')
+    then
+      return jsonb_build_object(
+        'status', 'conflict',
+        'reason', 'preferences-changed',
+        'preferences', jsonb_build_object(
+          'activeBellScheduleId', v_baseline_schedule_id,
+          'lunchWave', v_baseline_lunch_wave
+        )
+      );
+    end if;
 
     insert into public.setup_drafts (
       owner_membership_id, organization_id, payload, baseline_active_bell_schedule_id, baseline_lunch_wave
     )
-    values (v_membership_id, p_organization_id, p_payload, v_baseline_schedule_id, coalesce(v_baseline_lunch_wave, 'none'))
+    values (v_membership_id, p_organization_id, p_payload, v_baseline_schedule_id, v_baseline_lunch_wave)
     returning * into v_draft;
 
     return jsonb_build_object('status', 'saved', 'draft', public.setup_draft_json(v_draft, false));
@@ -795,21 +827,19 @@ begin
   -- This is the last check, so every return above and this one happen
   -- before any operational write.
   --
-  -- Holding the answer until commit, against the ordinary save path (which
-  -- takes no setup lock - it writes this table directly, an UPDATE of the
-  -- changed columns or, when the membership has no row yet, an INSERT):
-  --   * FOR UPDATE here waits for an ordinary UPDATE that is in flight and,
-  --     under READ COMMITTED, then reads the row as that UPDATE left it; an
-  --     UPDATE arriving later waits for this function. It then either lands
-  --     on top of what this function wrote ("completed, then edited") or,
-  --     when this function made a newly created private schedule active, is
-  --     rejected by teacher_schedule_preferences' own WITH CHECK policy,
-  --     whose schedule lookup still uses the UPDATE's earlier snapshot. That
-  --     is a failed ordinary save, retried by its caller - never a silent
-  --     overwrite in either direction.
-  --   * When there is no row to lock, the membership row lock taken in (1b)
-  --     does the same job for the INSERT: that INSERT needs a KEY SHARE lock
-  --     on the membership row for its foreign key.
+  -- Holding the answer until commit, against the ordinary save path: that
+  -- path writes this table only through save_teacher_schedule_preferences()
+  -- (20261010210200), which takes this same membership row lock before it
+  -- touches the row. So the membership lock taken in (1b) orders the two:
+  --   * an ordinary write already holding it is waited for at (1b), and its
+  --     committed result is what is read here;
+  --   * an ordinary write arriving later waits for this function to commit,
+  --     and then writes on top of it with a fresh snapshot - including when
+  --     the schedule made active here was created by this function.
+  -- FOR UPDATE on the preferences row itself additionally covers a writer
+  -- outside that protocol (an older client, a direct API call) that is
+  -- UPDATING the row: it is waited for and seen. Such a writer creating the
+  -- first row is not covered - see the architecture document §8.3.
   select p.active_bell_schedule_id, p.lunch_wave into v_current_schedule_id, v_current_lunch_wave
   from public.teacher_schedule_preferences p
   where p.owner_membership_id = v_membership_id
@@ -951,8 +981,8 @@ $$;
 
 comment on function public.get_setup_state(uuid) is
   'Guided setup: read-only state for the caller''s membership in p_organization_id - completed (with the stored result), in-progress (with the draft, only while the membership is still eligible), or not-started (with eligibility).';
-comment on function public.save_setup_draft(uuid, integer, jsonb) is
-  'Guided setup: creates (p_expected_revision NULL) or revises the caller''s draft. A revision mismatch is returned as a conflict carrying the current draft, never applied. Refused as ineligible, for a first save or a revision, once the membership has been set up through the ordinary screens.';
+comment on function public.save_setup_draft(uuid, integer, jsonb, jsonb) is
+  'Guided setup: creates (p_expected_revision NULL) or revises the caller''s draft. A revision mismatch is returned as a conflict carrying the current draft, never applied. Creating requires the preferences the draft was built from and is refused as preferences-changed if they are no longer stored. Refused as ineligible, for a first save or a revision, once the membership has been set up through the ordinary screens.';
 comment on function public.complete_setup(uuid, uuid, integer) is
   'Guided setup: atomically commits the caller''s STORED draft - teacher-owned courses, class sections, either a private schedule with its blocks or teacher_period_assignments onto a shared schedule, schedule preferences, and a prepared first lesson - then records the result and deletes the draft. Idempotent on p_operation_id: a retry of a committed operation returns the stored result and writes nothing. Never writes organization-owned rows.';
 
@@ -960,9 +990,9 @@ revoke execute on function public.get_setup_state(uuid) from public;
 revoke execute on function public.get_setup_state(uuid) from anon;
 grant execute on function public.get_setup_state(uuid) to authenticated;
 
-revoke execute on function public.save_setup_draft(uuid, integer, jsonb) from public;
-revoke execute on function public.save_setup_draft(uuid, integer, jsonb) from anon;
-grant execute on function public.save_setup_draft(uuid, integer, jsonb) to authenticated;
+revoke execute on function public.save_setup_draft(uuid, integer, jsonb, jsonb) from public;
+revoke execute on function public.save_setup_draft(uuid, integer, jsonb, jsonb) from anon;
+grant execute on function public.save_setup_draft(uuid, integer, jsonb, jsonb) to authenticated;
 
 revoke execute on function public.complete_setup(uuid, uuid, integer) from public;
 revoke execute on function public.complete_setup(uuid, uuid, integer) from anon;

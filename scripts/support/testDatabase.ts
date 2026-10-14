@@ -187,8 +187,15 @@ function toWireRow(row: Record<string, unknown>): Record<string, unknown> {
   );
 }
 
-/** PostgREST sends a JSON argument as JSON; `pg` would otherwise turn a JS array into a Postgres array literal. */
+/**
+ * PostgREST sends a JSON argument as JSON; `pg` would otherwise turn a JS
+ * array into a Postgres array literal. The one exception is an array of
+ * strings, which every RPC here takes as `text[]` (PostgREST converts a JSON
+ * array to the parameter's array type) - `pg` already sends that as a
+ * Postgres array.
+ */
 function toParameter(value: unknown): unknown {
+  if (Array.isArray(value) && value.every((item) => typeof item === "string")) return value;
   return typeof value === "object" && value !== null ? JSON.stringify(value) : value;
 }
 

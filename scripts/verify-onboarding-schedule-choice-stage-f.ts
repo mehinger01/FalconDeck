@@ -359,8 +359,11 @@ check(
 
 interface RecordedWrite {
   table: string;
-  op: "delete" | "upsert" | "update";
+  op: "delete" | "upsert" | "update" | "rpc";
 }
+
+/** The table each RPC applyDiff() calls writes to. */
+const RPC_TABLES: Record<string, string> = { save_teacher_schedule_preferences: "teacher_schedule_preferences" };
 
 function createRecordingClient(): { client: SupabaseClient<Database>; calls: RecordedWrite[] } {
   const calls: RecordedWrite[] = [];
@@ -375,6 +378,10 @@ function createRecordingClient(): { client: SupabaseClient<Database>; calls: Rec
     return builder;
   }
   const client = {
+    rpc(name: string) {
+      calls.push({ table: RPC_TABLES[name] ?? `rpc:${name}`, op: "rpc" });
+      return Promise.resolve({ data: null, error: null });
+    },
     from(table: string) {
       return {
         delete() {

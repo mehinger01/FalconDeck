@@ -35,7 +35,7 @@ import { SetupDraftSession } from "@/lib/onboarding/setupDraftSession";
 import { deriveSetupEntry } from "@/lib/onboarding/setupEntry";
 import type { SetupState, StoredSetupDraft } from "@/lib/onboarding/setupRepository";
 import { generateId } from "@/lib/store/id";
-import type { SetupDraft } from "@/types/setupDraft";
+import type { SetupDraft, SetupSeed } from "@/types/setupDraft";
 import {
   FIXTURE_CLOUD_MEMBERSHIP_ID,
   FIXTURE_CLOUD_ORGANIZATION_ID,
@@ -48,6 +48,9 @@ import {
   type RpcClient,
   type TestDatabase,
 } from "./support/testDatabase";
+
+/** The seed of an account that has chosen nothing yet: no preferences row. */
+const EMPTY_SEED: SetupSeed = { activeBellScheduleId: null, lunchWave: "none" };
 
 let failures = 0;
 function check(label: string, condition: boolean) {
@@ -259,8 +262,8 @@ async function main() {
   console.log("1. Migrations and access model");
   {
     const files = listMigrationFiles();
-    check("every migration applies to an empty database, the two new ones last", files.slice(-2).join() ===
-      "20261010210000_onboarding_setup_stage_a_schema.sql,20261010210100_onboarding_setup_stage_b_rpcs.sql");
+    check("every migration applies to an empty database, the three new ones last", files.slice(-3).join() ===
+      "20261010210000_onboarding_setup_stage_a_schema.sql,20261010210100_onboarding_setup_stage_b_rpcs.sql,20261010210200_teacher_schedule_preferences_write_rpc.sql");
 
     const [privileges] = await db.admin<Record<string, boolean>>(`
       select
@@ -270,7 +273,7 @@ async function main() {
         has_table_privilege('anon', 'public.setup_completions', 'select, insert, update, delete') as completions_anon,
         has_function_privilege('authenticated', 'public.complete_setup(uuid, uuid, integer)', 'execute') as complete_authenticated,
         has_function_privilege('anon', 'public.complete_setup(uuid, uuid, integer)', 'execute') as complete_anon,
-        has_function_privilege('anon', 'public.save_setup_draft(uuid, integer, jsonb)', 'execute') as save_anon,
+        has_function_privilege('anon', 'public.save_setup_draft(uuid, integer, jsonb, jsonb)', 'execute') as save_anon,
         has_function_privilege('anon', 'public.get_setup_state(uuid)', 'execute') as state_anon,
         has_function_privilege('authenticated', 'public.setup_caller_membership(uuid)', 'execute') as helper_membership,
         has_function_privilege('authenticated', 'public.setup_ineligibility_reason(uuid)', 'execute') as helper_eligibility
@@ -300,7 +303,7 @@ async function main() {
     const legacyState = await stateOf(legacy);
     check("a migrated legacy account is ineligible (legacy-account)", legacyState.status === "not-started" && !legacyState.eligible && legacyState.reason === "legacy-account");
     check("...and stays in the existing app", deriveSetupEntry({ kind: "cloud-ready", organizationId: legacy.organizationId, membershipId: legacy.membershipId, migratedAt: "2026-09-01T00:00:00.000Z" }, legacyState) === "existing-app");
-    const legacyCreate = await legacy.repository.saveDraft(null, createEmptySetupDraft());
+    const legacyCreate = await legacy.repository.saveDraft(null, createEmptySetupDraft(), EMPTY_SEED);
     check("a legacy account cannot create a draft", legacyCreate.ok && legacyCreate.value.status === "ineligible");
 
     await db.admin("update public.organization_memberships set local_data_migrated_at = null where id = $1", [FIXTURE_LEGACY_MEMBERSHIP_ID]);
@@ -321,7 +324,7 @@ async function main() {
     const before = await loadAppData(existing);
     const existingState = await stateOf(existing);
     check("an existing cloud account with classes is ineligible (existing-setup)", existingState.status === "not-started" && !existingState.eligible && existingState.reason === "existing-setup");
-    const existingCreate = await existing.repository.saveDraft(null, createEmptySetupDraft());
+    const existingCreate = await existing.repository.saveDraft(null, createEmptySetupDraft(), EMPTY_SEED);
     check("...cannot create a draft", existingCreate.ok && existingCreate.value.status === "ineligible");
     check("...has no row in either setup table", (await ownedRowCounts(existing.membershipId)).setup_drafts === 0);
     check("...and loads exactly the same AppData as before", deepEqual(await loadAppData(existing), before));
@@ -330,7 +333,7 @@ async function main() {
   console.log("\n3. Draft save, reload, resume");
   let founderDraft = ownScheduleDraft();
   {
-    const session = new SetupDraftSession(founder.repository, null, createEmptySetupDraft());
+    const session = new SetupDraftSession(founder.repository, null, createEmptySetupDraft(), EMPTY_SEED);
     check("nothing is stored before the first edit", (await stateOf(founder)).status === "not-started");
     session.update({ ...createEmptySetupDraft(), courses: founderDraft.courses });
     session.update(founderDraft);
@@ -342,7 +345,7 @@ async function main() {
     check("revision advanced once per accepted save", stored.revision === 2);
 
     // A fresh session, as after a reload or on another device.
-    const resumed = new SetupDraftSession(founder.repository, stored, createEmptySetupDraft());
+    const resumed = new SetupDraftSession(founder.repository, stored, createEmptySetupDraft(), null);
     check("a resumed session starts from the stored draft", deepEqual(resumed.getSnapshot().draft, founderDraft));
     resumed.update({ ...founderDraft, lunchWave: "A" });
     await resumed.flush();
@@ -356,8 +359,8 @@ async function main() {
   console.log("\n4. A stale tab is detected, never applied");
   {
     const stored = await storedDraftOf(founder);
-    const tabOne = new SetupDraftSession(founder.repository, stored, createEmptySetupDraft());
-    const tabTwo = new SetupDraftSession(founder.repository, stored, createEmptySetupDraft());
+    const tabOne = new SetupDraftSession(founder.repository, stored, createEmptySetupDraft(), null);
+    const tabTwo = new SetupDraftSession(founder.repository, stored, createEmptySetupDraft(), null);
 
     tabOne.update({ ...founderDraft, lunchWave: "C" });
     await tabOne.flush();
@@ -387,7 +390,7 @@ async function main() {
 
     const read = await intruder.getState();
     check("reading another organization's setup state is rejected", !read.ok && read.kind === "rejected");
-    const write = await intruder.saveDraft(founderStored.revision, createEmptySetupDraft());
+    const write = await intruder.saveDraft(founderStored.revision, createEmptySetupDraft(), null);
     check("saving into another organization is rejected", !write.ok && write.kind === "rejected");
     const complete = await intruder.completeSetup(founderStored.operationId, founderStored.revision);
     check("completing in another organization is rejected", !complete.ok && complete.kind === "rejected");
@@ -427,7 +430,7 @@ async function main() {
       [founderDraft.firstLesson!.id, FIXTURE_CLOUD_ORGANIZATION_ID, FIXTURE_CLOUD_MEMBERSHIP_ID],
     );
     const stored = await storedDraftOf(founder);
-    const session = new SetupDraftSession(founder.repository, stored, createEmptySetupDraft());
+    const session = new SetupDraftSession(founder.repository, stored, createEmptySetupDraft(), null);
     const status = await session.complete();
     check("the completion is reported as rejected, not as unknown", status.kind === "completion-rejected");
     check("...and it was the final lesson write that failed, not an earlier check", status.kind === "completion-rejected" && status.message.includes("lessons_pkey"));
@@ -452,7 +455,7 @@ async function main() {
 
     const stored = await storedDraftOf(founder);
     founderRevision = stored.revision;
-    const session = new SetupDraftSession(founder.repository, stored, createEmptySetupDraft());
+    const session = new SetupDraftSession(founder.repository, stored, createEmptySetupDraft(), null);
     const status = await session.complete();
     check("completion succeeds", status.kind === "completed");
     check("...under the draft's own operation id", status.kind === "completed" && status.completion.operationId === founderOperationId);
@@ -486,9 +489,9 @@ async function main() {
     check("a second repeat behaves the same", andAgain.ok && andAgain.value.status === "completed" && andAgain.value.replayed);
     check("no row was added by either", deepEqual(await ownedRowCounts(founder.membershipId), before));
 
-    const staleSave = await founder.repository.saveDraft(founderRevision, founderDraft);
+    const staleSave = await founder.repository.saveDraft(founderRevision, founderDraft, null);
     check("a stale tab's autosave after completion is answered 'completed'", staleSave.ok && staleSave.value.status === "completed");
-    const recreate = await founder.repository.saveDraft(null, createEmptySetupDraft());
+    const recreate = await founder.repository.saveDraft(null, createEmptySetupDraft(), EMPTY_SEED);
     check("...and a draft cannot be re-created", recreate.ok && recreate.value.status === "completed");
     check("...so no draft reappears", (await ownedRowCounts(founder.membershipId)).setup_drafts === 0);
 
@@ -503,7 +506,7 @@ async function main() {
 
     // 9a. A lost SAVE response: the next save must not conflict with itself.
     const flakySave = new SupabaseSetupRepository(loseNextResponse(teacher.client, "save_setup_draft"), teacher.organizationId);
-    const saving = new SetupDraftSession(flakySave, null, createEmptySetupDraft());
+    const saving = new SetupDraftSession(flakySave, null, createEmptySetupDraft(), EMPTY_SEED);
     saving.update(draft);
     await saving.flush();
     check("a save whose response is lost is shown as failed, with the edit kept", saving.getSnapshot().status.kind === "save-failed" && saving.getSnapshot().dirty);
@@ -515,7 +518,7 @@ async function main() {
     // 9b. A lost COMPLETION response.
     const stored = await storedDraftOf(teacher);
     const flakyComplete = new SupabaseSetupRepository(loseNextResponse(teacher.client, "complete_setup"), teacher.organizationId);
-    const session = new SetupDraftSession(flakyComplete, stored, createEmptySetupDraft());
+    const session = new SetupDraftSession(flakyComplete, stored, createEmptySetupDraft(), null);
     const first = await session.complete();
     check("the teacher is told the outcome is unconfirmed - not that it failed", first.kind === "completion-unconfirmed");
     const committed = await ownedRowCounts(teacher.membershipId);
@@ -561,7 +564,7 @@ async function main() {
     check("the draft passes the client validator", validateSetupDraft(draft, base).length === 0);
     const sharedRowsBefore = await db.admin(sharedRowsSql);
 
-    const session = new SetupDraftSession(teacher.repository, null, createEmptySetupDraft());
+    const session = new SetupDraftSession(teacher.repository, null, createEmptySetupDraft(), EMPTY_SEED);
     session.update(draft);
     const status = await session.complete();
     check("completion succeeds", status.kind === "completed" && status.completion.scheduleMode === "shared");
@@ -587,7 +590,7 @@ async function main() {
     const teacher = await newJoiner("late-joiner", school.organizationId);
     const base = await loadAppData(teacher);
     const draft = sharedScheduleDraft(base, "course-catalog-algebra");
-    const session = new SetupDraftSession(teacher.repository, null, createEmptySetupDraft());
+    const session = new SetupDraftSession(teacher.repository, null, createEmptySetupDraft(), EMPTY_SEED);
     session.update(draft);
     await session.flush();
 
@@ -626,7 +629,7 @@ async function main() {
       owner_membership_id: outsider.membershipId,
       courses: draft.courses.map((course) => ({ ...course, ownerType: "organization", owner_type: "organization", organization_id: outsider.organizationId })),
     } as SetupDraft;
-    const session = new SetupDraftSession(teacher.repository, null, createEmptySetupDraft());
+    const session = new SetupDraftSession(teacher.repository, null, createEmptySetupDraft(), EMPTY_SEED);
     session.update(spoofed);
     const status = await session.complete();
     check("completion succeeds", status.kind === "completed");
@@ -643,7 +646,7 @@ async function main() {
       courses: [],
       classSections: stolen.classSections.map((section) => ({ ...section, courseId: draft.courses[0].id })),
     };
-    const thiefSession = new SetupDraftSession(thief.repository, null, createEmptySetupDraft());
+    const thiefSession = new SetupDraftSession(thief.repository, null, createEmptySetupDraft(), EMPTY_SEED);
     thiefSession.update(stolenDraft);
     const thiefStatus = await thiefSession.complete();
     check("a class on another teacher's private course is rejected", thiefStatus.kind === "completion-rejected");
@@ -687,7 +690,7 @@ async function main() {
       const teacher = await newFounder(`parity-${index}`);
       const clientIssues = validateSetupDraft(testCase.draft, await loadAppData(teacher));
       const clientAccepts = clientIssues.length === 0;
-      const session = new SetupDraftSession(teacher.repository, null, createEmptySetupDraft());
+      const session = new SetupDraftSession(teacher.repository, null, createEmptySetupDraft(), EMPTY_SEED);
       session.update(testCase.draft);
       const status = await session.complete();
       const databaseAccepts = status.kind === "completed";
@@ -707,7 +710,7 @@ async function main() {
     const secondHour = scheduleBlockCloudId(SHARED_SCHEDULE_ID, "p2");
     const overrideId = scheduleBlockOverrideCloudId(secondHour, "ov-wed");
     const teacher = await newJoiner("override-watcher", school.organizationId);
-    const session = new SetupDraftSession(teacher.repository, null, createEmptySetupDraft());
+    const session = new SetupDraftSession(teacher.repository, null, createEmptySetupDraft(), EMPTY_SEED);
     let draft = sharedScheduleDraft(await loadAppData(teacher), "course-catalog-algebra");
     session.update(draft);
     await session.flush();
@@ -785,7 +788,7 @@ async function main() {
     check("the starting draft already has that schedule selected, with nothing assigned yet", seeded.schedule?.mode === "shared" && seeded.schedule.scheduleId === SHARED_SCHEDULE_ID && seeded.schedule.assignments.length === 0 && seeded.lunchWave === "B");
 
     const finished = sharedScheduleDraft(pickerBase, "course-catalog-algebra");
-    const pickerSession = new SetupDraftSession(picker.repository, null, seeded);
+    const pickerSession = new SetupDraftSession(picker.repository, null, seeded, pickerState.status === "not-started" ? pickerState.seed : null);
     pickerSession.update({ ...finished, lunchWave: seeded.lunchWave });
     check("it completes", (await pickerSession.complete()).kind === "completed");
     const pickerCounts = await ownedRowCounts(picker.membershipId);
@@ -802,7 +805,7 @@ async function main() {
     // (c) A draft is in progress, and then the account is set up in the existing app. Existing setup wins:
     // the draft is no longer offered for resuming. (Section 18 covers what else is refused.)
     const midway = await newFounder("midway");
-    const midwaySession = new SetupDraftSession(midway.repository, null, createEmptySetupDraft());
+    const midwaySession = new SetupDraftSession(midway.repository, null, createEmptySetupDraft(), EMPTY_SEED);
     midwaySession.update(ownScheduleDraft());
     await midwaySession.flush();
     const midwayAuthority = { kind: "cloud-ready" as const, organizationId: midway.organizationId, membershipId: midway.membershipId, migratedAt: null };
@@ -832,7 +835,7 @@ async function main() {
     const builderState = await stateOf(builder);
     check("an account that built its own schedule is established (existing-setup)", builderState.status === "not-started" && !builderState.eligible && builderState.reason === "existing-setup");
     check("...stays in the existing app", deriveSetupEntry({ kind: "cloud-ready", organizationId: builder.organizationId, membershipId: builder.membershipId, migratedAt: null }, builderState) === "existing-app");
-    const builderCreate = await builder.repository.saveDraft(null, createEmptySetupDraft());
+    const builderCreate = await builder.repository.saveDraft(null, createEmptySetupDraft(), EMPTY_SEED);
     check("...cannot create a draft", builderCreate.ok && builderCreate.value.status === "ineligible");
     check("...and its data is exactly as it was", deepEqual(await loadAppData(builder), builderBefore));
 
@@ -862,7 +865,7 @@ async function main() {
     // A draft is started, and then the teacher sets the account up in the ordinary screens instead.
     const teacher = await newFounder("late-ineligible");
     const draft = ownScheduleDraft();
-    const seeded = await teacher.repository.saveDraft(null, draft);
+    const seeded = await teacher.repository.saveDraft(null, draft, EMPTY_SEED);
     if (!seeded.ok || seeded.value.status !== "saved") throw new Error("could not seed the draft");
 
     const courseId = generateId("course");
@@ -889,13 +892,13 @@ async function main() {
 
     // The session a screen would use ends up "ineligible", not offering a side to choose.
     const stored: StoredSetupDraft = { operationId: seeded.value.operationId, revision: seeded.value.revision, updatedAt: seeded.value.updatedAt, payload: draft };
-    const session = new SetupDraftSession(teacher.repository, stored, createEmptySetupDraft());
+    const session = new SetupDraftSession(teacher.repository, stored, createEmptySetupDraft(), null);
     const status = await session.complete();
     check("SetupDraftSession reports it as ineligible", status.kind === "ineligible" && status.reason === "existing-setup");
 
     // An account whose guided setup DID commit owns classes too. Its retry must still be answered from the ledger.
     const done = await newFounder("replay-after-recheck");
-    const doneSeed = await done.repository.saveDraft(null, ownScheduleDraft());
+    const doneSeed = await done.repository.saveDraft(null, ownScheduleDraft(), EMPTY_SEED);
     if (!doneSeed.ok || doneSeed.value.status !== "saved") throw new Error("could not seed the draft");
     const firstTime = await done.repository.completeSetup(doneSeed.value.operationId, doneSeed.value.revision);
     check("an eligible account still completes", firstTime.ok && firstTime.value.status === "completed" && !firstTime.value.replayed);
@@ -916,7 +919,7 @@ async function main() {
     const teacher = await newFounder("draft-then-ordinary");
     const authority = { kind: "cloud-ready" as const, organizationId: teacher.organizationId, membershipId: teacher.membershipId, migratedAt: null };
     const draft = ownScheduleDraft();
-    const seeded = await teacher.repository.saveDraft(null, draft);
+    const seeded = await teacher.repository.saveDraft(null, draft, EMPTY_SEED);
     if (!seeded.ok || seeded.value.status !== "saved") throw new Error("could not seed the draft");
     const draftRow = async () =>
       (await db.admin<{ revision: number; payload: SetupDraft }>("select revision, payload from public.setup_drafts where owner_membership_id = $1", [teacher.membershipId]))[0];
@@ -932,9 +935,9 @@ async function main() {
     check("get_setup_state no longer reports the draft: not-started, not eligible, existing-setup", state.status === "not-started" && !state.eligible && state.reason === "existing-setup");
     check("deriveSetupEntry sends the account to the existing app", deriveSetupEntry(authority, state) === "existing-app");
 
-    const revise = await teacher.repository.saveDraft(seeded.value.revision, { ...draft, step: "first-lesson" });
+    const revise = await teacher.repository.saveDraft(seeded.value.revision, { ...draft, step: "first-lesson" }, null);
     check("revising the draft is refused as ineligible", revise.ok && revise.value.status === "ineligible" && revise.value.reason === "existing-setup");
-    const recreate = await teacher.repository.saveDraft(null, createEmptySetupDraft());
+    const recreate = await teacher.repository.saveDraft(null, createEmptySetupDraft(), EMPTY_SEED);
     check("creating a draft is refused as ineligible (not reported as draft-exists)", recreate.ok && recreate.value.status === "ineligible");
     const complete = await teacher.repository.completeSetup(seeded.value.operationId, seeded.value.revision);
     check("completing it is refused as no-longer-eligible", complete.ok && complete.value.status === "conflict" && complete.value.reason === "no-longer-eligible");
@@ -946,7 +949,7 @@ async function main() {
     check("...and none of them made the draft resumable again", stateAgain.status === "not-started" && !stateAgain.eligible && deriveSetupEntry(authority, stateAgain) === "existing-app");
 
     // A tab that still has the draft open: its next autosave stops, it does not reopen the flow.
-    const openTab = new SetupDraftSession(teacher.repository, { operationId: seeded.value.operationId, revision: seeded.value.revision, updatedAt: seeded.value.updatedAt, payload: draft }, createEmptySetupDraft());
+    const openTab = new SetupDraftSession(teacher.repository, { operationId: seeded.value.operationId, revision: seeded.value.revision, updatedAt: seeded.value.updatedAt, payload: draft }, createEmptySetupDraft(), null);
     openTab.update({ ...draft, step: "review" });
     await openTab.flush();
     const tabStatus = openTab.getSnapshot().status;
@@ -976,7 +979,7 @@ async function main() {
       const teacher = await newJoiner(label, school.organizationId);
       await db.asUser(teacher.userId, `insert into public.teacher_schedule_preferences (owner_membership_id, organization_id, lunch_wave, active_bell_schedule_id) values ($1, $2, 'B', $3)`, [teacher.membershipId, teacher.organizationId, SHARED_SCHEDULE_ID]);
       const draft: SetupDraft = { ...sharedScheduleDraft(await loadAppData(teacher), "course-catalog-algebra"), lunchWave: "B" };
-      const session = new SetupDraftSession(teacher.repository, null, createEmptySetupDraft());
+      const session = new SetupDraftSession(teacher.repository, null, createEmptySetupDraft(), { activeBellScheduleId: SHARED_SCHEDULE_ID, lunchWave: "B" });
       session.update(draft);
       await session.flush();
       return { teacher, draft, session };
@@ -1044,7 +1047,7 @@ async function main() {
     // (c) No preferences row existed when the draft was created; the ordinary screens create one afterwards.
     const fresh = await newFounder("preferences-created-later");
     const freshDraft = ownScheduleDraft();
-    const freshSeed = await fresh.repository.saveDraft(null, freshDraft);
+    const freshSeed = await fresh.repository.saveDraft(null, freshDraft, EMPTY_SEED);
     if (!freshSeed.ok || freshSeed.value.status !== "saved") throw new Error("could not seed the draft");
     check("with no preferences row, the baseline is 'no schedule, no lunch wave'", deepEqual(await baselineOf(fresh), { baseline_lunch_wave: "none", baseline_active_bell_schedule_id: null }));
     await db.asUser(fresh.userId, `insert into public.teacher_schedule_preferences (owner_membership_id, organization_id, lunch_wave) values ($1, $2, 'C')`, [fresh.membershipId, fresh.organizationId]);
@@ -1062,7 +1065,7 @@ async function main() {
     const secondHour = scheduleBlockCloudId(SHARED_SCHEDULE_ID, "p2");
     const overrideId = scheduleBlockOverrideCloudId(secondHour, "ov-thu");
     const teacher = await newJoiner("lunch-window-watcher", school.organizationId);
-    const session = new SetupDraftSession(teacher.repository, null, createEmptySetupDraft());
+    const session = new SetupDraftSession(teacher.repository, null, createEmptySetupDraft(), EMPTY_SEED);
     let draft = sharedScheduleDraft(await loadAppData(teacher), "course-catalog-algebra");
     session.update(draft);
     await session.flush();
@@ -1115,13 +1118,110 @@ async function main() {
     for (const [label, scheduleId] of [["missing", undefined], ["blank", "  "]] as const) {
       const broken = { ...complete, schedule: { ...complete.schedule, scheduleId } } as unknown as SetupDraft;
       const current = await stateOf(teacher);
-      const saved = await teacher.repository.saveDraft(current.status === "in-progress" ? current.draft.revision : null, broken);
+      const saved = await teacher.repository.saveDraft(current.status === "in-progress" ? current.draft.revision : null, broken, EMPTY_SEED);
       if (!saved.ok || saved.value.status !== "saved") throw new Error("could not save the draft");
       const outcome = await teacher.repository.completeSetup(saved.value.operationId, saved.value.revision);
       check(`a ${label} scheduleId is rejected as a validation error, not reported as shared-schedule-changed`, !outcome.ok && outcome.kind === "rejected" && outcome.message.includes("Choose your school's schedule"));
     }
     const counts = await ownedRowCounts(teacher.membershipId);
     check("...and nothing was written", operationalRowTotal(counts) === 0 && counts.setup_completions === 0 && counts.setup_drafts === 1);
+  }
+
+  console.log("\n22. Preferences that change between reading the seed and the first draft save");
+  {
+    const ALT_SCHEDULE_ID = "schedule-shared-alternate"; // created in section 19
+    const draftCount = async (teacher: Teacher) => (await ownedRowCounts(teacher.membershipId)).setup_drafts;
+    const baselineOf = async (teacher: Teacher) =>
+      (await db.admin<{ baseline_lunch_wave: string; baseline_active_bell_schedule_id: string | null }>("select baseline_lunch_wave, baseline_active_bell_schedule_id from public.setup_drafts where owner_membership_id = $1", [teacher.membershipId]))[0];
+    /** The ordinary app's write, through the production function, as the teacher. */
+    const ordinaryWrite = async (teacher: Teacher, lunchWave: string, activeBellScheduleId: string | null, changed: string[]) => {
+      const { error } = await teacher.client.rpc("save_teacher_schedule_preferences", {
+        p_organization_id: teacher.organizationId, p_lunch_wave: lunchWave, p_active_bell_schedule_id: activeBellScheduleId, p_changed_columns: changed,
+      });
+      if (error) throw new Error(`ordinary preference write failed: ${error.message}`);
+    };
+
+    // (a) The lunch wave changes after the seed was read.
+    const lunch = await newJoiner("seed-gap-lunch", school.organizationId);
+    const lunchState = await stateOf(lunch);
+    if (lunchState.status !== "not-started") throw new Error("expected a fresh account");
+    const lunchDraft = sharedScheduleDraft(await loadAppData(lunch), "course-catalog-algebra");
+    const lunchSession = new SetupDraftSession(lunch.repository, null, createSetupDraftFromSeed(lunchState.seed, []), lunchState.seed);
+    await ordinaryWrite(lunch, "A", null, ["lunch_wave"]);
+    lunchSession.update(lunchDraft);
+    await lunchSession.flush();
+    const lunchStatus = lunchSession.getSnapshot().status;
+    check("the first save is refused as preferences-changed", lunchStatus.kind === "conflict" && lunchStatus.reason === "preferences-changed");
+    check("...reporting the preferences now stored, so the draft can be refreshed", lunchStatus.kind === "conflict" && deepEqual(lunchStatus.preferences, { activeBellScheduleId: null, lunchWave: "A" }));
+    check("...and no draft was created", (await draftCount(lunch)) === 0);
+    await lunchSession.resolveConflict("keep-mine");
+    check("re-sending the stale draft with the stale seed is refused again, still creating nothing", lunchSession.getSnapshot().status.kind === "conflict" && (await draftCount(lunch)) === 0);
+    await lunchSession.adoptPreferences({ ...lunchDraft, lunchWave: "A" });
+    check("a draft rebuilt on the reported preferences is created", lunchSession.getSnapshot().status.kind === "saved" && (await draftCount(lunch)) === 1);
+    check("...with the stored preferences as its baseline", deepEqual(await baselineOf(lunch), { baseline_lunch_wave: "A", baseline_active_bell_schedule_id: null }));
+    lunchSession.update({ ...lunchDraft, lunchWave: "A", step: "first-lesson" });
+    await lunchSession.flush();
+    check("a later save keeps that baseline", lunchSession.getSnapshot().status.kind === "saved" && deepEqual(await baselineOf(lunch), { baseline_lunch_wave: "A", baseline_active_bell_schedule_id: null }));
+    check("...and the draft completes", (await lunchSession.complete()).kind === "completed");
+
+    // (b) The active schedule changes after the seed was read.
+    const schedule = await newJoiner("seed-gap-schedule", school.organizationId);
+    await ordinaryWrite(schedule, "none", SHARED_SCHEDULE_ID, ["active_bell_schedule_id"]);
+    const scheduleState = await stateOf(schedule);
+    if (scheduleState.status !== "not-started") throw new Error("expected a fresh account");
+    check("the seed carries the chosen schedule", scheduleState.seed.activeBellScheduleId === SHARED_SCHEDULE_ID);
+    await ordinaryWrite(schedule, "none", ALT_SCHEDULE_ID, ["active_bell_schedule_id"]);
+    const scheduleCreate = await schedule.repository.saveDraft(null, createSetupDraftFromSeed(scheduleState.seed, (await loadAppData(schedule)).schedules), scheduleState.seed);
+    check("a schedule-only change since the seed refuses the first save", scheduleCreate.ok && scheduleCreate.value.status === "conflict" && scheduleCreate.value.reason === "preferences-changed" &&
+      deepEqual(scheduleCreate.value.preferences, { activeBellScheduleId: ALT_SCHEDULE_ID, lunchWave: "none" }));
+    check("...creating nothing", (await draftCount(schedule)) === 0);
+
+    // (c) The expected seed is compared, never stored: a caller cannot choose the baseline.
+    const chooser = await newJoiner("seed-gap-chooser", school.organizationId);
+    const claimed = await chooser.repository.saveDraft(null, createEmptySetupDraft(), { activeBellScheduleId: ALT_SCHEDULE_ID, lunchWave: "C" });
+    check("an expected seed that is not what is stored is refused, reporting what is", claimed.ok && claimed.value.status === "conflict" && claimed.value.reason === "preferences-changed" &&
+      deepEqual(claimed.value.preferences, EMPTY_SEED));
+    const missing = await chooser.repository.saveDraft(null, createEmptySetupDraft(), null);
+    check("creating with no expected seed is rejected", !missing.ok && missing.kind === "rejected" && missing.message.includes("preferences this draft was started from"));
+    check("...and neither attempt created a draft", (await draftCount(chooser)) === 0);
+  }
+
+  console.log("\n23. Ordinary preference writes keep their authorization");
+  {
+    const rpcError = async (teacher: { client: RpcClient }, organizationId: string, activeBellScheduleId: string | null, changed: string[] = ["active_bell_schedule_id"]) =>
+      (await teacher.client.rpc("save_teacher_schedule_preferences", {
+        p_organization_id: organizationId, p_lunch_wave: "none", p_active_bell_schedule_id: activeBellScheduleId, p_changed_columns: changed,
+      })).error?.code ?? null;
+    const owner = await newJoiner("private-schedule-owner", school.organizationId);
+    const privateScheduleId = generateId("schedule");
+    await owner.client.rpc("import_bell_schedule", {
+      p_organization_id: owner.organizationId, p_id: privateScheduleId, p_name: "Mine",
+      p_blocks: [{ id: "b1", label: "1st", kind: "instructional", start_time: "08:00", end_time: "08:50" }], p_time_zone: "America/Detroit",
+    });
+    const neighbour = await newJoiner("schedule-neighbour", school.organizationId);
+    await neighbour.client.rpc("save_teacher_schedule_preferences", { p_organization_id: neighbour.organizationId, p_lunch_wave: "B", p_active_bell_schedule_id: null, p_changed_columns: ["lunch_wave"] });
+    const neighbourBefore = await db.admin("select * from public.teacher_schedule_preferences where owner_membership_id = $1", [neighbour.membershipId]);
+
+    check("making another teacher's private schedule active is rejected by RLS (42501)", (await rpcError(neighbour, neighbour.organizationId, privateScheduleId)) === "42501");
+    const outsider = await newFounder("other-school-teacher");
+    check("writing in an organization the caller does not belong to is rejected (42501)", (await rpcError(outsider, school.organizationId, null)) === "42501");
+    check("a schedule from another organization is rejected", (await rpcError(outsider, outsider.organizationId, SHARED_SCHEDULE_ID)) !== null);
+    check("an unknown column name is rejected (22023)", (await rpcError(neighbour, neighbour.organizationId, null, ["owner_membership_id"])) === "22023");
+    const removed = await newJoiner("removed-teacher", school.organizationId);
+    await db.admin("update public.organization_memberships set status = 'removed' where id = $1", [removed.membershipId]);
+    check("a removed membership cannot write (42501)", (await rpcError(removed, school.organizationId, null, ["lunch_wave"])) === "42501");
+    check("none of that changed the teacher's own row", deepEqual(await db.admin("select * from public.teacher_schedule_preferences where owner_membership_id = $1", [neighbour.membershipId]), neighbourBefore));
+    const anonymous = await db.clientFor(null).rpc("save_teacher_schedule_preferences", { p_organization_id: school.organizationId, p_lunch_wave: "A", p_active_bell_schedule_id: null, p_changed_columns: ["lunch_wave"] });
+    check("an anonymous caller cannot execute it", anonymous.error !== null);
+    const [privileges] = await db.admin<Record<string, boolean>>(`
+      select
+        has_function_privilege('anon', 'public.save_teacher_schedule_preferences(uuid, text, text, text[])', 'execute') as save_anon,
+        has_function_privilege('anon', 'public.lock_own_membership(uuid)', 'execute') as lock_anon,
+        has_function_privilege('authenticated', 'public.save_teacher_schedule_preferences(uuid, text, text, text[])', 'execute') as save_authenticated,
+        (select prosecdef from pg_proc where oid = 'public.save_teacher_schedule_preferences(uuid, text, text, text[])'::regprocedure) as save_definer
+    `);
+    check("anon may execute neither function; authenticated may execute the write", !privileges.save_anon && !privileges.lock_anon && privileges.save_authenticated);
+    check("the write runs as the caller (SECURITY INVOKER), so the table's RLS applies", privileges.save_definer === false);
   }
 
   await db.close();

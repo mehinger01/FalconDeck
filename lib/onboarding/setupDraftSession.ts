@@ -25,6 +25,9 @@ import type {
  *   and the status says so until a save succeeds.
  * - The operation id comes from the server-side draft and is never
  *   regenerated, so every completion attempt names the same operation.
+ * - The first save of a new draft names the seed it was built from, and is
+ *   refused if the stored preferences have moved on since (see
+ *   adoptPreferences()).
  */
 
 export type SetupConflictReason =
@@ -72,6 +75,8 @@ const AUTOSAVE_BLOCKING_STATUSES: ReadonlyArray<SetupSessionStatus["kind"]> = [
 
 export class SetupDraftSession {
   private readonly repository: SetupRepository;
+  /** The preferences the draft was built from - sent only with the save that creates it. */
+  private seed: SetupSeed | null;
   private draft: SetupDraft;
   private operationId: string | null;
   private revision: number | null;
@@ -86,9 +91,14 @@ export class SetupDraftSession {
    * `stored` is the draft get_setup_state() returned (resume), or null for
    * a teacher starting fresh - in which case `initialDraft` is the working
    * copy and nothing is created server-side until the first edit.
+   *
+   * `seed` is get_setup_state()'s seed that `initialDraft` was built from.
+   * It is required to create a draft (a fresh start), and unused when
+   * resuming one - pass null then.
    */
-  constructor(repository: SetupRepository, stored: StoredSetupDraft | null, initialDraft: SetupDraft) {
+  constructor(repository: SetupRepository, stored: StoredSetupDraft | null, initialDraft: SetupDraft, seed: SetupSeed | null) {
     this.repository = repository;
+    this.seed = seed;
     this.draft = stored?.payload ?? initialDraft;
     this.operationId = stored?.operationId ?? null;
     this.revision = stored?.revision ?? null;
@@ -156,6 +166,28 @@ export class SetupDraftSession {
       return Promise.resolve();
     }
     this.dirty = true;
+    this.setStatus({ kind: "idle" });
+    return this.pump();
+  }
+
+  /**
+   * Ends a "preferences-changed" conflict - from creating the draft or from
+   * completing it - by adopting the schedule preferences now stored.
+   * `rebuilt` is the caller's draft brought into line with them (for a fresh
+   * start, typically createSetupDraftFromSeed() on the reported preferences
+   * plus whatever the teacher had entered); it replaces the working draft
+   * and is saved. The reported preferences become the seed a creation names,
+   * so a draft built from the old seed cannot slip through - unless the
+   * caller passes it back unchanged, which this cannot detect.
+   */
+  adoptPreferences(rebuilt: SetupDraft): Promise<void> {
+    if (this.status.kind !== "conflict" || this.status.reason !== "preferences-changed" || !this.status.preferences) {
+      return Promise.resolve();
+    }
+    this.seed = this.status.preferences;
+    this.draft = rebuilt;
+    this.dirty = true;
+    this.unconfirmedPayload = null;
     this.setStatus({ kind: "idle" });
     return this.pump();
   }
@@ -235,7 +267,7 @@ export class SetupDraftSession {
       this.dirty = false;
       this.setStatus({ kind: "saving" });
 
-      const result = await this.repository.saveDraft(this.revision, payload);
+      const result = await this.repository.saveDraft(this.revision, payload, this.revision === null ? this.seed : null);
 
       if (!result.ok) {
         this.dirty = true;
@@ -264,6 +296,7 @@ export class SetupDraftSession {
           kind: "conflict",
           reason: outcome.reason,
           serverDraft: "draft" in outcome ? outcome.draft : null,
+          ...(outcome.reason === "preferences-changed" ? { preferences: outcome.preferences } : {}),
         });
       }
     }

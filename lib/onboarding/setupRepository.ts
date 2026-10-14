@@ -43,6 +43,12 @@ export type SaveSetupDraftResult =
   | { status: "saved"; operationId: string; revision: number; updatedAt: string }
   | { status: "conflict"; reason: "draft-exists" | "stale-revision"; draft: StoredSetupDraft }
   | { status: "conflict"; reason: "draft-missing" }
+  /**
+   * Creating only: the stored schedule preferences are no longer the seed the
+   * first draft was built from. Nothing was created. `preferences` is what is
+   * stored now - rebuild the draft from it and create again with it.
+   */
+  | { status: "conflict"; reason: "preferences-changed"; preferences: SetupSeed }
   | { status: "completed"; completion: SetupCompletion }
   | { status: "ineligible"; reason: SetupIneligibilityReason };
 
@@ -74,8 +80,20 @@ export type SetupCallResult<T> =
 
 export interface SetupRepository {
   getState(): Promise<SetupCallResult<SetupState>>;
-  /** `expectedRevision: null` creates the draft; otherwise the save applies only if the stored draft is still at that revision. */
-  saveDraft(expectedRevision: number | null, payload: SetupDraft): Promise<SetupCallResult<SaveSetupDraftResult>>;
+  /**
+   * `expectedRevision: null` creates the draft; otherwise the save applies
+   * only if the stored draft is still at that revision.
+   *
+   * `expectedPreferences` is required when creating: the seed (see
+   * SetupState) the first draft was built from. Creation is refused as
+   * "preferences-changed" if that is no longer what is stored. It is ignored
+   * for a revision - pass null.
+   */
+  saveDraft(
+    expectedRevision: number | null,
+    payload: SetupDraft,
+    expectedPreferences: SetupSeed | null,
+  ): Promise<SetupCallResult<SaveSetupDraftResult>>;
   /** Commits the STORED draft. Safe to repeat with the same operationId any number of times. */
   completeSetup(operationId: string, expectedRevision: number): Promise<SetupCallResult<CompleteSetupResult>>;
 }
@@ -172,6 +190,10 @@ export function parseSaveSetupDraftResult(value: unknown): SaveSetupDraftResult 
   }
   if (value.status === "conflict") {
     if (value.reason === "draft-missing") return { status: "conflict", reason: "draft-missing" };
+    if (value.reason === "preferences-changed") {
+      const preferences = parseSeed(value.preferences);
+      return preferences && { status: "conflict", reason: "preferences-changed", preferences };
+    }
     if (value.reason === "draft-exists" || value.reason === "stale-revision") {
       const draft = parseStoredDraft(value.draft);
       return draft && { status: "conflict", reason: value.reason, draft };

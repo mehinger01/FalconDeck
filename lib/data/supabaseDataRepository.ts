@@ -541,21 +541,40 @@ export async function applyDiff(client: Client, ctx: OwnerContext, prev: AppData
     Map_.teacherSchedulePreferencesToRow(next.teacherSchedulePreferences, ctx),
   );
   if (preferencesPatch) {
-    const patch = preferencesPatch;
-    await patchOrCreateRow(
-      "teacher_schedule_preferences",
-      () =>
-        client
-          .from("teacher_schedule_preferences")
-          .update(patch)
-          .eq("owner_membership_id", ctx.membershipId)
-          .select("owner_membership_id"),
-      () =>
-        client
-          .from("teacher_schedule_preferences")
-          .upsert(Map_.teacherSchedulePreferencesToRow(next.teacherSchedulePreferences, ctx), CREATE_ONLY),
+    // The same changed-columns-then-create-if-missing write as
+    // patchOrCreateRow(), but performed by save_teacher_schedule_preferences()
+    // so that it takes the membership lock complete_setup() takes, before it
+    // touches the row (supabase/migrations/20261010210200_teacher_schedule_preferences_write_rpc.sql).
+    // It runs as the caller, under the table's RLS, and the membership is
+    // resolved server-side from the session and ctx.organizationId.
+    const row = Map_.teacherSchedulePreferencesToRow(next.teacherSchedulePreferences, ctx);
+    unwrap(
+      await (client as unknown as SchedulePreferencesRpcClient).rpc("save_teacher_schedule_preferences", {
+        p_organization_id: ctx.organizationId,
+        p_lunch_wave: row.lunch_wave,
+        p_active_bell_schedule_id: row.active_bell_schedule_id ?? null,
+        p_changed_columns: Object.keys(preferencesPatch),
+      }),
+      "save teacher_schedule_preferences",
     );
   }
+}
+
+/**
+ * Narrow overlay for the one RPC applyDiff() calls - the generated
+ * lib/data/supabase.types.ts predates it and is never hand-edited (same
+ * approach as lib/data/bellScheduleImportRpc.ts).
+ */
+interface SchedulePreferencesRpcClient {
+  rpc(
+    name: "save_teacher_schedule_preferences",
+    args: {
+      p_organization_id: string;
+      p_lunch_wave: string;
+      p_active_bell_schedule_id: string | null;
+      p_changed_columns: string[];
+    },
+  ): PromiseLike<{ data: unknown; error: { message: string } | null }>;
 }
 
 /** INSERT ... ON CONFLICT DO NOTHING: creates the teacher's row if it is missing, and never modifies one that exists. */

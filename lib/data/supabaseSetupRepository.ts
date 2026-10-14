@@ -9,7 +9,7 @@ import {
   type SetupRepository,
   type SetupState,
 } from "@/lib/onboarding/setupRepository";
-import type { SetupDraft } from "@/types/setupDraft";
+import type { SetupDraft, SetupSeed } from "@/types/setupDraft";
 
 /**
  * The only shape of Supabase client this file needs: `rpc()`. Stated
@@ -48,10 +48,14 @@ export class SupabaseSetupRepository implements SetupRepository {
     return this.call("get_setup_state", {}, parseSetupState);
   }
 
-  saveDraft(expectedRevision: number | null, payload: SetupDraft): Promise<SetupCallResult<SaveSetupDraftResult>> {
+  saveDraft(
+    expectedRevision: number | null,
+    payload: SetupDraft,
+    expectedPreferences: SetupSeed | null,
+  ): Promise<SetupCallResult<SaveSetupDraftResult>> {
     return this.call(
       "save_setup_draft",
-      { p_expected_revision: expectedRevision, p_payload: payload },
+      { p_expected_revision: expectedRevision, p_payload: payload, p_expected_preferences: expectedPreferences },
       parseSaveSetupDraftResult,
     );
   }
