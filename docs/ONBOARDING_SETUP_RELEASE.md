@@ -21,22 +21,55 @@ existing table, policy, trigger, function or grant is altered.
 
 ## 2. Sequence
 
-### Prerequisite — reconcile the two transition-content migration versions
+### Prerequisite — reconcile the two transition-content migration versions (done)
 
-Checked read-only on 2026-10-14: production records
-`transition_content_stage_b_lessons_warmup` and
+Production records `transition_content_stage_b_lessons_warmup` and
 `transition_content_stage_b_transition_overrides` as `20260928002032` and
-`20260928002124`. The repository names those files `20260927150000` and
-`20260927150100`.
+`20260928002124`. The repository used to name those files `20260927150000` and
+`20260927150100`. That mismatch would have made the dry run list five migrations, and
+a real `db push` fail re-running the first transition file.
 
-Until the fix described in `docs/CURRENT_STATE.md` lands on `main` in its own PR —
-renaming the two files to production's versions, with no content change, rather than
-`supabase migration repair` — two things are true:
-- the dry run below lists five migrations, not three;
-- a real `db push` would re-run the first transition file and fail on
-  `column "warmup" already exists`.
+- **Repository.** PR #5 renamed the files to production's versions, contents
+  unchanged, and was merged to `main` (`ecb7467`) and then into this branch.
+  Production's history was not modified.
+- **Staging.** `falcondeck-staging` was bootstrapped with the old versions, so its own
+  history needs a matching relabel. It is staging-only and keeps the recorded SQL:
 
-Rebase this branch on that fix before Step 1.
+  ```sql
+  -- Run in falcondeck-staging (fkqplulzwchunhthyoym) only - never production.
+  begin;
+  do $relabel$
+  declare
+    n integer;
+  begin
+    if (select count(*) from supabase_migrations.schema_migrations) <> 30 then
+      raise exception 'expected 30 migration records before the relabel';
+    end if;
+    update supabase_migrations.schema_migrations
+       set version = '20260928002032'
+     where version = '20260927150000' and name = 'transition_content_stage_b_lessons_warmup';
+    get diagnostics n = row_count;
+    if n <> 1 then raise exception 'lessons_warmup: expected 1 row, updated %', n; end if;
+    update supabase_migrations.schema_migrations
+       set version = '20260928002124'
+     where version = '20260927150100' and name = 'transition_content_stage_b_transition_overrides';
+    get diagnostics n = row_count;
+    if n <> 1 then raise exception 'transition_overrides: expected 1 row, updated %', n; end if;
+    if (select count(*) from supabase_migrations.schema_migrations) <> 30 then
+      raise exception 'expected 30 migration records after the relabel';
+    end if;
+    if exists (select 1 from supabase_migrations.schema_migrations
+               where version in ('20260927150000', '20260927150100')) then
+      raise exception 'an old version is still recorded';
+    end if;
+  end
+  $relabel$;
+  select version, name from supabase_migrations.schema_migrations
+   where name like 'transition_content_stage_b%' order by version;
+  commit;
+  ```
+
+  Any failed assertion raises inside the transaction and rolls everything back.
 
 ### Step 1 — Apply the migrations (production database)
 

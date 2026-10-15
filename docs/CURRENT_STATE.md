@@ -15,12 +15,9 @@ most points below.
 ## Supabase status
 
 - **27 migrations are applied to production**, matching the 27 committed before the
-  onboarding work, by name. Two differ by version only:
-  `transition_content_stage_b_lessons_warmup` and
-  `transition_content_stage_b_transition_overrides` are recorded in production as
-  `20260928002032` / `20260928002124` but are named `20260927150000` /
-  `20260927150100` in `supabase/migrations`. A `supabase db push` would treat those
-  two files as unapplied. See "Migration version reconciliation" below.
+  onboarding work by name and version. The two transition-content Stage B files used
+  to differ by version only; PR #5 (merged to `main` as `ecb7467`) renamed them to
+  production's recorded versions. See "Migration version reconciliation" below.
 - **Not applied anywhere:** `20261010210000_onboarding_setup_stage_a_schema.sql`,
   `20261010210100_onboarding_setup_stage_b_rpcs.sql` and
   `20261010210200_teacher_schedule_preferences_write_rpc.sql` (streamlined
@@ -106,11 +103,21 @@ Failing on `main` as of `7a638bc`, before and independent of the onboarding work
 - `npm run lint` — 4 `react-hooks/set-state-in-effect` errors
   (`CopyLessonPanel`, `LessonsScreen`, `BellScheduleImportPanel`) and 11 warnings.
 
-## Migration version reconciliation (plan — nothing done yet)
+## Migration version reconciliation (resolved in the repository by PR #5)
+
+**Status (2026-10-14).**
+- **Done:** PR #5 renamed the two files to production's versions, with contents
+  byte-for-byte unchanged and the two references updated. It was merged to `main` as
+  `ecb7467` and merged into this branch.
+- **Production:** its migration history was not touched.
+- **Still to do:** staging's history relabel (`docs/ONBOARDING_SETUP_RELEASE.md`), and
+  the CLI checks in step 3 below, which need the Supabase CLI.
+
+The original analysis follows.
 
 **The mismatch.** Same two migrations, same names, different version numbers:
 
-| Name | In `supabase/migrations` | Recorded in production |
+| Name | Repository before PR #5 | Recorded in production |
 |---|---|---|
 | `transition_content_stage_b_lessons_warmup` | `20260927150000` | `20260928002032` |
 | `transition_content_stage_b_transition_overrides` | `20260927150100` | `20260928002124` |
