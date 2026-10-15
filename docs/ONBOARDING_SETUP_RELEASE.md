@@ -21,6 +21,23 @@ existing table, policy, trigger, function or grant is altered.
 
 ## 2. Sequence
 
+### Prerequisite — reconcile the two transition-content migration versions
+
+Checked read-only on 2026-10-14: production records
+`transition_content_stage_b_lessons_warmup` and
+`transition_content_stage_b_transition_overrides` as `20260928002032` and
+`20260928002124`. The repository names those files `20260927150000` and
+`20260927150100`.
+
+Until the fix described in `docs/CURRENT_STATE.md` lands on `main` in its own PR —
+renaming the two files to production's versions, with no content change, rather than
+`supabase migration repair` — two things are true:
+- the dry run below lists five migrations, not three;
+- a real `db push` would re-run the first transition file and fail on
+  `column "warmup" already exists`.
+
+Rebase this branch on that fix before Step 1.
+
 ### Step 1 — Apply the migrations (production database)
 
 1. `supabase db push --dry-run` against the linked project. It must list exactly
