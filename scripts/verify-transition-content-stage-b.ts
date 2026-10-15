@@ -382,7 +382,7 @@ console.log(
 );
 {
   const migrationSql = readFileSync(
-    join(process.cwd(), "supabase", "migrations", "20260927150100_transition_content_stage_b_transition_overrides.sql"),
+    join(process.cwd(), "supabase", "migrations", "20260928002124_transition_content_stage_b_transition_overrides.sql"),
     "utf8",
   );
   check(
