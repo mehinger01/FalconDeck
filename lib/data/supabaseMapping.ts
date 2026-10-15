@@ -391,7 +391,7 @@ export function teacherPeriodAssignmentToRow(
  * Encodes TransitionOverride's tri-state materialsOverride/warmupOverride
  * (undefined/null/string - see the type's own doc comment) into the two-
  * column *_overridden/*_override representation
- * 20260927150100_transition_content_stage_b_transition_overrides.sql
+ * 20260928002124_transition_content_stage_b_transition_overrides.sql
  * defines, mirroring scheduleBlockOverrideToRow's identical treatment of
  * ScheduleBlockOverride.classSectionId below. Property PRESENCE, not just
  * value, is what distinguishes "undefined" from "null" here - `override ===
