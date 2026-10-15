@@ -274,12 +274,16 @@ and default privileges, and a gateway standing in for Kong.
 - **The existing suite on the same database.** `verify:onboarding-setup-concurrency`
   passed against the stack's database (71 checks), over direct connections.
 
+**On hosted Supabase.** Functional and authorization checks passed on the hosted
+staging project, `falcondeck-staging` (release document §5). The lock-order
+scenarios did not run there; they need a direct database connection.
+
 Still not exercised:
 
-- **Supabase's pooler (Supavisor) and Kong.** The design relies on each RPC being
-  one transaction at READ COMMITTED. Transaction-level advisory and row locks are
-  safe under transaction pooling, but this has not been observed on a Supabase
-  project.
+- **Supabase's pooler (Supavisor), and lock order on a Supabase project.** The
+  design relies on each RPC being one transaction at READ COMMITTED.
+  Transaction-level advisory and row locks are safe under transaction pooling, but
+  this has not been observed on a Supabase project.
 - Real network latency and client retry timing.
 
 **One protocol for preference writes.** The ordinary save used to write
@@ -581,9 +585,10 @@ has been changed again since the draft was created (§8.4).
    save (§9.2).
 2. **Concurrency through the Supabase pooler is unverified.** Through PostgREST it
    was verified on a local integration stack (§8.3).
-3. **No disposable Supabase project exists.** The repo links only production, and
-   the integration stack is not the `supabase/postgres` image.
-   A Supabase preview branch would not work as-is:
+3. **The non-production Supabase project is a Free-plan staging project**
+   (`falcondeck-staging`). It pauses after about a week of inactivity, and nobody
+   here holds a direct database connection to it. A Supabase preview branch
+   would not work as-is:
    `20260922000000_organization_memberships_account_origin.sql` refuses to apply
    unless two specific production rows exist. The test harness seeds those rows.
 4. **The test server is a 100 MB dev dependency.** `embedded-postgres` ships real

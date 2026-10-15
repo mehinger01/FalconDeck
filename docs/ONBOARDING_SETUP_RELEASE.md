@@ -147,15 +147,47 @@ migration was applied in order; Auth applied its own migrations.
   `/schedule`. Each change reached the database through the RPC and survived a
   reload. The page contacted only `localhost:3000` and the local gateway.
 
+**Hosted staging** — `falcondeck-staging` (`fkqplulzwchunhthyoym`), a separate
+Free-plan Supabase project that Vercel Preview now points at; never production.
+- **Setup.**
+  - All 30 repository migrations at `4e23df5` were applied in one transaction. Each
+    file was fetched from GitHub at that commit and checked against the repository's
+    MD5 before running, then recorded in `supabase_migrations.schema_migrations` as
+    the CLI does.
+  - Only synthetic `@example.test` accounts and data; no production data was copied.
+  - **Cleanup verified:** 0 helper schemas, 0 `http` extensions, 30 migration
+    records.
+- **HTTPS, through hosted Kong, Auth and PostgREST** (44 checks, all pass): the same
+  scenarios as the local HTTP check, using the production repositories and
+  pre-seeded synthetic accounts.
+  - ordinary schedule and lunch-wave saves, including after a reload;
+  - the release smoke call;
+  - draft create, resume, revise and conflicts;
+  - completion and replay;
+  - preferences changed before the first save and before completion;
+  - anonymous and cross-owner rejection.
+- **Not run on staging: the lock-order checks.** They need a direct database
+  connection, and none is available to staging here.
+- **Browser, signed in, on PR #4's preview build** (`dpl_D27HvJv6xNMmneu3jXprxHZp3dYK`,
+  commit `4e23df5`):
+  - chose a school schedule on `/setup/schedule`, then changed the lunch wave and
+    active schedule on `/schedule`;
+  - each change was a `save_teacher_schedule_preferences` call to staging, was in
+    staging's database, and survived a reload;
+  - the page contacted only the preview, Vercel's toolbar and staging's Supabase —
+    never production.
+
 **Not validated:**
 
-- the `supabase/postgres` image, Kong and Supavisor (the pooler);
-- a hosted Supabase project;
-- the production application;
-- real network latency.
+- Supavisor (the pooler);
+- lock order on hosted Supabase;
+- the production application and production database;
+- sign-up and password-reset email redirects on staging (they need a real inbox);
+- real network latency under load.
 
-The browser run used a minimized window: clicks were dispatched through the DOM,
-not real pointer input.
+Both browser runs used a background window. The user signed in to the preview
+themselves; after that, clicks were dispatched through the DOM, not real pointer
+input.
 
 To rerun all of this: `docs/ONBOARDING_SETUP_INTEGRATION.md`. The checks are
 `scripts/integration/onboarding-setup-http.ts` and

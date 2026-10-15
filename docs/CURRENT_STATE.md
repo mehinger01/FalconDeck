@@ -148,7 +148,17 @@ to change and is unnecessary when a file rename achieves the same thing.
 
 ## Vercel preview builds
 
-Every preview deployment fails; production deployments succeed.
+**Update (2026-10-14).** Preview now points at a separate staging project,
+`falcondeck-staging` (`fkqplulzwchunhthyoym`). `NEXT_PUBLIC_SUPABASE_URL` and
+`NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` are set for Preview only, so preview builds
+succeed (PR #4's did). `FALCON_DECK_SESSION_SECRET` has its own value only for
+`feature/streamlined-onboarding-foundation`; other branches' previews still share
+production's, which is set on one record covering both environments. The Google
+Drive variables are still shared. Staging's Auth Site URL and Redirect URL are set
+for PR #4's preview address. The history below is kept for context.
+
+Before that update, every preview deployment failed and production deployments
+succeeded.
 
 **Cause.** `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` are
 set for the **Production** environment only. During `next build`, prerendering an
