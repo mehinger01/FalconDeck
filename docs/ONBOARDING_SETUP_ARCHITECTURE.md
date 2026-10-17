@@ -1,10 +1,12 @@
 # Streamlined Onboarding — Architecture Decisions
 
-**Status:** persistence foundation implemented and tested in isolation, awaiting
-review. The two migrations below are **not applied to any Supabase project**. The
-guided screens (§9.3) are built behind a server-side switch that is off by default
+**Status:** the persistence foundation is merged (PR #4). Its three migrations are
+applied to the staging project (`falcondeck-staging`); their Production rollout
+follows `docs/ONBOARDING_SETUP_RELEASE.md` and is not covered here. The guided
+screens (§9.3, PR #6) are built behind a server-side switch that is off by default
 and always off in Production; with it off, no route, screen, or redirect has
-changed and no existing account behaves differently.
+changed and no existing account behaves differently. Activating them in Production
+needs a separate change (§13).
 The stale-tab data loss found during review is fixed in the save engine and
 covered by regression tests (§9.2); what that fix does not cover is listed there.
 
@@ -561,6 +563,13 @@ otherwise it redirects to `/setup`.
   are locked. The operation id is fixed for the draft, so pressing again after an
   unconfirmed answer is answered from the committed record (§7). A save that learns
   setup already committed counts as success.
+- **Refused (`completion-rejected`):** nothing was created. The server's message is
+  shown only when it is the setup functions' own validation wording (SQLSTATE
+  `22023`); any other database error (a key collision, a timeout) is replaced by
+  plain wording. Pressing Start again retries under the same operation id.
+- **Finished elsewhere:** a tab whose save learns setup is already complete shows
+  "Setup is finished" with a link to `/present`; it navigates only after its own
+  Start.
 - **On success (§9.1.4):** a full document load of `/present`
   (`window.location.assign`), not a client-side route change, so the new
   `CutoverAppDataProvider` loads the committed rows.
@@ -669,9 +678,11 @@ Chromium.
    primary keys across all schools. A draft id that collides with any existing row
    fails the whole completion with Postgres's own message. Ids are generated with
    `crypto.randomUUID()`, so this is not expected in practice.
-6. **Raw database messages can reach `completion-rejected`.** Validation failures
-   carry written-for-users messages; unexpected failures do not. The UI should show
-   its own wording for anything it does not recognise.
+6. **Raw database messages reach `completion-rejected` in the session.** Validation
+   failures carry written-for-users messages; unexpected failures do not. The guided
+   review shows the message only for SQLSTATE `22023` and its own wording
+   otherwise (§9.3); any other caller of `SetupDraftSession` must do the same
+   (`userFacing`).
 7. **One completion per membership, and no discard.** There is no "start over" or
    "run setup again". A draft can be overwritten but not deleted by the client;
    abandoned drafts do not expire. A draft whose account was then set up through
@@ -712,7 +723,9 @@ Chromium.
 | Schedule-only and lunch-wave-only preference changes after draft creation; baseline survives saves; committed operations still replay | db §19 |
 | Ordinary preference writes and completion, each order, first row and existing row | concurrency §10 |
 | Preferences changed between reading the seed and the first draft save; baseline cannot be chosen by the caller | db §22 |
-| Guided screens: one commit for repeated presses; failed and lost answers retried under the same operation id; each conflict's recovery; pending text committed before Edit, Back, Continue and Start | `verify:guided-setup-interactions` §16–24 (real Chromium) |
+| Guided screens: one commit for repeated presses; failed and lost answers retried under the same operation id; each conflict's recovery; pending text committed before Edit, Back, Continue and Start; no leave-page warning at the moment of navigation; refusals never show raw database errors | `verify:guided-setup-interactions` §16–25 (real Chromium) |
+| Entry: `/` and `/setup` reach guided setup; ordinary routes, established, completed, legacy, unreadable, switch-off and production unchanged; the real gate rendered | `verify:guided-setup-routing` |
+| Raw versus validation refusals classified from real `complete_setup` errors | db §6, §13 (`userFacing`) |
 | Guided completion against PostgreSQL: lost answer then replay, rows created once, reload leaves guided setup, `/present`'s repository loads the committed lesson | `verify:guided-setup-teaching-day` §14 |
 | The review preview's provider is read-only and the only one on the guided page | `verify:guided-setup-teaching-day` §7c, §13 |
 | Ordinary preference writes keep their authorization | db §23 |
@@ -724,7 +737,53 @@ Chromium.
 | Admin edit of a shared schedule overlapping a completion | concurrency §9 |
 
 The three `verify:onboarding-setup-*` scripts and `verify:stale-tab-save-safety`
-are in `npm run verify`. The database
+are in `npm run verify`. The three `verify:guided-setup-*` scripts are not yet
+(two of them drive Chromium through Playwright); run them on their own. The database
 ones start a PostgreSQL 17 server in a temporary directory, apply every file in
 `supabase/migrations` to it, and delete it. They read no environment file and
 connect to nothing else.
+
+---
+
+## 13. Activating guided setup in Production, and rolling back
+
+Guided setup cannot be switched on in Production today: `isGuidedSetupEnabled()`
+returns false whenever `VERCEL_ENV=production`, whatever `FALCON_GUIDED_SETUP` says.
+Activation is therefore a reviewed code change, not a settings change.
+
+**Preconditions**
+
+1. The foundation release (`docs/ONBOARDING_SETUP_RELEASE.md`) is complete in
+   Production: the three migrations applied and verified (its Step 2), and the
+   application deployed that writes preferences through
+   `save_teacher_schedule_preferences`.
+2. Old bundles have aged out: no tab still running a client from before that
+   deployment, which wrote preferences outside the protocol (§8.3, §9.2; release
+   document §4).
+3. The open items in §11 that bear on activation have been accepted or closed:
+   concurrency through Supavisor (2), the preferences protection's limits (10),
+   and real Safari, which has not been run.
+
+**Steps**
+
+1. A PR that replaces the Production guard with an explicit Production opt-in (for
+   example, honouring `FALCON_GUIDED_SETUP=on` in Production), with its own tests.
+   Merging it changes nothing until the variable is set.
+2. Set `FALCON_GUIDED_SETUP=on` for Production in Vercel and **redeploy**: `/` is
+   prerendered while the switch is off, and Vercel applies environment changes
+   only to new deployments.
+3. Verify with a fresh synthetic account (sign-in reaches `/start`, completion,
+   `/present`), and with an established account (unchanged).
+
+**Rollback**
+
+- **Switch off:** remove `FALCON_GUIDED_SETUP` (or set it to anything but `on`)
+  and redeploy, or use Vercel's instant rollback to the previous deployment.
+  Every account then gets the existing app: `/start` redirects to `/setup`,
+  and `/` and `/setup` behave as before.
+- **Data needs no conversion.** Completed setups are ordinary operational rows
+  (courses, classes, a lesson, preferences, assignments) that the existing app
+  already reads. Unfinished drafts stay in `setup_drafts`, unread; if guided setup
+  returns, an account that is still eligible resumes its draft.
+- **Keep the database objects.** They are inert without the switch (release
+  document §4). Never drop them while any deployment can call them.
