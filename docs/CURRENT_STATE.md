@@ -9,23 +9,30 @@ most points below.
 
 - **GitHub repo:** `mehinger01/FalconDeck`
 - **`main` at reconciliation:** `7a638bc` (PR #3, Present/Preview crash reporting)
-- **Supabase project ref:** `rlfydgbololkbrcloneb` — the only project. It is
-  production. There is no separate development or staging project.
+- **Production since 2026-10-16:** `e265b80` (PR #4, streamlined-onboarding
+  persistence foundation, no UI). Vercel deployment `dpl_Bh77UMLju6iggEyJsSamgMyXvUpv`
+  serves `teachdeckapp.com` (redirects to www), `www.teachdeckapp.com` and
+  `falcon-deck.vercel.app`. Release record: `docs/ONBOARDING_SETUP_RELEASE.md` §6.
+- **Supabase project ref:** `rlfydgbololkbrcloneb` — production.
+- **Staging:** `falcondeck-staging` (`fkqplulzwchunhthyoym`), a Free-plan project in a
+  separate organization, holding synthetic data only. Vercel Preview points at it.
 
 ## Supabase status
 
-- **27 migrations are applied to production**, matching the 27 committed before the
-  onboarding work by name and version. The two transition-content Stage B files used
-  to differ by version only; PR #5 (merged to `main` as `ecb7467`) renamed them to
-  production's recorded versions. See "Migration version reconciliation" below.
-- **Not applied anywhere:** `20261010210000_onboarding_setup_stage_a_schema.sql`,
-  `20261010210100_onboarding_setup_stage_b_rpcs.sql` and
-  `20261010210200_teacher_schedule_preferences_write_rpc.sql` (streamlined
-  onboarding — see `docs/ONBOARDING_SETUP_ARCHITECTURE.md`). **Deploy order:** the
-  ordinary save now writes schedule preferences through
-  `save_teacher_schedule_preferences`, so the third migration must be applied before
-  or with any deploy of this code. Sequence, verification and rollback:
-  `docs/ONBOARDING_SETUP_RELEASE.md`.
+- **All 30 repository migrations are applied to production**, matching by name and
+  version. The latest three were applied on 2026-10-16, before PR #4 was merged:
+  - `20261010210000_onboarding_setup_stage_a_schema.sql`
+  - `20261010210100_onboarding_setup_stage_b_rpcs.sql`
+  - `20261010210200_teacher_schedule_preferences_write_rpc.sql`
+
+  The two transition-content Stage B files used to differ by version only; PR #5
+  (`ecb7467`) renamed them to production's recorded versions. See "Migration version
+  reconciliation" below.
+- **Ordinary schedule-preference saves now depend on
+  `save_teacher_schedule_preferences`.** Never remove it while a deployment that
+  calls it is live.
+- **Guided setup is inactive.** The setup tables and RPCs exist, but nothing in
+  `app/` or `components/` calls them. Both setup tables are empty.
 - Tables: the 19-table V2 foundation plus `transition_overrides`. RLS is enabled on
   every table; every policy is scoped `to authenticated`; `anon` has no table
   privileges.
@@ -110,8 +117,9 @@ Failing on `main` as of `7a638bc`, before and independent of the onboarding work
   byte-for-byte unchanged and the two references updated. It was merged to `main` as
   `ecb7467` and merged into this branch.
 - **Production:** its migration history was not touched.
-- **Still to do:** staging's history relabel (`docs/ONBOARDING_SETUP_RELEASE.md`), and
-  the CLI checks in step 3 below, which need the Supabase CLI.
+- **Completed afterwards:** staging's history relabel (2026-10-14: 30 records, 2
+  corrected, 0 old). The production dry run listed exactly the three onboarding
+  migrations (2026-10-16, Supabase CLI v2.118.0).
 
 The original analysis follows.
 
@@ -198,3 +206,34 @@ No Vercel or Supabase configuration was changed.
 - Service-role credentials never reach the browser.
 - Do not apply migrations to production, merge, or deploy without an explicit
   instruction to do so.
+
+## Cleanup backlog
+
+Tracked, not urgent. Nothing here affects teachers.
+
+- **Five empty test organizations in production.**
+  - Left by the live checks on 2026-10-16, all named "Falcon Deck … Test …" or
+    "Falcon Deck release check (disposable)". Each has no memberships, schedules,
+    preferences or drafts.
+  - Signed-in users cannot delete organizations, so removing them needs a privileged
+    delete. Not done yet.
+  - Ids: `e4c5df20-ff7d-4a3b-b7d4-e9a90fa476ba`, `e38bb0ae-2160-4f06-84f2-cd12707dd665`,
+    `0e684eeb-406b-4a4c-9a2b-1c171bbae8fd`, `e2a6e309-db63-4a40-be55-7950a3674d0e`,
+    `9355fada-4d97-4876-988c-189d2b0b8373`.
+  - Delete them with a guarded statement that removes only rows still without a
+    membership:
+
+    ```sql
+    delete from public.organizations
+    where id in (...the five ids...)
+      and not exists (select 1 from public.organization_memberships m
+                      where m.organization_id = organizations.id);
+    ```
+- **Preview's session secret.** `FALCON_DECK_SESSION_SECRET` is shared between
+  Production and Preview on one Vercel record. Only previews of
+  `feature/streamlined-onboarding-foundation` have their own value; that branch is now
+  merged, so the override can go once the record is split.
+- **Older helper functions callable by `anon`.** Supabase's security advisor reports
+  `app_is_admin`, `app_is_member`, `app_owns_membership`,
+  `app_owns_membership_in_org` and `handle_new_user` as executable by `anon`. They
+  were created by earlier migrations, not the onboarding work. Review them separately.

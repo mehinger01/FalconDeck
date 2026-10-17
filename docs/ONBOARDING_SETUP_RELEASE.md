@@ -242,3 +242,66 @@ input.
 To rerun all of this: `docs/ONBOARDING_SETUP_INTEGRATION.md`. The checks are
 `scripts/integration/onboarding-setup-http.ts` and
 `scripts/integration/deployed-client-compat.ts`.
+
+## 6. Release record — 2026-10-16
+
+**Production commit:** `e265b80` (PR #4 merged into `main`, which already contained
+PR #5's `ecb7467`). The PR head was confirmed unchanged at `af3d7ee` before the release.
+
+**Step 1 — migrations.**
+- The production dry run listed exactly `20261010210000`, `20261010210100` and
+  `20261010210200`.
+- `supabase db push --linked` (CLI v2.118.0) applied the three; production now records
+  30.
+
+**Step 2 — verification.** Both checks passed before the merge.
+- **Catalog:**
+  - all three versions are recorded;
+  - `anon` cannot execute any of the five new functions, and `authenticated` can;
+  - `save_teacher_schedule_preferences` is `SECURITY INVOKER`, and the other four are
+    `SECURITY DEFINER`;
+  - RLS is on for `setup_drafts` and `setup_completions`, and both are empty.
+- **No-write call:**
+  - signed in as designated test account A, the empty-column call returned `204` and
+    wrote nothing;
+  - without a session it was refused (`401`/`42501`);
+  - a real write by an account with no membership was refused (`42501`).
+
+  Neither designated test account has a school between live-test runs, so the call
+  used a random organization id. The empty-column path returns before it reads that id.
+
+**Step 3 — deployment.**
+- Vercel deployment `dpl_Bh77UMLju6iggEyJsSamgMyXvUpv` is READY at `e265b80`.
+- Vercel's alias records show `teachdeckapp.com` (308 to www), `www.teachdeckapp.com`
+  and `falcon-deck.vercel.app` all on that deployment.
+
+**Persistence on production** (designated test accounts only; no real teacher's data
+touched):
+- **Lunch wave.** `npm run verify:supabase-migration` passed 46/46. That includes
+  lunch-wave save and reload through both the repository and the provider path.
+- **Active schedule.** That script never sets one. A separate run gave test account A
+  a disposable school, then:
+  - switched schedule A with lunch B, then schedule B with lunch C, and made a
+    lunch-only change;
+  - each survived a fresh load and matched the stored row (6/6).
+
+  The test data and membership were then deleted through the account's own session.
+- Five empty test organizations remain; see `docs/CURRENT_STATE.md`, "Cleanup
+  backlog".
+
+**Rollback deployment:** `dpl_A99u5PWgQoekTKGwwzaGEV2RDAFB` (`ecb7467`), through
+Vercel instant rollback.
+- Its runtime code matches the pre-release `7a638bc`; PR #5 changed only a comment
+  and a test path.
+- It writes preferences directly. The three migrations stay in place: they only add
+  objects, and that client ignores them.
+- Never remove `save_teacher_schedule_preferences` while `e265b80` or later is serving.
+
+**Remaining untested:**
+- Supavisor (the pooler);
+- lock order on hosted Supabase;
+- sign-up and password-reset email redirects;
+- the production app in a real signed-in browser session;
+- network latency under load.
+
+Guided setup remains inactive.
