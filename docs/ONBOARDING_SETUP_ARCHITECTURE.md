@@ -547,7 +547,15 @@ otherwise it redirects to `/setup`.
   `AppDataProvider` given `readOnlyRepository(projectSetupDraftToAppData(...))`.
   That repository's `save()` writes nowhere; no `CutoverAppDataProvider`,
   `useAppData` caller or localStorage repository exists on the page, and the
-  boundary checks assert it.
+  boundary checks assert it. Its period comes from `previewPeriods()`: the
+  projected active schedule resolved for the lesson's weekday
+  (`resolveActiveSchedule` + `resolveScheduleForWeekday`, as Present's Preview
+  Mode does), keeping the blocks that hold the lesson's class. A lesson belongs
+  to a class and date, not a period, so: one match is shown; several (a class
+  meeting more than once that day, e.g. via a weekday override) get a period
+  picker; none (the class is unassigned that weekday) is said plainly and the
+  display shows no period. The guided draft makes one class per period, so in
+  practice there is one match.
 - **Start my classroom** saves anything outstanding, re-checks the draft, then
   calls `complete()` once. While it runs, further presses do nothing and the steps
   are locked. The operation id is fixed for the draft, so pressing again after an
