@@ -1,7 +1,9 @@
 import { OnboardingScreen } from "@/components/onboarding/OnboardingScreen";
 import { MigrationSetupCard } from "@/components/onboarding/MigrationSetupCard";
 import { RestoreBackupCard } from "@/components/onboarding/RestoreBackupCard";
+import { redirect } from "next/navigation";
 import { resolveDataAuthorityState } from "@/lib/auth/dal";
+import { resolveGuidedSetupContext } from "@/lib/auth/guidedSetupEntry";
 
 /**
  * This route is only ever reached with a resolved membership (the (app)
@@ -10,6 +12,11 @@ import { resolveDataAuthorityState } from "@/lib/auth/dal";
  * never "anonymous"/"no-membership".
  */
 export default async function SetupPage() {
+  // Guided setup (behind its server-side switch, off by default and always
+  // off in production) takes new accounts to /start. Every other account -
+  // and every account while the switch is off - continues below unchanged.
+  if ((await resolveGuidedSetupContext()).entry === "guided-setup") redirect("/start");
+
   const authority = await resolveDataAuthorityState();
   // Guaranteed "local" or "cloud-ready" by the (app) layout above - both
   // carry organizationId/membershipId. "local" is now reserved exclusively
