@@ -1,10 +1,12 @@
-import { formatDateKeyLong } from "@/lib/schedule/localDate";
+import { formatDateKeyLong, weekdayForDateKey } from "@/lib/schedule/localDate";
+import { resolveActiveSchedule } from "@/lib/schedule/resolveActiveSchedule";
+import { resolveScheduleForWeekday } from "@/lib/schedule/resolveBlockOverride";
 import { formatTimeString } from "@/lib/schedule/time";
 import { DEFAULT_CLASSROOM_EXPERIENCE_SETTINGS } from "@/types/classPresentation";
 import type { SchoolYearCalendar } from "@/types/calendar";
 import type { Course } from "@/types/course";
 import type { AppData, DataRepository } from "@/lib/data/types";
-import type { BellSchedule } from "@/types/schedule";
+import type { BellSchedule, ResolvedScheduleBlock } from "@/types/schedule";
 import type { SetupDraft, SetupStep } from "@/types/setupDraft";
 import { DEFAULT_TEACHER_SCHEDULE_PREFERENCES } from "@/types/teacherSchedule";
 import { firstLessonIssues } from "./firstLesson";
@@ -115,6 +117,21 @@ export function baseAppData(reference: { schedules: BellSchedule[]; courses: Cou
 /** What the draft will look like once committed - for the preview only. */
 export function previewAppData(draft: SetupDraft, base: AppData, timestamp: string): AppData {
   return projectSetupDraftToAppData(draft, base, timestamp);
+}
+
+/**
+ * The periods the preview can show the first lesson in: the blocks of the
+ * projected active schedule, resolved for the lesson's weekday, that hold
+ * its class - the same resolution Present's Preview Mode uses for its
+ * period label (components/present/PresentScreen.tsx). A lesson belongs to
+ * a class and a date, not a period, so a class that meets more than once
+ * that day has several equally valid periods; the caller chooses among
+ * them. Empty when the class doesn't meet that weekday (e.g. a weekend).
+ */
+export function previewPeriods(data: AppData, date: string, classSectionId: string): ResolvedScheduleBlock[] {
+  const schedule = resolveActiveSchedule(data.schedules, data.teacherSchedulePreferences);
+  if (!schedule || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return [];
+  return resolveScheduleForWeekday(schedule, weekdayForDateKey(date)).filter((block) => block.classSectionId === classSectionId);
 }
 
 /**

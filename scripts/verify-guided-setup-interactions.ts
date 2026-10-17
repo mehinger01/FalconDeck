@@ -512,6 +512,9 @@ async function scenarioReviewSummaryAndEdit(browser: Browser) {
   await preview.getByText("I can measure angles.").first().waitFor({ state: "attached", timeout: 3000 });
   check("the classroom preview renders the lesson through the Present components", (await preview.innerHTML()).includes("I can measure angles."));
   check("...and is inert, out of the tab order", (await preview.locator("[inert]").count()) === 1);
+  const previewHtml = await preview.innerHTML();
+  check("the preview names the lesson's period, not \"No period selected\"", previewHtml.includes("Period 1") && !/No Period Selected/i.test(previewHtml), previewHtml.slice(0, 400));
+  check("...with no period picker when the class meets once that day", (await preview.locator("select").count()) === 0);
   check("rendering the review saved nothing and completed nothing", (await saves(page)).length === 0 && (await completeCalls(page)).length === 0);
 
   await page.getByRole("button", { name: "Edit teaching day" }).click();

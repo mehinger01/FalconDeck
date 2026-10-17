@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo, useSyncExternalStore } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import { PreviewPresentScreen } from "@/components/present/PreviewPresentScreen";
 import type { AppData } from "@/lib/data/types";
-import { previewAppData, readOnlyRepository, reviewSummary } from "@/lib/onboarding/review";
+import { previewAppData, previewPeriods, readOnlyRepository, reviewSummary } from "@/lib/onboarding/review";
+import { formatTimeString } from "@/lib/schedule/time";
 import { AppDataProvider } from "@/lib/store/AppDataProvider";
 import type { BellSchedule } from "@/types/schedule";
 import type { SetupDraft } from "@/types/setupDraft";
@@ -119,6 +120,10 @@ function ClassroomPreview({ draft, baseData }: { draft: SetupDraft; baseData: Ap
   const providerKey = useMemo(() => JSON.stringify(draft), [draft]);
   // AppDataProvider expects one repository per mount (its load effect is keyed on it); the key above remounts it for a new draft.
   const repository = useMemo(() => readOnlyRepository(data), [data]);
+  // The lesson belongs to a class and date; the period comes from the schedule. Several fit when the class meets more than once that day.
+  const periods = useMemo(() => (ready ? previewPeriods(data, lesson.date, lesson.classSectionId) : []), [ready, data, lesson]);
+  const [chosenPeriodId, setChosenPeriodId] = useState<string | null>(null);
+  const period = periods.find((block) => block.id === chosenPeriodId) ?? periods[0] ?? null;
 
   return (
     <section aria-labelledby="review-preview" className="rounded-lg border border-falcon-brown-700/20 bg-white p-4">
@@ -126,11 +131,33 @@ function ClassroomPreview({ draft, baseData }: { draft: SetupDraft; baseData: Ap
         Your classroom display
       </h2>
       <p className="text-sm text-falcon-brown-700/70">A preview of what your students will see for your first lesson. Nothing is saved from here.</p>
+      {ready && periods.length > 1 && (
+        <p className="mt-2 text-sm">
+          <label htmlFor="review-preview-period" className="text-falcon-brown-800">
+            This class meets in {periods.length} periods that day. Show the display for{" "}
+          </label>
+          <select
+            id="review-preview-period"
+            className="rounded-md border border-falcon-brown-700/30 bg-white px-2 py-1 text-sm"
+            value={period?.id ?? ""}
+            onChange={(event) => setChosenPeriodId(event.target.value)}
+          >
+            {periods.map((block) => (
+              <option key={block.id} value={block.id}>
+                {block.label} ({formatTimeString(block.startTime)} – {formatTimeString(block.endTime)})
+              </option>
+            ))}
+          </select>
+        </p>
+      )}
+      {ready && periods.length === 0 && (
+        <p className="mt-2 text-sm text-falcon-brown-700/70">This class has no period on that day in your schedule, so the display shows it without one.</p>
+      )}
       {isClient && ready ? (
         <div className="mt-3 overflow-hidden rounded-md border border-falcon-brown-700/20" style={{ height: 320 }} aria-hidden="true" inert>
           <div style={{ transform: "scale(0.4)", transformOrigin: "top left", width: "250%", height: 800 }}>
             <AppDataProvider key={providerKey} repository={repository} seedData={() => data}>
-              <PreviewPresentScreen date={lesson.date} classSectionId={lesson.classSectionId} block={null} />
+              <PreviewPresentScreen date={lesson.date} classSectionId={lesson.classSectionId} block={period} />
             </AppDataProvider>
           </div>
         </div>

@@ -28,7 +28,7 @@ import {
   todayInSchoolTime,
   updateLesson,
 } from "@/lib/onboarding/firstLesson";
-import { baseAppData, previewAppData, readOnlyRepository, reviewIssues, reviewSummary } from "@/lib/onboarding/review";
+import { baseAppData, previewAppData, previewPeriods, readOnlyRepository, reviewIssues, reviewSummary } from "@/lib/onboarding/review";
 import { createEmptySetupDraft, createSetupDraftFromSeed, validateSetupDraft } from "@/lib/onboarding/setupDraft";
 import { SetupDraftSession } from "@/lib/onboarding/setupDraftSession";
 import type { SetupRepository, SetupState } from "@/lib/onboarding/setupRepository";
@@ -226,6 +226,29 @@ async function pureChecks() {
   check("a teaching day with no class blocks, pointing at step 1", noClass.some((issue) => issue.step === "teaching-day"), noClass);
   const projected = previewAppData(reviewReady, baseAppData({ schedules: [], courses: [], calendar: null }), new Date(0).toISOString());
   check("the preview data holds the lesson for its class and date", projected.lessons.length === 1 && projected.lessons[0].classSectionId === reviewBase.classSections[0].id && projected.lessons[0].date === "2026-10-19");
+  const lessonSection = reviewBase.classSections[0].id;
+  const onePeriod = previewPeriods(projected, "2026-10-19", lessonSection);
+  check("the preview shows the lesson in its class's period (not \"No period selected\")", onePeriod.length === 1 && onePeriod[0].label === teachingDayPeriods(reviewReady)[0].label, onePeriod);
+  const sharedMapped = setPeriodCourse(chooseSharedSchedule(createEmptySetupDraft(), regular), "p3", { kind: "new", name: "Geometry" }, [], ids, uuid);
+  const sharedSection = sharedMapped.classSections[0].id;
+  const sharedProjected = previewAppData(updateLesson(sharedMapped, { classSectionId: sharedSection, date: "2026-10-19", learningTarget: "x" }, ids), baseAppData({ schedules: [regular], courses: [], calendar: null }), new Date(0).toISOString());
+  const sharedPeriods = previewPeriods(sharedProjected, "2026-10-19", sharedSection);
+  check("on a school schedule, the period comes from the teacher's assignment", sharedPeriods.length === 1 && sharedPeriods[0].blockId === "p3", sharedPeriods);
+  const twice: AppData = {
+    ...sharedProjected,
+    schedules: sharedProjected.schedules.map((s) => ({
+      ...s,
+      blocks: s.blocks.map((b) => (b.id === "p1" ? { ...b, classSectionId: sharedSection, overrides: [{ id: "o1", weekday: "monday" as const, startTime: "08:30" }] } : b)),
+    })),
+  };
+  const twicePeriods = previewPeriods(twice, "2026-10-19", sharedSection);
+  check("a class meeting twice that day yields both periods, in schedule order, with that weekday's override applied", twicePeriods.length === 2 && twicePeriods[0].blockId === "p1" && twicePeriods[0].startTime === "08:30" && twicePeriods[1].blockId === "p3", twicePeriods);
+  const offMonday: AppData = {
+    ...sharedProjected,
+    schedules: sharedProjected.schedules.map((s) => ({ ...s, blocks: s.blocks.map((b) => (b.id === "p3" ? { ...b, overrides: [{ id: "o2", weekday: "monday" as const, classSectionId: null }] } : b)) })),
+  };
+  check("a class unassigned on the lesson's weekday has no period that day (and does the next day)", previewPeriods(offMonday, "2026-10-19", sharedSection).length === 0 && previewPeriods(offMonday, "2026-10-20", sharedSection).length === 1);
+  check("no active schedule or no date: no period", previewPeriods({ ...sharedProjected, teacherSchedulePreferences: { ...sharedProjected.teacherSchedulePreferences, activeBellScheduleId: null } }, "2026-10-19", sharedSection).length === 0 && previewPeriods(sharedProjected, "", sharedSection).length === 0);
   const previewRepo = readOnlyRepository(projected);
   check("the preview's repository serves that data and writes nowhere", (await previewRepo.load()) === projected && (await previewRepo.save({ ...projected, lessons: [] })).ok && (await previewRepo.load()).lessons.length === 1);
 
