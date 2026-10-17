@@ -533,6 +533,20 @@ function boundaryChecks() {
   check("the switch is a server-only variable (no NEXT_PUBLIC_ copy anywhere)", !walk(join(process.cwd(), "lib")).concat(walk(join(process.cwd(), "app")), walk(join(process.cwd(), "components"))).some((path) => /NEXT_PUBLIC_FALCON_GUIDED_SETUP/.test(readFileSync(path, "utf8"))));
   const setupPage = readFileSync(join(process.cwd(), "app/(app)/setup/page.tsx"), "utf8");
   check("/setup sends only guided accounts to /start", /resolveGuidedSetupContext\(\)\)\.entry === "guided-setup"\) redirect\("\/start"\)/.test(setupPage));
+  const entrySource = readFileSync(join(process.cwd(), "lib/auth/guidedSetupEntry.ts"), "utf8");
+  check(
+    "the layout-level redirect is a no-op with the switch off: it goes through resolveGuidedSetupContext, which returns before any RPC",
+    /export async function redirectToGuidedSetupIfDue\(\): Promise<void> \{\s*if \(\(await resolveGuidedSetupContext\(\)\)\.entry === "guided-setup"\) redirect\("\/start"\);\s*\}/.test(entrySource) &&
+      /resolveGuidedSetupContext\(\): Promise<GuidedSetupContext> \{\s*if \(!isGuidedSetupEnabled\(\)\) return \{ entry: "existing-app" \};/.test(entrySource),
+  );
+  for (const layout of ["app/(app)/layout.tsx", "app/(presentation)/present/layout.tsx"]) {
+    const layoutSource = readFileSync(join(process.cwd(), layout), "utf8");
+    const at = layoutSource.indexOf("await redirectToGuidedSetupIfDue();");
+    check(
+      `${layout} sends guided accounts to /start before ActiveScheduleGate can (after the school is resolved, before the provider renders)`,
+      at > layoutSource.indexOf('if (resolution.state !== "resolved")') && at < layoutSource.indexOf("<CutoverAppDataProvider") && layoutSource.indexOf('if (resolution.state !== "resolved")') > 0,
+    );
+  }
 }
 
 async function main() {

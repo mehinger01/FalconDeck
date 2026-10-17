@@ -1,4 +1,5 @@
 import "server-only";
+import { redirect } from "next/navigation";
 import { resolveActiveOrganization, type ActiveMembership } from "@/lib/auth/dal";
 import { deriveDataAuthorityState } from "@/lib/auth/dataAuthority";
 import { SupabaseSetupRepository, type SetupRpcClient } from "@/lib/data/supabaseSetupRepository";
@@ -39,4 +40,17 @@ export async function resolveGuidedSetupContext(): Promise<GuidedSetupContext> {
     return { entry: "existing-app" };
   }
   return { entry: "guided-setup", membership: resolution.membership, setupState };
+}
+
+/**
+ * Sends a guided-setup account to /start from an app layout. It has to be
+ * the layout, not a page: the layouts wrap every page in ActiveScheduleGate,
+ * which renders nothing in place of the page for an account with no active
+ * schedule (every guided account) and replaces the URL with
+ * /setup/schedule - so a redirect thrown by the page (/setup's) never reaches
+ * the browser, and a new account signing in would land on the old schedule
+ * screen. A no-op while the switch is off.
+ */
+export async function redirectToGuidedSetupIfDue(): Promise<void> {
+  if ((await resolveGuidedSetupContext()).entry === "guided-setup") redirect("/start");
 }

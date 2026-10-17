@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { destinationForResolution, requireAuthenticatedUser, resolveActiveOrganization } from "@/lib/auth/dal";
+import { redirectToGuidedSetupIfDue } from "@/lib/auth/guidedSetupEntry";
 import { deriveDataAuthorityState } from "@/lib/auth/dataAuthority";
 import { CutoverAppDataProvider } from "@/lib/store/CutoverAppDataProvider";
 import type { ReactNode } from "react";
@@ -38,6 +39,7 @@ export default async function PresentationLayout({ children }: { children: React
   await requireAuthenticatedUser();
   const resolution = await resolveActiveOrganization();
   if (resolution.state !== "resolved") redirect(destinationForResolution(resolution));
+  await redirectToGuidedSetupIfDue();
 
   const authority = deriveDataAuthorityState(resolution);
 
