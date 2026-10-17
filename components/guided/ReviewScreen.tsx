@@ -117,6 +117,8 @@ function ClassroomPreview({ draft, baseData }: { draft: SetupDraft; baseData: Ap
   const ready = lesson !== null && /^\d{4}-\d{2}-\d{2}$/.test(lesson.date) && draft.classSections.some((s) => s.id === lesson.classSectionId);
   const data = useMemo(() => previewAppData(draft, baseData, new Date(0).toISOString()), [draft, baseData]);
   const providerKey = useMemo(() => JSON.stringify(draft), [draft]);
+  // AppDataProvider expects one repository per mount (its load effect is keyed on it); the key above remounts it for a new draft.
+  const repository = useMemo(() => readOnlyRepository(data), [data]);
 
   return (
     <section aria-labelledby="review-preview" className="rounded-lg border border-falcon-brown-700/20 bg-white p-4">
@@ -127,7 +129,7 @@ function ClassroomPreview({ draft, baseData }: { draft: SetupDraft; baseData: Ap
       {isClient && ready ? (
         <div className="mt-3 overflow-hidden rounded-md border border-falcon-brown-700/20" style={{ height: 320 }} aria-hidden="true" inert>
           <div style={{ transform: "scale(0.4)", transformOrigin: "top left", width: "250%", height: 800 }}>
-            <AppDataProvider key={providerKey} repository={readOnlyRepository(data)} seedData={() => data}>
+            <AppDataProvider key={providerKey} repository={repository} seedData={() => data}>
               <PreviewPresentScreen date={lesson.date} classSectionId={lesson.classSectionId} block={null} />
             </AppDataProvider>
           </div>

@@ -502,7 +502,8 @@ function boundaryChecks() {
   const providerUsers = guidedFiles.filter(({ source }) => /AppDataProvider/.test(source));
   check(
     "the only AppDataProvider is the review preview's, given an explicit read-only repository",
-    providerUsers.length === 1 && providerUsers[0].path.endsWith("ReviewScreen.tsx") && /<AppDataProvider[^>]*repository=\{readOnlyRepository\(/.test(providerUsers[0].source),
+    providerUsers.length === 1 && providerUsers[0].path.endsWith("ReviewScreen.tsx") && /<AppDataProvider[^>]*repository=\{repository\}/.test(providerUsers[0].source) &&
+      /const repository = useMemo\(\(\) => readOnlyRepository\(/.test(providerUsers[0].source),
     providerUsers.map(({ path }) => path),
   );
   check("the guided components never use the operational save engine", guidedFiles.filter(({ path }) => path.includes("components")).every(({ source }) => !/SupabaseDataRepository|DataRepository|\.save\(/.test(source)));
