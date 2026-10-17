@@ -573,6 +573,7 @@ async function scenarioFinishWithPendingTextAndDuplicateClicks(browser: Browser)
   check("one course, one class, one lesson", done[0]?.courses === 1 && done[0].classSections === 1 && done[0].lessons === 1);
   check("success navigates to /present, once", deepEqualJson(await navigations(page), ["/present"]));
   check("the screen says the classroom is ready, with a link to /present", (await page.getByRole("link", { name: "Open your classroom display" }).getAttribute("href")) === "/present");
+  check("...and that it is opening it (this tab is navigating)", (await page.locator("main").innerText()).includes("Opening your classroom display…"));
   check("no unsaved-work warning blocks leaving", await page.evaluate(() => {
     const event = new Event("beforeunload", { cancelable: true });
     window.dispatchEvent(event);
@@ -630,6 +631,7 @@ async function scenarioLostSuccessResponse(browser: Browser) {
   await editing.getByRole("heading", { name: "Your classroom is ready" }).waitFor({ timeout: 3000 });
   check("an edit's save learns setup is complete and shows the finished state, not the form", (await editing.getByRole("textbox").count()) === 0);
   check("...without committing or navigating by itself", (await commits(editing)).length === 0 && (await navigations(editing)).length === 0);
+  check("...and without claiming to open the display: it offers the link", !(await editing.locator("main").innerText()).includes("Opening your classroom display") && (await editing.getByRole("link", { name: "Open your classroom display" }).count()) === 1);
   await editing.close();
 }
 
@@ -709,6 +711,28 @@ async function scenarioNoLongerEligible(browser: Browser) {
   await page.close();
 }
 
+async function scenarioRejectedCompletion(browser: Browser) {
+  console.log("25. A refused completion: the server's wording only when it was written for teachers; never a raw database error");
+  const page = await mount(browser, reviewDraft());
+  await setRepo(page, { completeMode: "reject-validation" });
+  await startButton(page).click();
+  await page.getByText("Setup couldn't finish. Nothing was created.").waitFor({ timeout: 3000 });
+  check("a validation refusal shows the server's own wording", (await page.locator("main").innerText()).includes("Assign at least one class to a period."));
+  await setRepo(page, { completeMode: "reject-unexpected" });
+  await startButton(page).click();
+  await waitFor(page, async () => (await completeCalls(page)).length === 2);
+  await page.getByText("Something went wrong on our side.").waitFor({ timeout: 3000 });
+  const text = await page.locator("main").innerText();
+  check("an unexpected refusal shows plain wording, not the database message", !text.includes("duplicate key") && !text.includes("lessons_pkey") && !text.includes("Assign at least one class"), text.slice(0, 300));
+  check("...nothing was committed or navigated, and the review stays usable", (await commits(page)).length === 0 && (await navigations(page)).length === 0 && !(await startButton(page).isDisabled()));
+  await setRepo(page, { completeMode: "ok" });
+  await startButton(page).click();
+  check("pressing Start again finishes", await waitFor(page, async () => (await navigations(page)).length === 1));
+  const calls = await completeCalls(page);
+  check("every attempt used the same operation id; one commit", calls.length === 3 && calls.every((c) => c.operationId === calls[0].operationId) && (await commits(page)).length === 1, calls);
+  await page.close();
+}
+
 async function main() {
   bundled = await bundle();
   const browser = await chromium.launch();
@@ -735,6 +759,7 @@ async function main() {
     await scenarioSharedScheduleChanged(browser);
     await scenarioPreferencesChanged(browser);
     await scenarioNoLongerEligible(browser);
+    await scenarioRejectedCompletion(browser);
   } finally {
     await browser.close();
   }

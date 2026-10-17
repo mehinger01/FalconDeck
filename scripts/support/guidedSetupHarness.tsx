@@ -19,7 +19,7 @@ import { GuidedSetup, type GuidedReference, type GuidedSetupProps } from "@/comp
 import type { SetupCompletion, SetupRepository, StoredSetupDraft } from "@/lib/onboarding/setupRepository";
 import type { SetupDraft, SetupSeed } from "@/types/setupDraft";
 
-type CompleteMode = "ok" | "fail-before-commit" | "lose-answer-after-commit" | "shared-schedule-changed" | "preferences-changed" | "no-longer-eligible";
+type CompleteMode = "ok" | "fail-before-commit" | "reject-validation" | "reject-unexpected" | "lose-answer-after-commit" | "shared-schedule-changed" | "preferences-changed" | "no-longer-eligible";
 
 interface HarnessRepo {
   stored: StoredSetupDraft | null;
@@ -110,6 +110,15 @@ const repository: SetupRepository = {
       record("unknown (nothing committed)");
       return { ok: false, kind: "unknown", message: "TypeError: Failed to fetch" };
     }
+    // Refusals, as PostgREST reports them: the setup functions' own validation (22023), and a raw database error.
+    if (repo.completeMode === "reject-validation") {
+      record("rejected (validation)");
+      return { ok: false, kind: "rejected", message: "Assign at least one class to a period.", code: "22023" };
+    }
+    if (repo.completeMode === "reject-unexpected") {
+      record("rejected (unexpected)");
+      return { ok: false, kind: "rejected", message: 'duplicate key value violates unique constraint "lessons_pkey"', code: "23505" };
+    }
     if (!repo.stored) {
       record("draft-missing");
       return { ok: true, value: { status: "conflict", reason: "draft-missing" } };
@@ -164,7 +173,12 @@ createRoot(document.getElementById("root") as HTMLElement).render(
     organizationId="org-harness"
     organizationName="Harness School"
     repository={repository}
-    onCompleted={() => repo.navigations.push("/present")}
+    onCompleted={() => {
+      // Recorded at the moment the page would navigate: would the unsaved-work warning stop it?
+      const leaving = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(leaving);
+      repo.navigations.push(leaving.defaultPrevented ? "/present (blocked by the leave-page warning)" : "/present");
+    }}
     reloadReference={async () => repo.nextReference}
     {...window.__HARNESS}
   />,

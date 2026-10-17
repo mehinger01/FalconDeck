@@ -86,7 +86,9 @@ export class SupabaseSetupRepository implements SetupRepository {
       // applied. An error with no code is supabase-js reporting that the
       // request itself failed (e.g. the fetch threw) - the outcome is
       // unknown.
-      return { ok: false, kind: response.error.code ? "rejected" : "unknown", message: response.error.message };
+      return response.error.code
+        ? { ok: false, kind: "rejected", message: response.error.message, code: response.error.code }
+        : { ok: false, kind: "unknown", message: response.error.message };
     }
 
     const value = parse(response.data);

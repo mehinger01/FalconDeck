@@ -208,7 +208,7 @@ function wiringChecks() {
   check("the /present layout is untouched by guided setup", !/guided/i.test(presentLayout));
   check("the provider hands guidedSetupDue to the gate", /<ActiveScheduleGate enabled=\{authority\.kind === "cloud-ready"\} guidedSetupDue=\{guidedSetupDue\}>/.test(read("lib/store/CutoverAppDataProvider.tsx")));
   check("/start still requires the guided entry", /if \(context\.entry !== "guided-setup"\) redirect\("\/setup"\)/.test(read("app/(guided)/start/page.tsx")));
-  check("the guided entry is decided by the switch first (no lookup while off)", /if \(!isGuidedSetupEnabled\(\)\) return \{ entry: "existing-app" \};/.test(read("lib/auth/guidedSetupEntry.ts")));
+  check("the guided entry is decided by the switch first (no lookup while off)", /resolveGuidedSetupContext = cache\(async \(\): Promise<GuidedSetupContext> => \{\s*if \(!isGuidedSetupEnabled\(\)\) return \{ entry: "existing-app" \};/.test(read("lib/auth/guidedSetupEntry.ts")));
 }
 
 async function main() {

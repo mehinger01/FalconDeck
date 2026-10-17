@@ -1,4 +1,5 @@
 import "server-only";
+import { cache } from "react";
 import { resolveActiveOrganization, type ActiveMembership } from "@/lib/auth/dal";
 import { deriveDataAuthorityState } from "@/lib/auth/dataAuthority";
 import { SupabaseSetupRepository, type SetupRpcClient } from "@/lib/data/supabaseSetupRepository";
@@ -22,9 +23,10 @@ export type GuidedSetupContext =
  * state unreadable - answers "existing-app".
  *
  * Skips the setup RPC entirely when the switch is off, so with guided setup
- * off a request does exactly what it did before.
+ * off a request does exactly what it did before. Memoized per request
+ * (like lib/auth/dal.ts): the (app) layout and the /setup page both ask.
  */
-export async function resolveGuidedSetupContext(): Promise<GuidedSetupContext> {
+export const resolveGuidedSetupContext = cache(async (): Promise<GuidedSetupContext> => {
   if (!isGuidedSetupEnabled()) return { entry: "existing-app" };
   const resolution = await resolveActiveOrganization();
   if (resolution.state !== "resolved") return { entry: "existing-app" };
@@ -39,4 +41,4 @@ export async function resolveGuidedSetupContext(): Promise<GuidedSetupContext> {
     return { entry: "existing-app" };
   }
   return { entry: "guided-setup", membership: resolution.membership, setupState };
-}
+});

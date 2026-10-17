@@ -203,7 +203,12 @@ export function GuidedSetup(props: GuidedSetupProps) {
 
   const submitting = useRef(false);
   const [finishIssues, setFinishIssues] = useState<ReviewIssue[] | null>(null);
-  const onCompleted = props.onCompleted ?? openClassroomDisplay;
+  // True once this tab is about to open the classroom display; a tab that only learns setup finished elsewhere offers the link instead.
+  const [opening, setOpening] = useState(false);
+  const onCompleted = () => {
+    setOpening(true);
+    (props.onCompleted ?? openClassroomDisplay)();
+  };
 
   /**
    * Saves anything outstanding, then commits through complete_setup. One
@@ -290,7 +295,7 @@ export function GuidedSetup(props: GuidedSetupProps) {
       <Shell organizationName={organizationName} step={step} heading={heading} indicator={null}>
         <div role="status" className="rounded-lg border border-emerald-700/30 bg-emerald-50 p-6 text-emerald-950">
           <h2 className="text-lg font-semibold">Your classroom is ready</h2>
-          <p className="mt-2 text-sm">Setup is finished. Opening your classroom display…</p>
+          <p className="mt-2 text-sm">{opening ? "Setup is finished. Opening your classroom display…" : "Setup is finished."}</p>
           <a href="/present" className="mt-4 inline-block rounded-md bg-falcon-brown-900 px-3 py-2 text-sm font-semibold text-falcon-cream-100">
             Open your classroom display
           </a>
@@ -447,7 +452,11 @@ function CompletionStatus({
     return (
       <div role="alert" className="rounded-md border border-red-700/40 bg-red-50 px-4 py-3 text-sm text-red-900">
         <p className="font-semibold">Setup couldn&apos;t finish. Nothing was created.</p>
-        <p>{status.message}</p>
+        <p>
+          {status.userFacing
+            ? status.message
+            : "Something went wrong on our side. Your setup is saved - press Start my classroom to try again, or come back later."}
+        </p>
       </div>
     );
   }
