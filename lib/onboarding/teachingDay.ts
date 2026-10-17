@@ -121,6 +121,7 @@ export function teachingDayIssues(draft: SetupDraft, reference: { courses: Cours
 export interface DraftSummary {
   scheduleName: string | null;
   classNames: string[];
+  lunchWave: SetupDraft["lunchWave"];
 }
 
 /** A short description of a draft, for choosing between two versions in a conflict. */
@@ -132,7 +133,7 @@ export function summarizeDraft(draft: SetupDraft, schedules: BellSchedule[]): Dr
       : schedule.mode === "own"
         ? schedule.name.trim() || "Your own schedule"
         : (schedules.find((candidate) => candidate.id === schedule.scheduleId)?.name ?? "Your school's schedule");
-  return { scheduleName, classNames: draft.classSections.map((section) => section.name) };
+  return { scheduleName, classNames: draft.classSections.map((section) => section.name), lunchWave: draft.lunchWave };
 }
 
 // ---------------------------------------------------------------------------

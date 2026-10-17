@@ -58,7 +58,7 @@ export function GuidedSetup(props: GuidedSetupProps) {
     });
   }, []);
 
-  const indicator = saveIndicator(status, dirty, typing.size > 0);
+  const indicator = saveIndicator(status, dirty, typing.size > 0, props.setupState.status === "in-progress");
   const unsaved = dirty || typing.size > 0 || status.kind === "saving" || status.kind === "save-failed" || status.kind === "conflict";
 
   // Unsaved-work protection: the browser asks before leaving or reloading.

@@ -30,6 +30,7 @@ import {
   removeOwnBlock,
   setPeriodCourse,
   startOwnSchedule,
+  summarizeDraft,
   teachingDayIssues,
   teachingDayPeriods,
   updateOwnBlock,
@@ -37,6 +38,7 @@ import {
 import type { Course } from "@/types/course";
 import type { BellSchedule } from "@/types/schedule";
 import type { SetupDraft, SetupSeed } from "@/types/setupDraft";
+import { saveIndicator } from "@/components/guided/SaveStatus";
 import { createTestDatabase, type RpcClient, type TestDatabase } from "./support/testDatabase";
 
 let failures = 0;
@@ -165,6 +167,18 @@ function pureChecks() {
   check("adopting changed preferences switches to the schedule now active and its lunch wave", adopted.schedule?.mode === "shared" && adopted.schedule.scheduleId === "s-late" && adopted.lunchWave === "C");
   const sameSchedule = adoptReportedPreferences(mapped, { activeBellScheduleId: "s-regular", lunchWave: "C" }, [regular, late]);
   check("adopting a lunch-only change keeps the classes", sameSchedule.classSections.length === 2 && sameSchedule.lunchWave === "C");
+  check("a conflict summary includes the lunch wave", summarizeDraft(mapped, [regular]).lunchWave === "A" && summarizeDraft(mapped, [regular]).scheduleName === "Regular Day");
+
+  console.log("7b. What the save indicator says");
+  const label = (...args: Parameters<typeof saveIndicator>) => saveIndicator(...args).label;
+  check("fresh, untouched: nothing to save", label({ kind: "idle" }, false, false) === "Nothing to save yet");
+  check("resumed, untouched: already saved (not \"nothing to save\")", label({ kind: "idle" }, false, false, true) === "All changes saved");
+  check("typing not yet committed: unsaved", label({ kind: "saved" }, false, true) === "Unsaved changes…");
+  check("edit waiting to save: unsaved, never \"saved\"", label({ kind: "saved" }, true, false, true) === "Unsaved changes…");
+  check("in flight: saving", label({ kind: "saving" }, false, false) === "Saving…");
+  const failedIndicator = saveIndicator({ kind: "save-failed", message: "TypeError: Failed to fetch" }, true, false, true);
+  check("failed: \"Not saved\" with Retry, and no raw error text", failedIndicator.label === "Not saved" && failedIndicator.tone === "warn" && failedIndicator.canRetry && !("detail" in failedIndicator && failedIndicator.detail));
+  check("conflict: not saved, needs a choice, no Retry", label({ kind: "conflict", reason: "stale-revision", serverDraft: null }, true, false) === "Not saved — needs your choice");
 }
 
 // ---------------------------------------------------------------------------

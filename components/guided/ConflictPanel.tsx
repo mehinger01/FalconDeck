@@ -15,6 +15,7 @@ function Summary({ title, summary }: { title: string; summary: DraftSummary }) {
     <div className="flex-1 rounded-md border border-falcon-brown-700/20 bg-white p-3 text-sm">
       <p className="font-semibold text-falcon-brown-900">{title}</p>
       <p className="mt-1 text-falcon-brown-700/80">Schedule: {summary.scheduleName ?? "not chosen yet"}</p>
+      <p className="text-falcon-brown-700/80">Lunch: {LUNCH_LABEL[summary.lunchWave]}</p>
       <p className="text-falcon-brown-700/80">
         {summary.classNames.length === 0 ? "No classes yet" : `${summary.classNames.length} class${summary.classNames.length === 1 ? "" : "es"}: ${summary.classNames.join(", ")}`}
       </p>
