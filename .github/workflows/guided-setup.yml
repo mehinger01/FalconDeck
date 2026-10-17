@@ -1,0 +1,46 @@
+# Guided setup checks, on their own so they report independently of the
+# aggregate `npm run verify`. Local harnesses only: embedded PostgreSQL
+# (started and deleted by the teaching-day suite) and Playwright's Chromium.
+# No secrets, no hosted Supabase, no network services beyond package and
+# browser downloads.
+name: Guided setup
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: guided-setup-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guided-setup:
+    name: Guided setup suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium and its system dependencies
+        run: npx playwright install --with-deps chromium
+
+      - name: Draft logic, boundaries and completion against embedded PostgreSQL
+        run: npm run verify:guided-setup-teaching-day
+
+      - name: Guided screens in Chromium
+        run: npm run verify:guided-setup-interactions
+
+      - name: Entry routing (decisions and the rendered gate)
+        run: npm run verify:guided-setup-routing
