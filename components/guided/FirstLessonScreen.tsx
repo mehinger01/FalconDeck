@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
   addAgendaItem,
   addAnnouncement,
@@ -41,7 +41,20 @@ export interface FirstLessonScreenProps {
 export function FirstLessonScreen({ draft, schoolSchedules, schoolCalendar, disabled, onEdit, onPendingChange }: FirstLessonScreenProps) {
   const lesson = draft.firstLesson;
   const targetField = useRef<HTMLInputElement>(null);
-  const [today] = useState(() => todayInSchoolTime(draft, schoolSchedules, new Date()));
+  // "Today" follows the clock: a page left open overnight must not keep offering yesterday.
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const tick = () => setNow(new Date());
+    const timer = window.setInterval(tick, 60_000);
+    window.addEventListener("focus", tick);
+    document.addEventListener("visibilitychange", tick);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", tick);
+      document.removeEventListener("visibilitychange", tick);
+    };
+  }, []);
+  const today = todayInSchoolTime(draft, schoolSchedules, now);
   const dateNote = lesson?.date ? describeLessonDate(draft, { schoolSchedules, schoolCalendar }, lesson.date) : null;
   const classId = useId();
   const dateId = useId();
@@ -93,7 +106,17 @@ export function FirstLessonScreen({ draft, schoolSchedules, schoolCalendar, disa
             onChange={(e) => onEdit((d) => updateLesson(d, { date: e.target.value }))}
           />
           {today && lesson?.date !== today && (
-            <button type="button" className={BUTTON_SECONDARY} onClick={() => onEdit((d) => updateLesson(d, { date: today }))}>
+            <button
+              type="button"
+              className={BUTTON_SECONDARY}
+              onClick={() =>
+                onEdit((d) => {
+                  // Read the date at the moment of the click, not when the label last rendered.
+                  const current = todayInSchoolTime(d, schoolSchedules, new Date());
+                  return current ? updateLesson(d, { date: current }) : d;
+                })
+              }
+            >
               Today ({formatDateKeyLong(today)})
             </button>
           )}

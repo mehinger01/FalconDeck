@@ -380,6 +380,31 @@ async function scenarioLessonDateWithCalendar(browser: Browser) {
   await page.close();
 }
 
+async function scenarioTodayAcrossMidnight(browser: Browser) {
+  console.log("15. A page left open overnight: \"Today\" follows the school's clock");
+  const draft = ownDraft();
+  draft.step = "first-lesson";
+  const page = await browser.newPage();
+  // 11:50 pm on Friday, October 16 in Detroit (the schedule's time zone).
+  await page.clock.install({ time: new Date("2026-10-17T03:50:00Z") });
+  await page.setContent('<!doctype html><html><body><div id="root"></div></body></html>');
+  await page.evaluate((value) => {
+    (window as unknown as { __HARNESS: unknown }).__HARNESS = value;
+  }, props(draft));
+  await page.addScriptTag({ content: bundled });
+  await page.getByRole("heading", { level: 1 }).waitFor();
+  const todayButton = page.getByRole("button", { name: /^Today \(/ });
+  check("before midnight it offers Friday, October 16", (await todayButton.innerText()) === "Today (Friday, October 16, 2026)", await todayButton.innerText());
+  await page.clock.runFor(20 * 60 * 1000); // to 12:10 am Saturday
+  await page.waitForTimeout(100);
+  check("after midnight it offers Saturday, October 17", (await todayButton.innerText()) === "Today (Saturday, October 17, 2026)", await todayButton.innerText());
+  await todayButton.click();
+  await page.clock.runFor(1000);
+  await page.waitForTimeout(200);
+  check("and choosing it saves October 17", (await lessonOf(page))?.date === "2026-10-17", await lessonOf(page));
+  await page.close();
+}
+
 async function scenarioLessonClassRemoved(browser: Browser) {
   console.log("12. The lesson's class goes away on step 1: the lesson keeps its content and asks for a class again");
   const draft = ownDraft();
@@ -427,6 +452,7 @@ async function main() {
     await scenarioSafariAddWhilePending(browser);
     await scenarioLessonStep(browser);
     await scenarioLessonDateWithCalendar(browser);
+    await scenarioTodayAcrossMidnight(browser);
     await scenarioLessonClassRemoved(browser);
     await scenarioConflictShowsPeriodCount(browser);
   } finally {
