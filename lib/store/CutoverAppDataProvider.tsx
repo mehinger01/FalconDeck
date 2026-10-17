@@ -66,7 +66,16 @@ export function useCurrentOrganizationId(): string | null {
  * transition a remount instead of a prop swap into an already-hydrated
  * instance.
  */
-export function CutoverAppDataProvider({ authority, children }: { authority: DataAuthorityState; children: ReactNode }) {
+export function CutoverAppDataProvider({
+  authority,
+  guidedSetupDue = false,
+  children,
+}: {
+  authority: DataAuthorityState;
+  /** Server-resolved: guided setup is on and due for this account. Only (app)/layout.tsx sets it; see gateDestination. */
+  guidedSetupDue?: boolean;
+  children: ReactNode;
+}) {
   if (process.env.NODE_ENV !== "production") {
     // Dev-only visibility into which authority state the server resolved -
     // not rendered UI, never shipped to production. See the Phase A audit's
@@ -100,7 +109,9 @@ export function CutoverAppDataProvider({ authority, children }: { authority: Dat
           see ActiveScheduleGate.tsx's own doc comment for the cutover-audit
           bug this fixes. */}
       <OrganizationIdContext.Provider value={authority.kind === "cloud-ready" ? authority.organizationId : null}>
-        <ActiveScheduleGate enabled={authority.kind === "cloud-ready"}>{children}</ActiveScheduleGate>
+        <ActiveScheduleGate enabled={authority.kind === "cloud-ready"} guidedSetupDue={guidedSetupDue}>
+          {children}
+        </ActiveScheduleGate>
       </OrganizationIdContext.Provider>
     </AppDataProvider>
   );

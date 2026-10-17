@@ -623,17 +623,25 @@ has been changed again since the draft was created (§8.4).
 "Existing app" means today's behaviour exactly: `/setup`, `ActiveScheduleGate`,
 `MigrationSetupCard`. Nothing calls `deriveSetupEntry` yet.
 
-**As built (§9.3):** with the switch on, the entry is enforced in the `(app)` and
-`/present` layouts (`redirectToGuidedSetupIfDue()`), after the school is resolved
-and before `CutoverAppDataProvider` renders. It cannot live in `/setup`'s page
-alone: `ActiveScheduleGate` renders nothing in place of the page for an account
-with no active schedule (every guided account) and replaces the URL with
-`/setup/schedule`, so the page's redirect never reached the browser and a new
-account signing in landed on the old schedule screen (found on staging). With the
-switch off the helper returns before any RPC. A consequence: while guided setup is
-due, every ordinary route, `/setup/schedule` and `/schedule` included, goes to
-`/start`; only a tab already open from before can change schedule preferences,
-which is what the preferences-changed recovery exists for.
+**As built (§9.3): entry points.** Only `/` and `/setup` send an account to
+guided setup; `/start` itself still requires the guided entry and the switch, and
+ordinary routes opened directly behave exactly as before.
+- `/` (`app/page.tsx`, outside every layout): `rootDestination(entry)`: `/start`
+  when guided setup is due, otherwise `/present` as before. With the switch off it
+  never reads the request, so it stays a static redirect to `/present`.
+- `/setup`: its page redirects guided accounts to `/start`, but `ActiveScheduleGate`
+  renders nothing in place of the page for an account with no active schedule and
+  replaces the URL with `/setup/schedule`, so that redirect never reached the
+  browser (found on staging: a new account signing in saw the old schedule
+  screen). The `(app)` layout now passes `guidedSetupDue` (false, with no lookup,
+  while the switch is off) through `CutoverAppDataProvider` to the gate, and
+  `gateDestination()` sends bare `/setup` to `/start` in that one case. Every other
+  path keeps the gate's existing rule; the `/present` layout passes nothing.
+- Cost: with the switch on, every `(app)` page load reads the setup state once.
+
+Covered by `npm run verify:guided-setup-routing`: the decisions for each kind of
+account with the switch on, off and in production, and the real gate rendered in
+Chromium.
 
 ---
 
