@@ -545,6 +545,16 @@ otherwise it redirects to `/setup`.
 - **Review** summarizes the schedule, each period's class, the lunch wave and the
   lesson, with Edit actions back to step 1 or 2. Every step change commits typed
   text and waits for the save first.
+- **Optional lesson items** (agenda, resources, announcements) are draft-backed
+  like every other field: "Add …" appends an empty entry to the draft and focuses
+  it, and each entry is edited in place, so typed text reports as unsaved,
+  autosaves and survives a reload. Empty entries, and resources missing a title
+  or link, are kept and reported (`firstLessonIssues`), blocking Continue and
+  Start until filled in or removed.
+- **A failed save at an action:** when Back, Edit, Continue or Start stops because
+  its save failed, an alert next to the buttons takes focus, says nothing was
+  lost, and offers "Retry saving". Start stays pressable; pressing it saves again
+  first.
 - **Preview (§9.1.3):** the existing `PreviewPresentScreen`, inside an
   `AppDataProvider` given `readOnlyRepository(projectSetupDraftToAppData(...))`.
   That repository's `save()` writes nowhere; no `CutoverAppDataProvider`,
@@ -724,6 +734,7 @@ Chromium.
 | Ordinary preference writes and completion, each order, first row and existing row | concurrency §10 |
 | Preferences changed between reading the seed and the first draft save; baseline cannot be chosen by the caller | db §22 |
 | Guided screens: one commit for repeated presses; failed and lost answers retried under the same operation id; each conflict's recovery; pending text committed before Edit, Back, Continue and Start; no leave-page warning at the moment of navigation; refusals never show raw database errors | `verify:guided-setup-interactions` §16–25 (real Chromium) |
+| Optional items are draft-backed (pending, saved, reloaded, validated); a failed save stops Back, Continue and Start at the action with a focused Retry | `verify:guided-setup-interactions` §26–27 |
 | Entry: `/` and `/setup` reach guided setup; ordinary routes, established, completed, legacy, unreadable, switch-off and production unchanged; the real gate rendered | `verify:guided-setup-routing` |
 | Raw versus validation refusals classified from real `complete_setup` errors | db §6, §13 (`userFacing`) |
 | Guided completion against PostgreSQL: lost answer then replay, rows created once, reload leaves guided setup, `/present`'s repository loads the committed lesson | `verify:guided-setup-teaching-day` §14 |
@@ -737,8 +748,10 @@ Chromium.
 | Admin edit of a shared schedule overlapping a completion | concurrency §9 |
 
 The three `verify:onboarding-setup-*` scripts and `verify:stale-tab-save-safety`
-are in `npm run verify`. The three `verify:guided-setup-*` scripts are not yet
-(two of them drive Chromium through Playwright); run them on their own. The database
+are in `npm run verify`. The three `verify:guided-setup-*` scripts are not;
+they run in their own CI job (`.github/workflows/guided-setup.yml`) on pull
+requests and pushes to `main`, using only these local harnesses and Playwright's
+Chromium. The database
 ones start a PostgreSQL 17 server in a temporary directory, apply every file in
 `supabase/migrations` to it, and delete it. They read no environment file and
 connect to nothing else.
