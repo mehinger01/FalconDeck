@@ -42,6 +42,7 @@ export function ConflictPanel({
   onUseSaved,
   onKeepMine,
   onAdoptPreferences,
+  onRefreshSchedule,
 }: {
   conflict: Conflict;
   draft: SetupDraft;
@@ -49,6 +50,7 @@ export function ConflictPanel({
   onUseSaved: () => void;
   onKeepMine: () => void;
   onAdoptPreferences: () => void;
+  onRefreshSchedule: () => void;
 }) {
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
@@ -59,7 +61,20 @@ export function ConflictPanel({
   let body: React.ReactNode;
   let actions: React.ReactNode;
 
-  if (conflict.reason === "preferences-changed" && conflict.preferences) {
+  if (conflict.reason === "shared-schedule-changed") {
+    title = "Your school updated its schedule";
+    body = (
+      <p>
+        Setup can&apos;t finish against a schedule you haven&apos;t seen. Get the latest version and check your periods. Classes in periods that
+        still exist, and your first lesson, are kept.
+      </p>
+    );
+    actions = (
+      <button type="button" className={BUTTON_PRIMARY} onClick={onRefreshSchedule}>
+        Get the latest schedule and review
+      </button>
+    );
+  } else if (conflict.reason === "preferences-changed" && conflict.preferences) {
     const reported = conflict.preferences;
     const scheduleName = reported.activeBellScheduleId
       ? (schoolSchedules.find((schedule) => schedule.id === reported.activeBellScheduleId)?.name ?? "a schedule")
@@ -75,7 +90,10 @@ export function ConflictPanel({
           lunch wave became <strong>{LUNCH_LABEL[reported.lunchWave]}</strong>. Setup won&apos;t replace a choice you made elsewhere.
         </p>
         {switchesSchedule && draft.classSections.length > 0 && (
-          <p className="mt-2">Using it switches this setup to {scheduleName}, so you&apos;ll need to place your classes in its periods again.</p>
+          <p className="mt-2">
+            Using it switches this setup to {scheduleName}, so you&apos;ll need to place your classes in its periods again. Your first lesson is
+            kept; you&apos;ll just choose its class again.
+          </p>
         )}
       </>
     );

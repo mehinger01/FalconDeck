@@ -12,6 +12,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { deriveDataAuthorityState, type DataAuthorityState } from "@/lib/auth/dataAuthority";
 import { SupabaseDataRepository } from "@/lib/data/supabaseDataRepository";
+import { findLessonForSection } from "@/lib/data/lessons";
 import { deepEqual } from "@/lib/data/supabaseMapping";
 import { SupabaseSetupRepository, type SetupRpcClient } from "@/lib/data/supabaseSetupRepository";
 import type { AppData } from "@/lib/data/types";
@@ -27,6 +28,7 @@ import {
   todayInSchoolTime,
   updateLesson,
 } from "@/lib/onboarding/firstLesson";
+import { baseAppData, previewAppData, readOnlyRepository, reviewIssues, reviewSummary } from "@/lib/onboarding/review";
 import { createEmptySetupDraft, createSetupDraftFromSeed, validateSetupDraft } from "@/lib/onboarding/setupDraft";
 import { SetupDraftSession } from "@/lib/onboarding/setupDraftSession";
 import type { SetupRepository, SetupState } from "@/lib/onboarding/setupRepository";
@@ -89,7 +91,7 @@ const EMPTY_SEED: SetupSeed = { activeBellScheduleId: null, lunchWave: "none" };
 const NOT_STARTED: SetupState = { status: "not-started", eligible: true, reason: null, seed: EMPTY_SEED };
 const INELIGIBLE: SetupState = { status: "not-started", eligible: false, reason: "existing-setup", seed: EMPTY_SEED };
 
-function pureChecks() {
+async function pureChecks() {
   console.log("1. Server-side switch");
   check("off when unset", !isGuidedSetupEnabled({}));
   check("on only for the exact value \"on\"", isGuidedSetupEnabled({ FALCON_GUIDED_SETUP: "on" }) && !isGuidedSetupEnabled({ FALCON_GUIDED_SETUP: "true" }) && !isGuidedSetupEnabled({ FALCON_GUIDED_SETUP: "1" }));
@@ -208,6 +210,24 @@ function pureChecks() {
   check("with the school's calendar, a no-school day is described (not blocked)", describeLessonDate(withLesson, { schoolSchedules: [regular], schoolCalendar: calendar }, "2026-10-23")?.tone === "warn");
   check("...and so is a weekend", /weekend/.test(describeLessonDate(withLesson, { schoolSchedules: [regular], schoolCalendar: calendar }, "2026-10-24")?.message ?? ""));
   check("...and an ordinary school day is just named", describeLessonDate(withLesson, { schoolSchedules: [regular], schoolCalendar: calendar }, "2026-10-19")?.tone === "info");
+
+  console.log("7c. Review");
+  const reviewBase = ownDraftWithClass();
+  const reviewReady = addAgendaItem(updateLesson(updateLesson(setStep(reviewBase, "review"), { classSectionId: reviewBase.classSections[0].id, date: "2026-10-19" }), { learningTarget: "I can measure angles." }), "Warm-up");
+  const summaryOut = reviewSummary(reviewReady, []);
+  check("the summary lists each period with its class (or none)", summaryOut.periods.length === 2 && summaryOut.periods[0].className === "Geometry — Period 1" && summaryOut.periods[1].className === null, summaryOut.periods);
+  check("...and the lesson's class, long date, target and agenda", summaryOut.lesson?.className === "Geometry — Period 1" && summaryOut.lesson.date === "Monday, October 19, 2026" && summaryOut.lesson.learningTarget === "I can measure angles." && summaryOut.lesson.agenda[0] === "Warm-up");
+  check("a complete draft has nothing blocking it", reviewIssues(reviewReady, { courses: [], schedules: [] }).length === 0, reviewIssues(reviewReady, { courses: [], schedules: [] }));
+  const missingTarget = reviewIssues(updateLesson(reviewReady, { learningTarget: "  " }), { courses: [], schedules: [] });
+  check("a blank target blocks once, pointing at the lesson step", missingTarget.length === 1 && missingTarget[0].step === "first-lesson" && missingTarget[0].message === "Write a learning target.", missingTarget);
+  const noLesson = reviewIssues({ ...reviewReady, firstLesson: null }, { courses: [], schedules: [] });
+  check("no lesson at all blocks, pointing at the lesson step", noLesson.length > 0 && noLesson.every((issue) => issue.step === "first-lesson"), noLesson);
+  const noClass = reviewIssues(setPeriodCourse(reviewReady, teachingDayPeriods(reviewReady)[0].blockId, { kind: "none" }, []), { courses: [], schedules: [] });
+  check("a teaching day with no class blocks, pointing at step 1", noClass.some((issue) => issue.step === "teaching-day"), noClass);
+  const projected = previewAppData(reviewReady, baseAppData({ schedules: [], courses: [], calendar: null }), new Date(0).toISOString());
+  check("the preview data holds the lesson for its class and date", projected.lessons.length === 1 && projected.lessons[0].classSectionId === reviewBase.classSections[0].id && projected.lessons[0].date === "2026-10-19");
+  const previewRepo = readOnlyRepository(projected);
+  check("the preview's repository serves that data and writes nowhere", (await previewRepo.load()) === projected && (await previewRepo.save({ ...projected, lessons: [] })).ok && (await previewRepo.load()).lessons.length === 1);
 
   console.log("7b. What the save indicator says");
   const label = (...args: Parameters<typeof saveIndicator>) => saveIndicator(...args).label;
@@ -356,6 +376,20 @@ async function databaseChecks() {
   await tabThree.resolveConflict("keep-mine");
   const kept = await a.repository.getState();
   check("\"Keep what's on this screen\" saves it only after that choice", kept.ok && kept.value.status === "in-progress" && deepEqual(kept.value.draft.payload, fromTabTwo));
+  const keptState = kept as { ok: true; value: Extract<SetupState, { status: "in-progress" }> };
+  const tabFour = new SetupDraftSession(a.repository, current.value.draft, current.value.draft.payload, null);
+  tabFour.update({ ...fromTabTwo, lunchWave: "none" });
+  await tabFour.flush();
+  // A recovery that rebuilds the draft and resolves in the same tick (the review step's schedule refresh).
+  const rebuiltInRecovery = { ...fromTabTwo, lunchWave: "C" as const };
+  tabFour.update(rebuiltInRecovery);
+  await tabFour.resolveConflict("keep-mine");
+  const afterSameTick = await a.repository.getState();
+  check(
+    "an edit held by a conflict, then \"keep mine\" in the same tick, is saved",
+    tabFour.getSnapshot().status.kind === "saved" && afterSameTick.ok && afterSameTick.value.status === "in-progress" && afterSameTick.value.draft.revision === keptState.value.draft.revision + 1 && deepEqual(afterSameTick.value.draft.payload, rebuiltInRecovery),
+    tabFour.getSnapshot().status,
+  );
 
   console.log("11. Preferences changed elsewhere cannot be silently overwritten");
   const b = await newFounder("guided-b");
@@ -391,6 +425,62 @@ async function databaseChecks() {
   const dState = await (await newFounder("guided-d")).repository.getState();
   check("a brand-new account with the switch off keeps the existing flow", guidedSetupEntry(false, authority, dState.ok ? dState.value : null) === "existing-app");
   check("...and gets guided setup with it on", guidedSetupEntry(true, authority, dState.ok ? dState.value : null) === "guided-setup");
+
+  console.log("14. Completion: committed once, even when the answer is lost; reload and /present see the committed data");
+  const e = await newFounder("guided-e");
+  const eStart = (await e.repository.getState()) as { ok: true; value: Extract<SetupState, { status: "not-started" }> };
+  const base = ownDraftWithClass();
+  const complete = addAgendaItem(
+    updateLesson(updateLesson(setStep(base, "review"), { classSectionId: base.classSections[0].id, date: "2026-10-19" }), { learningTarget: "I can measure angles." }),
+    "Warm-up",
+  );
+  let loseNextAnswer = false;
+  const lossy: SetupRepository = {
+    getState: () => e.repository.getState(),
+    saveDraft: (revision, payload, seed) => e.repository.saveDraft(revision, payload, seed),
+    completeSetup: async (operationId, revision) => {
+      const result = await e.repository.completeSetup(operationId, revision);
+      if (!loseNextAnswer) return result;
+      loseNextAnswer = false;
+      return { ok: false, kind: "unknown", message: "Network request failed." };
+    },
+  };
+  const eSession = new SetupDraftSession(lossy, null, createSetupDraftFromSeed(eStart.value.seed, []), eStart.value.seed);
+  eSession.update(complete);
+  await eSession.flush();
+  const counts = async () =>
+    (
+      await db.admin<{ courses: number; sections: number; lessons: number; links: number; completions: number; drafts: number }>(
+        `select (select count(*)::int from public.courses where owner_membership_id = $1) as courses,
+                (select count(*)::int from public.class_sections where owner_membership_id = $1) as sections,
+                (select count(*)::int from public.lessons where owner_membership_id = $1) as lessons,
+                (select count(*)::int from public.lesson_class_sections where owner_membership_id = $1) as links,
+                (select count(*)::int from public.setup_completions where owner_membership_id = $1) as completions,
+                (select count(*)::int from public.setup_drafts where owner_membership_id = $1) as drafts`,
+        [e.membershipId],
+      )
+    )[0];
+  check("before completing, the review draft is saved and nothing operational exists", (await operationalRows(e.membershipId)) === 0 && (await counts()).completions === 0);
+  loseNextAnswer = true;
+  const lost = await eSession.complete();
+  const afterLost = await counts();
+  check("a lost answer reads as unconfirmed - though the server committed", lost.kind === "completion-unconfirmed" && afterLost.completions === 1, { lost: lost.kind, afterLost });
+  check("...creating the course, class, lesson and its class link once, and removing the draft", afterLost.courses === 1 && afterLost.sections === 1 && afterLost.lessons === 1 && afterLost.links === 1 && afterLost.drafts === 0, afterLost);
+  const retried = await eSession.complete();
+  check("Try again is answered from the committed operation (replayed), not performed again", retried.kind === "completed" && deepEqual(await counts(), afterLost));
+  const twice = await eSession.complete();
+  check("completing an already-completed session asks nothing and writes nothing", twice.kind === "completed" && deepEqual(await counts(), afterLost));
+  const eReload = await e.repository.getState();
+  check("reload: setup state is completed", eReload.ok && eReload.value.status === "completed");
+  check("...so the entry rule sends the account to the existing app, not back into guided setup", guidedSetupEntry(true, authority, eReload.ok ? eReload.value : null) === "existing-app");
+  const staleTab = new SetupDraftSession(e.repository, null, complete, eStart.value.seed);
+  staleTab.update({ ...complete, lunchWave: "B" });
+  await staleTab.flush();
+  check("a stale tab's next save learns setup is complete, and changes nothing", staleTab.getSnapshot().status.kind === "completed" && deepEqual(await counts(), afterLost));
+  const presentData = await new SupabaseDataRepository(e.client as unknown as ConstructorParameters<typeof SupabaseDataRepository>[0], { organizationId: e.organizationId, membershipId: e.membershipId }).load();
+  const shown = findLessonForSection(presentData.lessons, "2026-10-19", base.classSections[0].id);
+  check("/present's repository loads the committed lesson for that class and date", shown?.learningTarget === "I can measure angles." && shown.agendaItems[0]?.title === "Warm-up", shown);
+  check("...the committed class and the teacher's own schedule as active", presentData.classSections.some((s) => s.id === base.classSections[0].id) && presentData.teacherSchedulePreferences.activeBellScheduleId === (base.schedule?.mode === "own" ? base.schedule.id : null));
 }
 
 function walk(dir: string): string[] {
@@ -408,7 +498,13 @@ function code(source: string): string {
 function boundaryChecks() {
   console.log("13. Boundaries");
   const guidedFiles = [...walk(join(process.cwd(), "app/(guided)")), ...walk(join(process.cwd(), "components/guided"))].map((path) => ({ path, source: code(readFileSync(path, "utf8")) }));
-  check("the guided route and components never mount or read the operational app state", guidedFiles.every(({ source }) => !/CutoverAppDataProvider|useAppData|AppDataProvider|NavBar/.test(source)));
+  check("the guided route and components never mount or read the operational app state", guidedFiles.every(({ source }) => !/CutoverAppDataProvider|useAppData|NavBar/.test(source)));
+  const providerUsers = guidedFiles.filter(({ source }) => /AppDataProvider/.test(source));
+  check(
+    "the only AppDataProvider is the review preview's, given an explicit read-only repository",
+    providerUsers.length === 1 && providerUsers[0].path.endsWith("ReviewScreen.tsx") && /<AppDataProvider[^>]*repository=\{readOnlyRepository\(/.test(providerUsers[0].source),
+    providerUsers.map(({ path }) => path),
+  );
   check("the guided components never use the operational save engine", guidedFiles.filter(({ path }) => path.includes("components")).every(({ source }) => !/SupabaseDataRepository|DataRepository|\.save\(/.test(source)));
   check("the switch is a server-only variable (no NEXT_PUBLIC_ copy anywhere)", !walk(join(process.cwd(), "lib")).concat(walk(join(process.cwd(), "app")), walk(join(process.cwd(), "components"))).some((path) => /NEXT_PUBLIC_FALCON_GUIDED_SETUP/.test(readFileSync(path, "utf8"))));
   const setupPage = readFileSync(join(process.cwd(), "app/(app)/setup/page.tsx"), "utf8");
@@ -416,7 +512,7 @@ function boundaryChecks() {
 }
 
 async function main() {
-  pureChecks();
+  await pureChecks();
   boundaryChecks();
   db = await createTestDatabase();
   try {

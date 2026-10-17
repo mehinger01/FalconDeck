@@ -252,12 +252,20 @@ export class SetupDraftSession {
     return !AUTOSAVE_BLOCKING_STATUSES.includes(this.status.kind);
   }
 
+  /**
+   * Runs one save pass, or joins the pass in flight. A caller that joins
+   * may have unblocked saving since that pass checked (resolveConflict()
+   * right after an update() held by the conflict, in the same tick): once
+   * the pass settles, outstanding edits get a pass of their own - unless the
+   * pass stopped on a failed save, which is retried only on request.
+   */
   private pump(): Promise<void> {
-    if (!this.saving) {
-      this.saving = this.runSaves().finally(() => {
-        this.saving = null;
-      });
+    if (this.saving) {
+      return this.saving.then(() => (this.dirty && this.canAutosave() && this.status.kind !== "save-failed" ? this.pump() : undefined));
     }
+    this.saving = this.runSaves().finally(() => {
+      this.saving = null;
+    });
     return this.saving;
   }
 

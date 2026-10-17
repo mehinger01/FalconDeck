@@ -1,18 +1,22 @@
 import { redirect } from "next/navigation";
 import { GuidedSetup } from "@/components/guided/GuidedSetup";
-import { fetchAppData } from "@/lib/data/supabaseDataRepository";
 import { resolveGuidedSetupContext } from "@/lib/auth/guidedSetupEntry";
+import { fetchAppData } from "@/lib/data/supabaseDataRepository";
 import { isUsableSharedSchedule } from "@/lib/schedule/isUsableSharedSchedule";
 import { createSupabaseServerClient } from "@/lib/supabase/serverClient";
+import { loadGuidedReference } from "./actions";
 
 /**
- * Guided setup, step 1 ("Your teaching day"). Only an account the entry
- * rule sends here - with the server-side switch on - ever renders it; every
- * other account (switch off, established, legacy, setup state unreadable)
- * goes back to /setup, which is today's flow unchanged.
+ * Guided setup: "Your teaching day", "Your first lesson", "Review and
+ * start". Only an account the entry rule sends here - with the server-side
+ * switch on - ever renders it; every other account (switch off,
+ * established, legacy, setup state unreadable, setup completed) goes back
+ * to /setup, which is today's flow unchanged.
  *
- * Reference data (the school's schedules and courses) is read here on the
- * server, read-only. Nothing on this page writes operational data.
+ * Reference data (the school's schedules and courses, and the teacher's
+ * readable data the classroom preview is projected onto) is read here on
+ * the server, read-only. Nothing on this page writes operational data; the
+ * only write that does is complete_setup, from the review step.
  */
 export default async function StartPage() {
   const context = await resolveGuidedSetupContext();
@@ -33,6 +37,8 @@ export default async function StartPage() {
       schoolSchedules={reference.schedules.filter(isUsableSharedSchedule)}
       schoolCourses={reference.courses}
       schoolCalendar={reference.schoolCalendar}
+      baseData={reference}
+      reloadReference={loadGuidedReference}
     />
   );
 }
