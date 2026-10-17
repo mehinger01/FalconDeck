@@ -53,6 +53,34 @@ export function sampleLearningTarget(draft: SetupDraft): string {
 }
 
 // --- optional content -------------------------------------------------------
+//
+// The screen adds an item as an empty entry in the draft and edits it in
+// place (start*/update*), so whatever is typed is saved, survives a reload,
+// and counts as unsaved until it is. Empty or incomplete entries are kept and
+// reported by firstLessonIssues() rather than dropped. The add* forms with
+// text are kept for callers that already have the whole item.
+
+export function startAgendaItem(draft: SetupDraft, ids: IdFactory = defaultIds): SetupDraft {
+  return withLesson(
+    draft,
+    (lesson) => ({ ...lesson, agendaItems: [...lesson.agendaItems, { id: ids("agenda"), title: "", isCompleted: false, sortOrder: lesson.agendaItems.length }] }),
+    ids,
+  );
+}
+
+export function startAnnouncement(draft: SetupDraft, ids: IdFactory = defaultIds): SetupDraft {
+  return withLesson(draft, (lesson) => ({ ...lesson, announcements: [...lesson.announcements, { id: ids("announcement"), text: "" }] }), ids);
+}
+
+export function startResource(draft: SetupDraft, ids: IdFactory = defaultIds): SetupDraft {
+  return withLesson(draft, (lesson) => ({ ...lesson, resources: [...lesson.resources, { id: ids("resource"), title: "", url: "", type: "link" }] }), ids);
+}
+
+/** Edits a resource's title or link as typed (not trimmed: a commit mid-typing must not eat a trailing space). */
+export function updateResource(draft: SetupDraft, id: string, patch: { title?: string; url?: string }): SetupDraft {
+  if (!draft.firstLesson) return draft;
+  return { ...draft, firstLesson: { ...draft.firstLesson, resources: draft.firstLesson.resources.map((r) => (r.id === id ? { ...r, ...patch } : r)) } };
+}
 
 export function addAgendaItem(draft: SetupDraft, title: string, ids: IdFactory = defaultIds): SetupDraft {
   if (title.trim() === "") return draft;
@@ -111,7 +139,9 @@ export function removeAnnouncement(draft: SetupDraft, id: string): SetupDraft {
 /**
  * What still stops this step: a class from this draft, a date, and a
  * learning target. Stricter than the server's "prepared" rule (target OR an
- * agenda item) on purpose - this screen asks for a learning target.
+ * agenda item) on purpose - this screen asks for a learning target. Optional
+ * entries that were started but left empty or incomplete are reported too,
+ * so nothing half-typed is committed or silently dropped.
  */
 export function firstLessonIssues(draft: SetupDraft): string[] {
   const lesson = draft.firstLesson;
@@ -119,6 +149,20 @@ export function firstLessonIssues(draft: SetupDraft): string[] {
   if (!lesson || !draft.classSections.some((s) => s.id === lesson.classSectionId)) issues.push("Choose the class this lesson is for.");
   if (!lesson || !/^\d{4}-\d{2}-\d{2}$/.test(lesson.date)) issues.push("Choose the date you'll teach it.");
   if (!lesson || lesson.learningTarget.trim() === "") issues.push("Write a learning target.");
+  if (!lesson) return issues;
+  lesson.agendaItems.forEach((item, index) => {
+    if (item.title.trim() === "") issues.push(`Agenda item ${index + 1} is empty. Write it or remove it.`);
+  });
+  lesson.resources.forEach((resource, index) => {
+    const title = resource.title.trim() !== "";
+    const link = resource.url.trim() !== "";
+    if (!title && !link) issues.push(`Resource ${index + 1} is empty. Add a title and a link, or remove it.`);
+    else if (!title) issues.push(`Resource ${index + 1} needs a title.`);
+    else if (!link) issues.push(`Resource ${index + 1} needs a link.`);
+  });
+  lesson.announcements.forEach((announcement, index) => {
+    if (announcement.text.trim() === "") issues.push(`Announcement ${index + 1} is empty. Write it or remove it.`);
+  });
   return issues;
 }
 

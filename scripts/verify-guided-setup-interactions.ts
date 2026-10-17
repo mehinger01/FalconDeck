@@ -350,8 +350,10 @@ async function scenarioLessonStep(browser: Browser) {
   await page.keyboard.press("End");
   await page.keyboard.type(" Today: angles.");
   await page.getByText(/Add more \(optional\)/).click();
-  await page.getByLabel("Add agenda item").first().fill("Warm-up");
   await page.getByRole("button", { name: "Add agenda item" }).click();
+  await page.getByRole("textbox", { name: "Agenda item 1", exact: true }).waitFor({ timeout: 3000 });
+  check("Add agenda item adds an entry and focuses it", await page.evaluate(() => document.activeElement?.id.startsWith("agenda-") === true));
+  await page.keyboard.type("Warm-up");
   await page.getByRole("button", { name: "Continue" }).click();
   await page.waitForTimeout(500);
   const lesson = await lessonOf(page);
@@ -733,6 +735,138 @@ async function scenarioRejectedCompletion(browser: Browser) {
   await page.close();
 }
 
+const leavingIsBlocked = (page: Page) =>
+  page.evaluate(() => {
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  });
+
+async function scenarioOptionalItemsAreDraftBacked(browser: Browser) {
+  console.log("26. Agenda, resource and announcement text is part of the draft: pending, saved, validated, reloaded");
+  const page = await mount(browser, { ...reviewDraft(), step: "first-lesson" });
+  check("with optional content already in the draft, that section starts open", await page.locator("details").evaluate((d) => (d as HTMLDetailsElement).open));
+
+  await page.getByRole("button", { name: "Add resource" }).click();
+  await page.getByLabel("Resource 1 title").waitFor({ timeout: 3000 });
+  check("Add resource adds an entry and focuses its title", await page.evaluate(() => document.activeElement?.id.startsWith("resource-title-") === true));
+  await page.keyboard.type("Notes slides");
+  check("typed resource text reads as unsaved, never \"All changes saved\"", (await indicator(page)) === "Unsaved changes…", await indicator(page));
+  check("...and leaving the page asks first", await leavingIsBlocked(page));
+  await page.getByRole("button", { name: "Continue" }).click();
+  // The list appears as Continue is pressed; wait for it to reflect the committed title, and for that save.
+  await page.getByRole("alert").filter({ hasText: "Resource 1 needs a link." }).waitFor({ timeout: 3000 });
+  await page.getByText("All changes saved").waitFor({ timeout: 3000 });
+  check("Continue with a title but no link stays here and says so", (await page.getByRole("heading", { level: 1 }).innerText()) === "Your first lesson");
+  check("...and the typed title was saved with the draft, not dropped", (await lessonOf(page))?.resources[0]?.title === "Notes slides" && (await lessonOf(page))?.resources[0]?.url === "", await lessonOf(page));
+
+  await page.getByLabel("Resource 1 link").click();
+  await page.keyboard.type("https://example.test/notes");
+  check("a half-typed link also blocks leaving", await leavingIsBlocked(page));
+  await page.getByText("All changes saved").waitFor({ timeout: 3000 });
+  const saved = (await stored(page))?.payload as SetupDraft;
+  check("after the pause the link is saved too", saved.firstLesson?.resources[0]?.url === "https://example.test/notes", saved.firstLesson?.resources);
+  await page.close();
+
+  const reloaded = await mount(browser, saved);
+  check("a reload brings the resource back, editable", (await reloaded.getByLabel("Resource 1 title").inputValue()) === "Notes slides" && (await reloaded.getByLabel("Resource 1 link").inputValue()) === "https://example.test/notes");
+  await reloaded.getByRole("button", { name: "Add announcement" }).click();
+  await reloaded.getByRole("textbox", { name: "Announcement 1", exact: true }).waitFor({ timeout: 3000 });
+  await reloaded.keyboard.type("Quiz on Friday");
+  await reloaded.getByRole("button", { name: "Back" }).click();
+  await reloaded.getByRole("heading", { name: "Your teaching day", level: 1 }).waitFor({ timeout: 3000 });
+  await reloaded.getByText("All changes saved").waitFor({ timeout: 3000 });
+  check("Back right after typing an announcement keeps it", (await lessonOf(reloaded))?.announcements[0]?.text === "Quiz on Friday", await lessonOf(reloaded));
+  await toLessonStep(reloaded);
+
+  await reloaded.getByRole("button", { name: "Add agenda item" }).click();
+  await reloaded.getByRole("textbox", { name: "Agenda item 2", exact: true }).waitFor({ timeout: 3000 });
+  await reloaded.getByRole("button", { name: "Continue" }).click();
+  await reloaded.getByRole("alert").filter({ hasText: "Before you continue" }).waitFor({ timeout: 3000 });
+  check("an agenda item left empty is reported, not silently committed or dropped", (await reloaded.getByRole("alert").filter({ hasText: "Before you continue" }).innerText()).includes("Agenda item 2 is empty."));
+  await reloaded.getByRole("button", { name: "Remove agenda item 2" }).click();
+  await reloaded.getByRole("button", { name: "Continue" }).click();
+  await reloaded.getByRole("heading", { name: "Review and start", level: 1 }).waitFor({ timeout: 3000 });
+  const reviewText = await reloaded.locator("main").innerText();
+  check("the review lists the resource and the announcement", reviewText.includes("Notes slides") && reviewText.includes("Quiz on Friday"));
+  await startButton(reloaded).click();
+  check("Start finishes", await waitFor(reloaded, async () => (await navigations(reloaded)).length === 1));
+  const committed = (await commits(reloaded))[0]?.payload.firstLesson;
+  check("the commit carries the typed resource and announcement", committed?.resources[0]?.title === "Notes slides" && committed.resources[0].url === "https://example.test/notes" && committed.announcements[0]?.text === "Quiz on Friday", committed);
+  await reloaded.close();
+
+  const incomplete = await mount(browser, {
+    ...reviewDraft(),
+    firstLesson: { ...reviewDraft().firstLesson!, resources: [{ id: "r1", title: "Notes slides", url: "", type: "link" }] },
+  });
+  await startButton(incomplete).click();
+  await incomplete.getByText("Before you start:").waitFor({ timeout: 3000 });
+  check("Start with an incomplete resource lists it, and nothing is committed", (await incomplete.locator("main").innerText()).includes("Resource 1 needs a link.") && (await completeCalls(incomplete)).length === 0);
+  await incomplete.getByRole("button", { name: "Fix this" }).click();
+  await incomplete.getByRole("heading", { name: "Your first lesson", level: 1 }).waitFor({ timeout: 3000 });
+  check("Fix this opens the lesson step with the resource in view and editable", (await incomplete.getByLabel("Resource 1 title").inputValue()) === "Notes slides" && (await incomplete.getByLabel("Resource 1 link").isVisible()));
+  await incomplete.close();
+}
+
+const actionError = (page: Page) => page.getByRole("alert").filter({ hasText: "aren't saved yet" });
+
+async function scenarioSaveFailureAtTheAction(browser: Browser) {
+  console.log("27. A failed save stops Back, Continue and Start at the action, with the error and Retry in view");
+  const page = await mount(browser, { ...reviewDraft(), step: "first-lesson" });
+  await setRepo(page, { failing: true });
+  await page.getByRole("textbox", { name: "Learning target" }).click();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" Twice.");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await actionError(page).waitFor({ timeout: 3000 });
+  check("Continue stays on the step", (await page.getByRole("heading", { level: 1 }).innerText()) === "Your first lesson");
+  check("the error appears at the action and takes focus", await page.evaluate(() => document.activeElement?.getAttribute("role") === "alert" && (document.activeElement.textContent ?? "").includes("aren't saved yet")));
+  check("...in view", await actionError(page).evaluate((el) => {
+    const box = el.getBoundingClientRect();
+    return box.top >= 0 && box.bottom <= window.innerHeight;
+  }));
+  check("what was typed is still there", (await page.getByRole("textbox", { name: "Learning target" }).inputValue()) === "I can measure angles. Twice.");
+
+  await actionError(page).getByRole("button", { name: "Retry saving" }).click();
+  await page.waitForTimeout(200);
+  check("a retry that fails again keeps the error and the text", (await actionError(page).isVisible()) && (await page.getByRole("textbox", { name: "Learning target" }).inputValue()).endsWith("Twice."));
+  await setRepo(page, { failing: false });
+  await actionError(page).getByRole("button", { name: "Retry saving" }).click();
+  await page.getByText("All changes saved").waitFor({ timeout: 3000 });
+  check("a successful retry saves the text and clears the error", (await lessonOf(page))?.learningTarget === "I can measure angles. Twice." && (await actionError(page).count()) === 0);
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByRole("heading", { name: "Review and start", level: 1 }).waitFor({ timeout: 3000 });
+  check("...and Continue then goes on", true);
+
+  await page.getByRole("button", { name: "Edit first lesson" }).click();
+  await page.getByRole("heading", { name: "Your first lesson", level: 1 }).waitFor({ timeout: 3000 });
+  await setRepo(page, { failing: true });
+  await page.getByRole("textbox", { name: "Learning target" }).click();
+  await page.keyboard.press("End");
+  await page.keyboard.type("!");
+  await page.getByRole("button", { name: "Back" }).click();
+  await actionError(page).waitFor({ timeout: 3000 });
+  check("Back is stopped the same way, focus on the error", (await page.getByRole("heading", { level: 1 }).innerText()) === "Your first lesson" && (await page.evaluate(() => document.activeElement?.getAttribute("role") === "alert")));
+  await setRepo(page, { failing: false });
+  await actionError(page).getByRole("button", { name: "Retry saving" }).click();
+  await page.getByText("All changes saved").waitFor({ timeout: 3000 });
+
+  // Reach the review with the step change's own save failing, then press Start.
+  await setRepo(page, { failing: true });
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByRole("heading", { name: "Review and start", level: 1 }).waitFor({ timeout: 3000 });
+  await page.waitForTimeout(200);
+  check("Start stays pressable after a failed save", !(await startButton(page).isDisabled()));
+  await startButton(page).click();
+  await actionError(page).waitFor({ timeout: 3000 });
+  check("Start is stopped at the action, with focus on the error; nothing completes", (await page.evaluate(() => document.activeElement?.getAttribute("role") === "alert")) && (await completeCalls(page)).length === 0);
+  await setRepo(page, { failing: false });
+  await startButton(page).click();
+  check("pressing Start again saves and finishes", await waitFor(page, async () => (await navigations(page)).length === 1));
+  check("...with one commit carrying everything typed", (await commits(page)).length === 1 && (await commits(page))[0].payload.firstLesson?.learningTarget === "I can measure angles. Twice.!");
+  await page.close();
+}
+
 async function main() {
   bundled = await bundle();
   const browser = await chromium.launch();
@@ -760,6 +894,8 @@ async function main() {
     await scenarioPreferencesChanged(browser);
     await scenarioNoLongerEligible(browser);
     await scenarioRejectedCompletion(browser);
+    await scenarioOptionalItemsAreDraftBacked(browser);
+    await scenarioSaveFailureAtTheAction(browser);
   } finally {
     await browser.close();
   }

@@ -179,16 +179,31 @@ export function GuidedSetup(props: GuidedSetupProps) {
     return !current.dirty && (current.status.kind === "saved" || current.status.kind === "idle");
   };
 
+  /**
+   * Back, Edit, Continue and Start save first. When that save fails they stay
+   * put, and the failure is shown at the action (ActionSaveError) rather than
+   * only in the banner at the top of the page.
+   */
+  const [stoppedBySaveFailure, setStoppedBySaveFailure] = useState(false);
+  const stoppedHere = () => {
+    if (session.getSnapshot().status.kind !== "save-failed") return false;
+    setStoppedBySaveFailure(true);
+    return true;
+  };
+
   const goTo = async (target: SetupStep) => {
     setContinueAttempted(null);
+    setStoppedBySaveFailure(false);
     await settle();
+    if (stoppedHere()) return;
     edit((d) => setStep(d, target));
   };
 
   const onContinue = async () => {
     setContinueAttempted(step);
+    setStoppedBySaveFailure(false);
     await settle();
-    if (!isSettled()) return;
+    if (stoppedHere() || !isSettled()) return;
     const current = session.getSnapshot().draft;
     if (step === "teaching-day" && teachingDayIssues(current, issueReference).length === 0) {
       setContinueAttempted(null);
@@ -222,7 +237,9 @@ export function GuidedSetup(props: GuidedSetupProps) {
     submitting.current = true;
     try {
       setFinishIssues(null);
+      setStoppedBySaveFailure(false);
       await settle();
+      if (stoppedHere()) return;
       const afterSave = session.getSnapshot();
       // A save can learn that setup already committed (an earlier answer was lost): that is success.
       if (afterSave.status.kind === "completed") return onCompleted();
@@ -387,6 +404,7 @@ export function GuidedSetup(props: GuidedSetupProps) {
           </div>
         )}
         {step === "review" && <CompletionStatus status={status} finishIssues={finishIssues} onFix={(target) => void goTo(target)} />}
+        {stoppedBySaveFailure && status.kind === "save-failed" && <ActionSaveError onRetry={() => session.retrySave()} />}
         <div className="flex flex-wrap items-center justify-between gap-3">
           {step !== "teaching-day" ? (
             <button type="button" className={BUTTON_SECONDARY} onClick={() => void goTo(step === "review" ? "first-lesson" : "teaching-day")} disabled={!editable}>
@@ -400,7 +418,7 @@ export function GuidedSetup(props: GuidedSetupProps) {
               <button
                 type="button"
                 onClick={() => void onFinish()}
-                disabled={!editable || status.kind === "save-failed"}
+                disabled={!editable}
                 aria-busy={status.kind === "completing"}
                 className={BUTTON_PRIMARY}
               >
@@ -420,6 +438,41 @@ export function GuidedSetup(props: GuidedSetupProps) {
         </div>
       </footer>
     </Shell>
+  );
+}
+
+/**
+ * Shown next to Back/Continue/Start when the save they start with failed:
+ * takes focus (so it is seen and announced where the teacher is), says that
+ * nothing was lost, and offers the retry. Disappears once a save succeeds.
+ */
+function ActionSaveError({ onRetry }: { onRetry: () => Promise<void> }) {
+  const box = useRef<HTMLDivElement>(null);
+  const [retrying, setRetrying] = useState(false);
+  useEffect(() => {
+    box.current?.scrollIntoView({ block: "center" });
+    box.current?.focus();
+  }, []);
+  return (
+    <div ref={box} tabIndex={-1} role="alert" className="rounded-md border border-red-700/40 bg-red-50 px-4 py-3 text-sm text-red-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-900">
+      <p className="font-semibold">Your latest changes aren&apos;t saved yet, so you&apos;re still on this step.</p>
+      <p>Everything you entered is still here. Check your connection, then retry.</p>
+      <button
+        type="button"
+        className="mt-2 rounded-md bg-red-900 px-3 py-1.5 text-sm font-semibold text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-red-900 focus-visible:ring-offset-2 disabled:opacity-60"
+        disabled={retrying}
+        onClick={async () => {
+          setRetrying(true);
+          try {
+            await onRetry();
+          } finally {
+            setRetrying(false);
+          }
+        }}
+      >
+        {retrying ? "Saving…" : "Retry saving"}
+      </button>
+    </div>
   );
 }
 

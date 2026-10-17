@@ -25,8 +25,12 @@ import {
   firstLessonIssues,
   sampleLearningTarget,
   setStep,
+  startAgendaItem,
+  startAnnouncement,
+  startResource,
   todayInSchoolTime,
   updateLesson,
+  updateResource,
 } from "@/lib/onboarding/firstLesson";
 import { baseAppData, previewAppData, previewPeriods, readOnlyRepository, reviewIssues, reviewSummary } from "@/lib/onboarding/review";
 import { createEmptySetupDraft, createSetupDraftFromSeed, validateSetupDraft } from "@/lib/onboarding/setupDraft";
@@ -198,6 +202,15 @@ async function pureChecks() {
   const optional = addAnnouncement(addResource(addAgendaItem(withLesson, "Warm-up", ids), { title: "Slides", url: "https://example.test/s" }, ids), "Quiz Friday", ids);
   check("agenda, resources and announcements are optional extras", optional.firstLesson?.agendaItems[0]?.title === "Warm-up" && optional.firstLesson.resources[0]?.type === "link" && optional.firstLesson.announcements[0]?.text === "Quiz Friday");
   check("blank optional entries are ignored", deepEqual(addAgendaItem(withLesson, "  ", ids), withLesson) && deepEqual(addResource(withLesson, { title: "x", url: "" }, ids), withLesson));
+  let started = startAnnouncement(startResource(startAgendaItem(withLesson, ids), ids), ids);
+  check("the screen's Add starts an empty entry in the draft", started.firstLesson?.agendaItems[0]?.title === "" && started.firstLesson.resources[0]?.url === "" && started.firstLesson.announcements[0]?.text === "");
+  check("...which is reported, not silently dropped", deepEqual(firstLessonIssues(started), ["Agenda item 1 is empty. Write it or remove it.", "Resource 1 is empty. Add a title and a link, or remove it.", "Announcement 1 is empty. Write it or remove it."]), firstLessonIssues(started));
+  const resourceId = started.firstLesson!.resources[0].id;
+  started = updateResource(started, resourceId, { title: "Notes " });
+  check("a resource keeps its title exactly as typed (a commit mid-typing must not trim)", started.firstLesson?.resources[0]?.title === "Notes ");
+  check("a title without a link is reported as needing a link", firstLessonIssues(started).includes("Resource 1 needs a link."));
+  started = updateResource(started, resourceId, { title: "", url: "https://example.test" });
+  check("a link without a title is reported as needing a title", firstLessonIssues(started).includes("Resource 1 needs a title."));
   const cleared = setPeriodCourse(withLesson, "p1", { kind: "none" }, [], ids, uuid);
   check("removing the lesson's class on step 1 keeps the lesson but asks for a class again", cleared.firstLesson?.classSectionId === "" && cleared.firstLesson.learningTarget === "I can measure angles." && cleared.firstLesson.date === "2026-10-19");
   check("switching schedules does the same", chooseSharedSchedule(withLesson, late).firstLesson?.classSectionId === "" && chooseSharedSchedule(withLesson, late).firstLesson?.learningTarget === "I can measure angles.");
