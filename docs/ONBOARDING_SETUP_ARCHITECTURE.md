@@ -1,8 +1,10 @@
 # Streamlined Onboarding — Architecture Decisions
 
 **Status:** persistence foundation implemented and tested in isolation, awaiting
-review. The two migrations below are **not applied to any Supabase project**. No
-route, screen, or redirect has changed; no existing account behaves differently.
+review. The two migrations below are **not applied to any Supabase project**. The
+guided screens (§9.3) are built behind a server-side switch that is off by default
+and always off in Production; with it off, no route, screen, or redirect has
+changed and no existing account behaves differently.
 The stale-tab data loss found during review is fixed in the save engine and
 covered by regression tests (§9.2); what that fix does not cover is listed there.
 
@@ -531,6 +533,53 @@ state on the client. It would cover old bundles and make a stale tab reload
 instead of merely being harmless. It is not needed for the data-loss cases above
 and is not implemented.
 
+### 9.3 As built: the guided screens (`/start`)
+
+Three steps, all writing through `SetupDraftSession` only: "Your teaching day",
+"Your first lesson", "Review and start". `/start` renders only when the entry rule
+(§10) answers `guided-setup` and `FALCON_GUIDED_SETUP=on` outside Production;
+otherwise it redirects to `/setup`.
+
+- **Review** summarizes the schedule, each period's class, the lunch wave and the
+  lesson, with Edit actions back to step 1 or 2. Every step change commits typed
+  text and waits for the save first.
+- **Preview (§9.1.3):** the existing `PreviewPresentScreen`, inside an
+  `AppDataProvider` given `readOnlyRepository(projectSetupDraftToAppData(...))`.
+  That repository's `save()` writes nowhere; no `CutoverAppDataProvider`,
+  `useAppData` caller or localStorage repository exists on the page, and the
+  boundary checks assert it. Its period comes from `previewPeriods()`: the
+  projected active schedule resolved for the lesson's weekday
+  (`resolveActiveSchedule` + `resolveScheduleForWeekday`, as Present's Preview
+  Mode does), keeping the blocks that hold the lesson's class. A lesson belongs
+  to a class and date, not a period, so: one match is shown; several (a class
+  meeting more than once that day, e.g. via a weekday override) get a period
+  picker; none (the class is unassigned that weekday) is said plainly and the
+  display shows no period. The guided draft makes one class per period, so in
+  practice there is one match.
+- **Start my classroom** saves anything outstanding, re-checks the draft, then
+  calls `complete()` once. While it runs, further presses do nothing and the steps
+  are locked. The operation id is fixed for the draft, so pressing again after an
+  unconfirmed answer is answered from the committed record (§7). A save that learns
+  setup already committed counts as success.
+- **On success (§9.1.4):** a full document load of `/present`
+  (`window.location.assign`), not a client-side route change, so the new
+  `CutoverAppDataProvider` loads the committed rows.
+- **Conflict recovery:**
+
+  | Answer | What the teacher sees and can do |
+  |---|---|
+  | `stale-revision` | Both versions, then "Use the saved version" or "Keep what's on this screen". |
+  | `shared-schedule-changed` | Reloads the school's schedules (`loadGuidedReference`, read-only). `refreshSharedSchedule` keeps classes in periods that still exist and the lesson. Returns to step 1 to review. |
+  | `preferences-changed` | Shows the stored schedule and lunch wave. "Use these settings and continue" adopts them through `adoptPreferences`; there is no way to insist on the older choice. A different schedule returns to step 1; the lesson keeps its date and target. |
+  | `no-longer-eligible` | Back to the existing app (`/setup`), nothing written. |
+  | `already-completed` | Treated as success (§7). |
+
+**Session fix found by this work.** `pump()` joined a save pass in flight even when
+that pass had already decided there was nothing it could send. A recovery that
+rebuilds the draft and resolves the conflict in the same tick (the schedule refresh
+above) was therefore never saved. A joining caller now gets a pass of its own once
+the current one settles, if edits are outstanding and the pass didn't stop on a
+failed save. Covered by `verify:guided-setup-teaching-day` §10.
 ## 10. Entry: new and interrupted accounts only
 
 `get_setup_state` reports one of `completed`, `in-progress`, or `not-started` with
@@ -573,6 +622,18 @@ has been changed again since the draft was created (§8.4).
 
 "Existing app" means today's behaviour exactly: `/setup`, `ActiveScheduleGate`,
 `MigrationSetupCard`. Nothing calls `deriveSetupEntry` yet.
+
+**As built (§9.3):** with the switch on, the entry is enforced in the `(app)` and
+`/present` layouts (`redirectToGuidedSetupIfDue()`), after the school is resolved
+and before `CutoverAppDataProvider` renders. It cannot live in `/setup`'s page
+alone: `ActiveScheduleGate` renders nothing in place of the page for an account
+with no active schedule (every guided account) and replaces the URL with
+`/setup/schedule`, so the page's redirect never reached the browser and a new
+account signing in landed on the old schedule screen (found on staging). With the
+switch off the helper returns before any RPC. A consequence: while guided setup is
+due, every ordinary route, `/setup/schedule` and `/schedule` included, goes to
+`/start`; only a tab already open from before can change schedule preferences,
+which is what the preferences-changed recovery exists for.
 
 ---
 
@@ -643,6 +704,9 @@ has been changed again since the draft was created (§8.4).
 | Schedule-only and lunch-wave-only preference changes after draft creation; baseline survives saves; committed operations still replay | db §19 |
 | Ordinary preference writes and completion, each order, first row and existing row | concurrency §10 |
 | Preferences changed between reading the seed and the first draft save; baseline cannot be chosen by the caller | db §22 |
+| Guided screens: one commit for repeated presses; failed and lost answers retried under the same operation id; each conflict's recovery; pending text committed before Edit, Back, Continue and Start | `verify:guided-setup-interactions` §16–24 (real Chromium) |
+| Guided completion against PostgreSQL: lost answer then replay, rows created once, reload leaves guided setup, `/present`'s repository loads the committed lesson | `verify:guided-setup-teaching-day` §14 |
+| The review preview's provider is read-only and the only one on the guided page | `verify:guided-setup-teaching-day` §7c, §13 |
 | Ordinary preference writes keep their authorization | db §23 |
 | The ordinary save writes preferences only through the RPC | stale-tab §9 |
 | Genuinely overlapping requests | `verify:onboarding-setup-concurrency` |
