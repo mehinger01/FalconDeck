@@ -1,11 +1,20 @@
 ﻿# Falcon Deck V2 Architecture
 
-**Status:** Architecture and analysis only. No Supabase tables, no authentication, no
-application behavior changes. This is a clean-room reconstruction of the reviewed and
-approved V2 architecture, produced to remove duplicated/superseded text that
-accumulated in `docs/V2_ARCHITECTURE.md` during iterative editing. It supersedes that
-document's content once reviewed and approved; `docs/V2_ARCHITECTURE.md` itself is
-untouched by this pass.
+**Status:** the approved V2 architecture. It was written before any of it was
+built and is kept as the design record; it is **implemented** — authentication,
+organizations, `SupabaseDataRepository`, the local-data migration and the cloud
+cutover are all live. For what exists today see `docs/CURRENT_STATE.md`.
+
+Where later work changed or extended a decision, the later document governs:
+
+- §1 "Current State" describes the pre-V2, `localStorage`-only app.
+- §2 "Onboarding state is intentionally not a persisted entity": readiness is still
+  derived. Uncommitted setup drafts and a completion ledger are now persisted — see
+  `docs/ONBOARDING_SETUP_ARCHITECTURE.md` §3.
+- §8: `DataRepository` is still not decomposed. Guided setup adds a separate
+  `SetupRepository` beside it rather than widening it.
+- §11: steps 3–6 (schema, authentication, organizations, the Supabase repository
+  and migration) are complete; step 8 (fast teacher onboarding) is in progress.
 
 ---
 
@@ -593,5 +602,4 @@ comes later and does not block initial teacher onboarding.
 
 ---
 
-*This document describes intended architecture only. No tables, policies, or
-authentication have been created.*
+*Design record. See the status note at the top for what has been built since.*

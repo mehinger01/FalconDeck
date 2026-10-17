@@ -217,7 +217,7 @@ console.log("\n14. Multiple rows each map to their own correct TransitionOverrid
 
 interface RecordedCall {
   table: string;
-  op: "delete" | "upsert";
+  op: "delete" | "upsert" | "update";
   rows?: unknown[];
   eqCalls?: Array<{ column: string; value: unknown }>;
 }
@@ -249,6 +249,22 @@ function createRecordingClient(): { client: SupabaseClient<Database>; calls: Rec
         upsert(rows: unknown) {
           calls.push({ table, op: "upsert", rows: rows as unknown[] });
           return Promise.resolve({ data: null, error: null });
+        },
+        // applyDiff writes the two one-row-per-teacher tables as
+        // `.update(changedColumns).eq(...).select(...)`; reporting one
+        // updated row means it does not fall back to an insert.
+        update() {
+          calls.push({ table, op: "update" });
+          const updated: {
+            eq: () => typeof updated;
+            select: () => typeof updated;
+            then: (resolve: (value: { data: unknown[]; error: null }) => unknown) => unknown;
+          } = {
+            eq: () => updated,
+            select: () => updated,
+            then: (resolve) => Promise.resolve(resolve({ data: [{}], error: null })),
+          };
+          return updated;
         },
       };
     },

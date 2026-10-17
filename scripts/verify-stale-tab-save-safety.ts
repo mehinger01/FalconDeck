@@ -1,0 +1,606 @@
+/**
+ * Regression tests for what a STALE tab can do through the ordinary save
+ * engine (SupabaseDataRepository) - a tab still working from data it loaded
+ * before something else changed the database: guided setup completing in
+ * another tab, or simply a second ordinary tab.
+ *
+ * Every scenario here used to lose data. Sections 1-3 are the three
+ * outcomes docs/ONBOARDING_SETUP_ARCHITECTURE.md §9.2 reproduced:
+ *
+ *   1. changing one preference cleared the active schedule set by setup;
+ *   2. one failed save followed by another deleted the class, period
+ *      assignment and first lesson setup had committed;
+ *   3. the same with a private schedule deleted the first lesson and left
+ *      the tab unable to save at all.
+ *
+ * Runs the real SupabaseDataRepository and the real complete_setup(), as
+ * the teacher, under RLS, against a throwaway local PostgreSQL 17 server
+ * (scripts/support/testDatabase.ts). Nothing touches Supabase.
+ *
+ *   npm run verify:stale-tab-save-safety
+ */
+
+import { SupabaseDataRepository } from "@/lib/data/supabaseDataRepository";
+import { SupabaseSetupRepository } from "@/lib/data/supabaseSetupRepository";
+import type { AppData } from "@/lib/data/types";
+import { createEmptySetupDraft } from "@/lib/onboarding/setupDraft";
+import { generateId } from "@/lib/store/id";
+import type { SetupDraft, SetupSeed } from "@/types/setupDraft";
+import { createTestDatabase, type RpcClient, type SelectBuilder, type TestDatabase } from "./support/testDatabase";
+
+/** The seed of an account that has chosen nothing yet: no preferences row. */
+const EMPTY_SEED: SetupSeed = { activeBellScheduleId: null, lunchWave: "none" };
+
+let failures = 0;
+function check(label: string, condition: boolean) {
+  if (condition) {
+    console.log(`  ok  - ${label}`);
+  } else {
+    failures += 1;
+    console.error(`FAIL  - ${label}`);
+  }
+}
+/** A fact the scenario depends on. If it does not hold the scenario is not testing what it claims, so stop. */
+function precondition(label: string, holds: boolean) {
+  if (!holds) throw new Error(`precondition failed: ${label}`);
+}
+
+let db: TestDatabase;
+
+interface Teacher {
+  userId: string;
+  organizationId: string;
+  membershipId: string;
+  client: RpcClient;
+}
+
+async function newFounder(label: string): Promise<Teacher> {
+  const userId = await db.createUser(`${label}@example.test`);
+  const client = db.clientFor(userId);
+  const { error } = await client.rpc("bootstrap_organization", { organization_name: `${label} School` });
+  if (error) throw new Error(error.message);
+  const [row] = await db.admin<{ id: string; organization_id: string }>(
+    "select id, organization_id from public.organization_memberships where user_id = $1",
+    [userId],
+  );
+  return { userId, organizationId: row.organization_id, membershipId: row.id, client };
+}
+
+/** A school with one shared schedule (id `scheduleId`), and a brand-new teacher who has joined it. */
+async function newJoinerOfSchoolWithSharedSchedule(label: string, scheduleId: string): Promise<Teacher> {
+  const school = await newFounder(`${label}-school`);
+  await db.admin(
+    `insert into public.bell_schedules (id, organization_id, owner_type, owner_membership_id, name, is_default, source)
+     values ($1, $2, 'organization', null, 'Regular Day', true, 'built-in')`,
+    [scheduleId, school.organizationId],
+  );
+  await db.admin(
+    `insert into public.schedule_blocks (id, bell_schedule_id, organization_id, owner_type, owner_membership_id, position, label, kind, start_time, end_time)
+     values ($1 || ':p1', $1, $2, 'organization', null, 0, '1st Hour', 'instructional', '08:00', '08:50')`,
+    [scheduleId, school.organizationId],
+  );
+  const userId = await db.createUser(`${label}@example.test`);
+  const client = db.clientFor(userId);
+  const { error } = await client.rpc("join_existing_school", { target_organization_id: school.organizationId });
+  if (error) throw new Error(error.message);
+  const [row] = await db.admin<{ id: string }>("select id from public.organization_memberships where user_id = $1", [userId]);
+  return { userId, organizationId: school.organizationId, membershipId: row.id, client };
+}
+
+/** An ordinary app tab: the same repository class the cloud-ready provider constructs. */
+function openTab(teacher: Teacher, client: RpcClient = teacher.client): SupabaseDataRepository {
+  return new SupabaseDataRepository(client as unknown as ConstructorParameters<typeof SupabaseDataRepository>[0], {
+    organizationId: teacher.organizationId,
+    membershipId: teacher.membershipId,
+  });
+}
+
+function ownScheduleSetupDraft(): SetupDraft {
+  const courseId = generateId("course");
+  const sectionId = generateId("section");
+  return {
+    ...createEmptySetupDraft(),
+    courses: [{ id: courseId, name: "Geometry" }],
+    classSections: [{ id: sectionId, courseId, name: "Geometry - 1st Hour" }],
+    schedule: {
+      mode: "own",
+      id: generateId("schedule"),
+      name: "My Schedule",
+      timeZone: "America/Detroit",
+      blocks: [{ id: generateId("block"), label: "1st Hour", kind: "instructional", startTime: "08:00", endTime: "08:50", classSectionId: sectionId }],
+    },
+    lunchWave: "B",
+    firstLesson: { id: generateId("lesson"), date: "2026-10-12", classSectionId: sectionId, learningTarget: "I can.", agendaItems: [], resources: [], announcements: [] },
+  };
+}
+
+function sharedScheduleSetupDraft(scheduleId: string): SetupDraft {
+  const draft = ownScheduleSetupDraft();
+  return {
+    ...draft,
+    schedule: {
+      mode: "shared",
+      scheduleId,
+      expectedBlocks: [{ id: "p1", label: "1st Hour", kind: "instructional", startTime: "08:00", endTime: "08:50", customKindLabel: null, isLunchWindow: false, overrides: [] }],
+      assignments: [{ id: crypto.randomUUID(), blockId: "p1", classSectionId: draft.classSections[0].id }],
+    },
+  };
+}
+
+async function completeGuidedSetup(teacher: Teacher, draft: SetupDraft): Promise<void> {
+  const repository = new SupabaseSetupRepository(teacher.client, teacher.organizationId);
+  const saved = await repository.saveDraft(null, draft, EMPTY_SEED);
+  if (!saved.ok || saved.value.status !== "saved") throw new Error("could not save the draft");
+  const completed = await repository.completeSetup(saved.value.operationId, saved.value.revision);
+  if (!completed.ok || completed.value.status !== "completed") throw new Error("setup did not complete");
+}
+
+async function count(table: string, membershipId: string): Promise<number> {
+  const [row] = await db.admin<{ count: number }>(`select count(*)::int as count from public.${table} where owner_membership_id = $1`, [membershipId]);
+  return row.count;
+}
+
+async function preferences(membershipId: string): Promise<{ lunch_wave: string; active_bell_schedule_id: string | null } | null> {
+  const rows = await db.admin<{ lunch_wave: string; active_bell_schedule_id: string | null }>(
+    "select lunch_wave, active_bell_schedule_id from public.teacher_schedule_preferences where owner_membership_id = $1",
+    [membershipId],
+  );
+  return rows[0] ?? null;
+}
+
+async function exists(table: string, id: string): Promise<boolean> {
+  return (await db.admin(`select 1 from public.${table} where id = $1`, [id])).length === 1;
+}
+
+/**
+ * A client whose next write to `table` fails once, the way a dropped
+ * request would: the engine gets an error back and nothing is written.
+ * `armed` can be re-set to fail a later write too.
+ */
+function flakyClient(client: RpcClient, table: string): { client: RpcClient; failNext: () => void } {
+  let armed = false;
+  const failed = { data: null, error: { message: "TypeError: Failed to fetch" } };
+  const fail = (builder: SelectBuilder): SelectBuilder =>
+    ({ ...builder, eq: () => fail(builder), select: () => fail(builder), then: (resolve: (value: typeof failed) => unknown) => Promise.resolve(failed).then(resolve) }) as SelectBuilder;
+  return {
+    failNext: () => {
+      armed = true;
+    },
+    client: {
+      // The ordinary save writes teacher_schedule_preferences through this RPC.
+      async rpc(name, args) {
+        if (armed && table === "teacher_schedule_preferences" && name === "save_teacher_schedule_preferences") {
+          armed = false;
+          return failed;
+        }
+        return client.rpc(name, args);
+      },
+      from(name) {
+        const builder = client.from(name);
+        if (name !== table) return builder;
+        const intercept = <Args extends unknown[]>(method: (...args: Args) => SelectBuilder) =>
+          (...args: Args): SelectBuilder => {
+            if (!armed) return method(...args);
+            armed = false;
+            return fail(builder);
+          };
+        builder.upsert = intercept(builder.upsert.bind(builder));
+        builder.update = intercept(builder.update.bind(builder));
+        builder.delete = intercept(builder.delete.bind(builder));
+        return builder;
+      },
+    },
+  };
+}
+
+/**
+ * A client that runs `between` at one exact moment: after this tab's first
+ * column-level UPDATE of `table` has come back (matching no row), and
+ * before the engine does anything about that. It is how a test puts
+ * another tab's write precisely inside the gap.
+ */
+function clientWithGapAfterFirstUpdate(client: RpcClient, table: string, between: () => Promise<void>): RpcClient {
+  let pending = true;
+  return {
+    rpc: (name, args) => client.rpc(name, args),
+    from(name) {
+      const builder = client.from(name);
+      if (name !== table) return builder;
+      const update = builder.update.bind(builder);
+      builder.update = (patch) => {
+        const inner = update(patch);
+        if (!pending) return inner;
+        pending = false;
+        const gapped: SelectBuilder = {
+          ...inner,
+          eq: (column, value) => {
+            inner.eq(column, value);
+            return gapped;
+          },
+          select: (columns) => {
+            inner.select(columns);
+            return gapped;
+          },
+          then: (onFulfilled, onRejected) =>
+            inner
+              .then(async (result) => {
+                await between();
+                return result;
+              })
+              .then(onFulfilled, onRejected),
+        };
+        return gapped;
+      };
+      return builder;
+    },
+  };
+}
+
+const withLunchWave = (data: AppData, lunchWave: AppData["teacherSchedulePreferences"]["lunchWave"]): AppData => ({
+  ...data,
+  teacherSchedulePreferences: { ...data.teacherSchedulePreferences, lunchWave },
+});
+
+/** Adds one course and one class section of the tab's own. Returns the new data and the two ids. */
+function withOwnClass(data: AppData, name: string): { data: AppData; courseId: string; sectionId: string } {
+  const courseId = generateId("course");
+  const sectionId = generateId("section");
+  return {
+    courseId,
+    sectionId,
+    data: {
+      ...data,
+      courses: [...data.courses, { id: courseId, name }],
+      classSections: [...data.classSections, { id: sectionId, courseId, name: `${name} - 1st Hour` }],
+    },
+  };
+}
+
+async function main() {
+  db = await createTestDatabase();
+
+  console.log("1. A stale tab changes one preference after setup completed elsewhere");
+  {
+    const teacher = await newFounder("one-preference");
+    const tab = openTab(teacher);
+    const loadedBeforeSetup = await tab.load();
+    precondition("the tab loaded an empty account", loadedBeforeSetup.classSections.length === 0 && loadedBeforeSetup.teacherSchedulePreferences.activeBellScheduleId === null);
+
+    const draft = ownScheduleSetupDraft();
+    await completeGuidedSetup(teacher, draft);
+    const committedSchedule = draft.schedule?.mode === "own" ? draft.schedule.id : "";
+    precondition("setup committed with its schedule active", (await preferences(teacher.membershipId))?.active_bell_schedule_id === committedSchedule);
+
+    const result = await tab.save(withLunchWave(loadedBeforeSetup, "A"));
+    check("the stale tab's save succeeds", result.ok);
+    const after = await preferences(teacher.membershipId);
+    check("the active schedule set by setup is still set", after?.active_bell_schedule_id === committedSchedule);
+    check("the tab's own edit - the lunch wave - is saved", after?.lunch_wave === "A");
+    check("setup's class, schedule and lesson are untouched", (await count("class_sections", teacher.membershipId)) === 1 && (await count("bell_schedules", teacher.membershipId)) === 1 && (await count("lessons", teacher.membershipId)) === 1);
+  }
+
+  console.log("\n2. A stale tab has one failed save, then saves again (teacher uses the school's schedule)");
+  {
+    const scheduleId = "schedule-shared-regular";
+    const teacher = await newJoinerOfSchoolWithSharedSchedule("failed-then-retry-shared", scheduleId);
+    const flaky = flakyClient(teacher.client, "teacher_schedule_preferences");
+    const tab = openTab(teacher, flaky.client);
+    const loadedBeforeSetup = await tab.load();
+    await completeGuidedSetup(teacher, sharedScheduleSetupDraft(scheduleId));
+    precondition("setup committed one class, one period assignment, one lesson", (await count("class_sections", teacher.membershipId)) === 1 && (await count("teacher_period_assignments", teacher.membershipId)) === 1 && (await count("lessons", teacher.membershipId)) === 1);
+
+    const edited = withLunchWave(loadedBeforeSetup, "A");
+    flaky.failNext();
+    precondition("the first save fails", !(await tab.save(edited)).ok);
+    precondition("...having written nothing (the lunch wave is still the one setup committed)", (await preferences(teacher.membershipId))?.lunch_wave === "B");
+
+    const retry = await tab.save(edited);
+    check("the retry succeeds", retry.ok);
+    check("the period assignment committed by setup survives", (await count("teacher_period_assignments", teacher.membershipId)) === 1);
+    check("the first lesson committed by setup survives", (await count("lessons", teacher.membershipId)) === 1 && (await count("lesson_class_sections", teacher.membershipId)) === 1);
+    check("the class committed by setup survives", (await count("class_sections", teacher.membershipId)) === 1);
+    const after = await preferences(teacher.membershipId);
+    check("the active schedule is still the school's", after?.active_bell_schedule_id === scheduleId);
+    check("the unsaved edit from the failed save is now saved", after?.lunch_wave === "A");
+  }
+
+  console.log("\n3. The same, when the teacher built their own schedule");
+  {
+    const teacher = await newFounder("failed-then-retry-own");
+    const flaky = flakyClient(teacher.client, "teacher_schedule_preferences");
+    const tab = openTab(teacher, flaky.client);
+    const loadedBeforeSetup = await tab.load();
+    const draft = ownScheduleSetupDraft();
+    await completeGuidedSetup(teacher, draft);
+
+    const edited = withLunchWave(loadedBeforeSetup, "A");
+    flaky.failNext();
+    precondition("the first save fails", !(await tab.save(edited)).ok);
+
+    check("the retry succeeds - it no longer runs into the private schedule's foreign key", (await tab.save(edited)).ok);
+    check("the first lesson committed by setup survives", (await count("lessons", teacher.membershipId)) === 1);
+    check("the class, schedule and its block survive", (await count("class_sections", teacher.membershipId)) === 1 && (await count("bell_schedules", teacher.membershipId)) === 1 && (await count("schedule_blocks", teacher.membershipId)) === 1);
+    const after = await preferences(teacher.membershipId);
+    check("the private schedule is still active, and the lunch wave edit is saved", after?.active_bell_schedule_id === (draft.schedule?.mode === "own" ? draft.schedule.id : "") && after?.lunch_wave === "A");
+    check("later saves from that tab keep working", (await tab.save(withLunchWave(edited, "C"))).ok && (await preferences(teacher.membershipId))?.lunch_wave === "C");
+  }
+
+  console.log("\n4. Unsaved edits are preserved through recovery");
+  {
+    const teacher = await newFounder("preserve-edits");
+    const flaky = flakyClient(teacher.client, "class_sections");
+    const tab = openTab(teacher, flaky.client);
+    const loaded = await tab.load();
+    await completeGuidedSetup(teacher, ownScheduleSetupDraft());
+
+    // One edit: a new course and class of the tab's own, plus a lunch wave.
+    const first = withOwnClass(withLunchWave(loaded, "A"), "Algebra");
+    flaky.failNext();
+    precondition("the save fails partway - after the course was written, at the class", !(await tab.save(first.data)).ok);
+    precondition("...leaving a half-written state: the course exists, its class does not", (await exists("courses", first.courseId)) && !(await exists("class_sections", first.sectionId)));
+
+    // The teacher keeps working before the retry: one more class.
+    const second = withOwnClass(first.data, "Biology");
+    check("the next save succeeds", (await tab.save(second.data)).ok);
+    check("the edit from the failed save is saved in full", (await exists("courses", first.courseId)) && (await exists("class_sections", first.sectionId)));
+    check("the edit made after the failure is saved too", (await exists("courses", second.courseId)) && (await exists("class_sections", second.sectionId)));
+    check("the lunch wave from the failed save is saved", (await preferences(teacher.membershipId))?.lunch_wave === "A");
+    check("setup's own class and lesson are still there alongside them", (await count("class_sections", teacher.membershipId)) === 3 && (await count("lessons", teacher.membershipId)) === 1);
+
+    const [reloaded, memory] = [await openTab(teacher).load(), second.data];
+    check("a fresh load contains everything the tab had in memory", memory.classSections.every((section) => reloaded.classSections.some((candidate) => candidate.id === section.id)) && memory.courses.every((course) => reloaded.courses.some((candidate) => candidate.id === course.id)));
+  }
+
+  console.log("\n5. A half-written save is still corrected from the truth");
+  {
+    const teacher = await newFounder("half-written");
+    const flaky = flakyClient(teacher.client, "class_sections");
+    const tab = openTab(teacher, flaky.client);
+    const loaded = await tab.load();
+
+    // The failed save wrote a course. Before retrying, the teacher removes it again.
+    const attempted = withOwnClass(loaded, "Chemistry");
+    flaky.failNext();
+    precondition("the save fails after writing the course", !(await tab.save(attempted.data)).ok && (await exists("courses", attempted.courseId)));
+    check("retrying WITHOUT that course succeeds", (await tab.save(loaded)).ok);
+    check("...and removes the half-written course rather than leaving an orphan", !(await exists("courses", attempted.courseId)));
+
+    // A preference the failed save may have written, then reverted before the retry.
+    const flakyLessons = flakyClient(teacher.client, "class_sections");
+    const second = openTab(teacher, flakyLessons.client);
+    const base = await second.load();
+    const changed = withOwnClass(withLunchWave(base, "B"), "Physics");
+    // Courses are written first, classes second, preferences last - so
+    // failing at the class leaves the preference unwritten; write it the
+    // way a slower, partially-applied attempt would have.
+    flakyLessons.failNext();
+    precondition("the save fails", !(await second.save(changed.data)).ok);
+    await db.admin("insert into public.teacher_schedule_preferences (owner_membership_id, organization_id, lunch_wave) values ($1, $2, 'B') on conflict (owner_membership_id) do update set lunch_wave = 'B'", [teacher.membershipId, teacher.organizationId]);
+    check("retrying with the preference put back to 'none' succeeds", (await second.save(base)).ok);
+    check("...and the database ends at 'none', not at the half-written 'B'", (await preferences(teacher.membershipId))?.lunch_wave === "none");
+    check("...with the abandoned course removed", !(await exists("courses", changed.courseId)));
+  }
+
+  console.log("\n6. Two ordinary tabs, no guided setup involved");
+  {
+    const teacher = await newFounder("two-tabs");
+    const flaky = flakyClient(teacher.client, "teacher_schedule_preferences");
+    const staleTab = openTab(teacher, flaky.client);
+    const staleData = await staleTab.load();
+
+    // The other tab adds a class and saves normally.
+    const otherTab = openTab(teacher);
+    const other = withOwnClass(await otherTab.load(), "History");
+    precondition("the other tab's save succeeds", (await otherTab.save(other.data)).ok);
+
+    const mine = withOwnClass(withLunchWave(staleData, "A"), "Art");
+    flaky.failNext();
+    precondition("the stale tab's first save fails", !(await staleTab.save(mine.data)).ok);
+    check("the stale tab's retry succeeds", (await staleTab.save(mine.data)).ok);
+    check("the class the OTHER tab added survives", (await exists("class_sections", other.sectionId)) && (await exists("courses", other.courseId)));
+    check("the stale tab's own class is saved", (await exists("class_sections", mine.sectionId)));
+    check("both tabs' work is present in a fresh load", (await openTab(teacher).load()).classSections.length === 2);
+  }
+
+  console.log("\n7. A tab can still delete what it knows about - and only that");
+  {
+    const teacher = await newFounder("deletes");
+    const tab = openTab(teacher);
+    const mine = withOwnClass(await tab.load(), "Music");
+    precondition("the tab saves its own class", (await tab.save(mine.data)).ok);
+
+    const otherTab = openTab(teacher);
+    const elsewhere = withOwnClass(await otherTab.load(), "Drama");
+    precondition("another tab adds a second class", (await otherTab.save(elsewhere.data)).ok);
+
+    const emptied: AppData = { ...mine.data, courses: [], classSections: [] };
+    check("deleting its own class succeeds", (await tab.save(emptied)).ok);
+    check("its own class and course are gone", !(await exists("class_sections", mine.sectionId)) && !(await exists("courses", mine.courseId)));
+    check("the class it never loaded is still there", (await exists("class_sections", elsewhere.sectionId)) && (await exists("courses", elsewhere.courseId)));
+  }
+
+  console.log("\n8. Limits that remain, stated as tests");
+  {
+    const teacher = await newFounder("limits");
+    const tab = openTab(teacher);
+    const loaded = await tab.load();
+    await completeGuidedSetup(teacher, ownScheduleSetupDraft());
+
+    // Saving with nothing changed writes nothing at all.
+    await tab.save(structuredClone(loaded));
+    const untouched = await preferences(teacher.membershipId);
+    check("a save with no edits leaves setup's preferences exactly as committed", untouched?.lunch_wave === "B" && untouched.active_bell_schedule_id !== null);
+
+    // A field the stale tab's user DOES edit is still last-write-wins.
+    await tab.save(withLunchWave(loaded, "C"));
+    check("a field the tab explicitly edits overwrites the newer value (last write wins, per field)", (await preferences(teacher.membershipId))?.lunch_wave === "C");
+
+    // The stale tab still cannot SEE what it never loaded.
+    check("the stale tab's memory still has no classes - only a reload shows setup's data", loaded.classSections.length === 0 && (await openTab(teacher).load()).classSections.length === 1);
+    const state = await new SupabaseSetupRepository(teacher.client, teacher.organizationId).getState();
+    check("setup is still recorded as completed", state.ok && state.value.status === "completed");
+  }
+
+  console.log("\n9. The settings row is created by another tab between this tab's UPDATE and its fallback");
+  {
+    // teacher_schedule_preferences: there is no longer a client-side gap to
+    // put another write in. The update-then-create-if-missing sequence runs
+    // inside save_teacher_schedule_preferences(), after it has taken the
+    // membership lock complete_setup() also takes - see
+    // verify:onboarding-setup-concurrency section 11 for those two
+    // overlapping. What is checked here is that the ordinary save really goes
+    // that way: one RPC, and no direct write to the table at all.
+    const teacher = await newFounder("gap-preferences");
+    const draft = ownScheduleSetupDraft();
+    const directWrites: string[] = [];
+    const rpcCalls: string[] = [];
+    const observed: RpcClient = {
+      rpc: (name, args) => {
+        rpcCalls.push(name);
+        return teacher.client.rpc(name, args);
+      },
+      from(name) {
+        const builder = teacher.client.from(name);
+        if (name !== "teacher_schedule_preferences") return builder;
+        for (const method of ["upsert", "update", "delete"] as const) {
+          const original = builder[method].bind(builder) as (...args: never[]) => SelectBuilder;
+          (builder as unknown as Record<string, unknown>)[method] = (...args: never[]) => {
+            directWrites.push(method);
+            return original(...args);
+          };
+        }
+        return builder;
+      },
+    };
+    const tab = openTab(teacher, observed);
+    const loaded = await tab.load();
+    await completeGuidedSetup(teacher, draft);
+    const result = await tab.save(withLunchWave(loaded, "A"));
+    check("the save succeeds", result.ok);
+    check("...through save_teacher_schedule_preferences, once", rpcCalls.filter((name) => name === "save_teacher_schedule_preferences").length === 1);
+    check("...with no direct write to teacher_schedule_preferences", directWrites.length === 0);
+    const after = await preferences(teacher.membershipId);
+    check("the active schedule guided setup wrote survives", after?.active_bell_schedule_id === (draft.schedule?.mode === "own" ? draft.schedule.id : ""));
+    check("this tab's own edit - the lunch wave - is saved", after?.lunch_wave === "A");
+    check("there is still exactly one preferences row", (await count("teacher_schedule_preferences", teacher.membershipId)) === 1);
+
+    // classroom_experience_settings: same gap, another tab creating the row
+    // with two settings this tab never touches.
+    const other = await newFounder("gap-experience");
+    const experience = async () =>
+      (await db.admin<{ final_five_message: string; bell_offset_seconds: number; end_of_day_message: string }>(
+        "select final_five_message, bell_offset_seconds, end_of_day_message from public.classroom_experience_settings where owner_membership_id = $1",
+        [other.membershipId],
+      ))[0] ?? null;
+    let experienceUpdatesSeen = 0;
+    const experienceTab = openTab(
+      other,
+      clientWithGapAfterFirstUpdate(other.client, "classroom_experience_settings", async () => {
+        experienceUpdatesSeen += 1;
+        precondition("no settings row existed when this tab's UPDATE ran", (await experience()) === null);
+        // Written as the teacher, through RLS - what another tab's first save of these settings does.
+        await db.asUser(
+          other.userId,
+          `insert into public.classroom_experience_settings (owner_membership_id, organization_id, final_five_message, bell_offset_seconds) values ($1, $2, 'Pack up', 30)`,
+          [other.membershipId, other.organizationId],
+        );
+      }),
+    );
+    const experienceLoaded = await experienceTab.load();
+    const experienceResult = await experienceTab.save({
+      ...experienceLoaded,
+      classroomExperienceSettings: { ...experienceLoaded.classroomExperienceSettings, endOfDayMessage: "See you tomorrow." },
+    });
+    precondition("the gap was actually exercised", experienceUpdatesSeen === 1);
+    check("the save succeeds", experienceResult.ok);
+    const settings = await experience();
+    check("the two settings the other tab wrote in the gap survive", settings?.final_five_message === "Pack up" && settings.bell_offset_seconds === 30);
+    check("this tab's own edit is saved", settings?.end_of_day_message === "See you tomorrow.");
+
+    // And with no other tab at all, the first-ever write still creates the row in full.
+    const alone = await newFounder("gap-nobody");
+    const aloneTab = openTab(alone);
+    const aloneLoaded = await aloneTab.load();
+    check("with no row and no other writer, the first save creates the row", (await aloneTab.save(withLunchWave(aloneLoaded, "C"))).ok && (await preferences(alone.membershipId))?.lunch_wave === "C");
+    check("...and a second save updates it in place", (await aloneTab.save(withLunchWave(aloneLoaded, "B"))).ok && (await preferences(alone.membershipId))?.lunch_wave === "B" && (await count("teacher_schedule_preferences", alone.membershipId)) === 1);
+  }
+
+  console.log("\n10. A class deleted in another tab: its lesson edit is held back, and nothing else is blocked");
+  {
+    const teacher = await newFounder("deleted-class");
+    const draft = ownScheduleSetupDraft();
+    await completeGuidedSetup(teacher, draft);
+    const sectionId = draft.classSections[0].id;
+    const lessonId = draft.firstLesson!.id;
+    const finalFiveMessage = async () =>
+      (await db.admin<{ final_five_message: string }>("select final_five_message from public.classroom_experience_settings where owner_membership_id = $1", [teacher.membershipId]))[0]?.final_five_message ?? null;
+
+    const deleter = openTab(teacher);
+    const stale = openTab(teacher);
+    const deleterData = await deleter.load();
+    const staleData = await stale.load();
+    precondition("the stale tab loaded the class and its lesson", staleData.classSections.length === 1 && staleData.lessons.length === 1);
+
+    // The other tab deletes the class and what hangs off it.
+    const deleted = await deleter.save({
+      ...deleterData,
+      classSections: [],
+      lessons: [],
+      classPresentationSettings: [],
+      schedules: deleterData.schedules.map((schedule) => ({ ...schedule, blocks: schedule.blocks.map((block) => ({ ...block, classSectionId: null })) })),
+    });
+    precondition("the other tab's delete succeeded", deleted.ok && !(await exists("class_sections", sectionId)) && !(await exists("lessons", lessonId)));
+
+    // The stale tab edits that class's lesson and, in the same save, an unrelated setting.
+    const edited: AppData = {
+      ...staleData,
+      lessons: staleData.lessons.map((lesson) => ({ ...lesson, learningTarget: "Edited in the stale tab" })),
+      classroomExperienceSettings: { ...staleData.classroomExperienceSettings, finalFiveMessage: "Pack up" },
+    };
+    const first = await stale.save(edited);
+    check("the save is not reported as a success", !first.ok);
+    check("...it reports the lesson as held back, naming the class", !first.ok && first.reason === "held-back" && first.message.includes("Geometry - 1st Hour") && first.message.includes("NOT saved"));
+    check("the unrelated setting in the same save IS saved", (await finalFiveMessage()) === "Pack up");
+    check("the deleted class is not re-created", !(await exists("class_sections", sectionId)));
+    check("the lesson is not written", !(await exists("lessons", lessonId)));
+
+    // Retrying the very same data: same answer every time, never a database error, never a success.
+    const retries = [await stale.save(edited), await stale.save(edited), await stale.save(edited)];
+    check("three retries each report the same held-back lesson", retries.every((result) => !result.ok && result.reason === "held-back"));
+    check("...and still do not re-create the class or write the lesson", !(await exists("class_sections", sectionId)) && !(await exists("lessons", lessonId)));
+
+    // Later, unrelated edits keep saving while the lesson stays unsaved.
+    const later = withLunchWave({ ...edited, classroomExperienceSettings: { ...edited.classroomExperienceSettings, finalFiveMessage: "Chairs up" } }, "C");
+    const laterResult = await stale.save(later);
+    check("a later unrelated edit is saved", (await finalFiveMessage()) === "Chairs up" && (await preferences(teacher.membershipId))?.lunch_wave === "C");
+    check("...and that save still reports the lesson as unsaved", !laterResult.ok && laterResult.reason === "held-back");
+    check("the tab's own copy of the lesson edit is untouched by all of this", later.lessons[0].learningTarget === "Edited in the stale tab" && later.lessons[0].id === lessonId);
+
+    // A brand-new lesson for the deleted class is held back the same way.
+    const withNewLesson: AppData = { ...later, lessons: [...later.lessons, { ...later.lessons[0], id: generateId("lesson"), date: "2026-10-13" }] };
+    const newLessonResult = await stale.save(withNewLesson);
+    check("a new lesson for the deleted class is held back too", !newLessonResult.ok && newLessonResult.reason === "held-back" && newLessonResult.message.includes("2 lessons") && (await count("lessons", teacher.membershipId)) === 0);
+
+    // Once the teacher lets the lesson edits go, saving reports success again.
+    const reverted = await stale.save({ ...later, lessons: staleData.lessons });
+    check("with the lesson edit withdrawn, the save succeeds", reverted.ok);
+
+    // A lesson for a class that still exists is never held back.
+    const other = await newFounder("deleted-class-control");
+    await completeGuidedSetup(other, ownScheduleSetupDraft());
+    const otherTab = openTab(other);
+    const otherData = await otherTab.load();
+    const ordinary = await otherTab.save({ ...otherData, lessons: otherData.lessons.map((lesson) => ({ ...lesson, learningTarget: "Ordinary edit" })) });
+    check("an ordinary lesson edit, class intact, saves normally", ordinary.ok && (await db.admin("select 1 from public.lessons where owner_membership_id = $1 and learning_target = 'Ordinary edit'", [other.membershipId])).length === 1);
+  }
+
+  await db.close();
+  console.log(`\n${failures === 0 ? "All checks passed." : `${failures} check(s) FAILED.`}`);
+  process.exit(failures === 0 ? 0 : 1);
+}
+
+main().catch(async (error) => {
+  console.error(error);
+  await db?.close().catch(() => {});
+  process.exit(1);
+});

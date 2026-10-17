@@ -359,8 +359,11 @@ check(
 
 interface RecordedWrite {
   table: string;
-  op: "delete" | "upsert";
+  op: "delete" | "upsert" | "update" | "rpc";
 }
+
+/** The table each RPC applyDiff() calls writes to. */
+const RPC_TABLES: Record<string, string> = { save_teacher_schedule_preferences: "teacher_schedule_preferences" };
 
 function createRecordingClient(): { client: SupabaseClient<Database>; calls: RecordedWrite[] } {
   const calls: RecordedWrite[] = [];
@@ -375,6 +378,10 @@ function createRecordingClient(): { client: SupabaseClient<Database>; calls: Rec
     return builder;
   }
   const client = {
+    rpc(name: string) {
+      calls.push({ table: RPC_TABLES[name] ?? `rpc:${name}`, op: "rpc" });
+      return Promise.resolve({ data: null, error: null });
+    },
     from(table: string) {
       return {
         delete() {
@@ -384,6 +391,22 @@ function createRecordingClient(): { client: SupabaseClient<Database>; calls: Rec
         upsert(_rows: unknown) {
           calls.push({ table, op: "upsert" });
           return Promise.resolve({ data: null, error: null });
+        },
+        // applyDiff writes the two one-row-per-teacher tables as
+        // `.update(changedColumns).eq(...).select(...)`; reporting one
+        // updated row means it does not fall back to an insert.
+        update() {
+          calls.push({ table, op: "update" });
+          const updated: {
+            eq: () => typeof updated;
+            select: () => typeof updated;
+            then: (resolve: (value: { data: unknown[]; error: null }) => unknown) => unknown;
+          } = {
+            eq: () => updated,
+            select: () => updated,
+            then: (resolve) => Promise.resolve(resolve({ data: [{}], error: null })),
+          };
+          return updated;
         },
       };
     },

@@ -513,23 +513,351 @@ export async function applyDiff(client: Client, ctx: OwnerContext, prev: AppData
     );
   }
 
-  if (!Map_.deepEqual(prev.classroomExperienceSettings, next.classroomExperienceSettings)) {
-    unwrap(
-      await client
-        .from("classroom_experience_settings")
-        .upsert(Map_.classroomExperienceSettingsToRow(next.classroomExperienceSettings, ctx)),
-      "upsert classroom_experience_settings",
+  // The two one-row-per-teacher tables are written as "only the columns
+  // this tab changed", never as the whole row - see changedColumns().
+  const experiencePatch = changedColumns(
+    Map_.classroomExperienceSettingsToRow(prev.classroomExperienceSettings, ctx),
+    Map_.classroomExperienceSettingsToRow(next.classroomExperienceSettings, ctx),
+  );
+  if (experiencePatch) {
+    const patch = experiencePatch;
+    await patchOrCreateRow(
+      "classroom_experience_settings",
+      () =>
+        client
+          .from("classroom_experience_settings")
+          .update(patch)
+          .eq("owner_membership_id", ctx.membershipId)
+          .select("owner_membership_id"),
+      () =>
+        client
+          .from("classroom_experience_settings")
+          .upsert(Map_.classroomExperienceSettingsToRow(next.classroomExperienceSettings, ctx), CREATE_ONLY),
     );
   }
 
-  if (!Map_.deepEqual(prev.teacherSchedulePreferences, next.teacherSchedulePreferences)) {
+  const preferencesPatch = changedColumns(
+    Map_.teacherSchedulePreferencesToRow(prev.teacherSchedulePreferences, ctx),
+    Map_.teacherSchedulePreferencesToRow(next.teacherSchedulePreferences, ctx),
+  );
+  if (preferencesPatch) {
+    // The same changed-columns-then-create-if-missing write as
+    // patchOrCreateRow(), but performed by save_teacher_schedule_preferences()
+    // so that it takes the membership lock complete_setup() takes, before it
+    // touches the row (supabase/migrations/20261010210200_teacher_schedule_preferences_write_rpc.sql).
+    // It runs as the caller, under the table's RLS, and the membership is
+    // resolved server-side from the session and ctx.organizationId.
+    const row = Map_.teacherSchedulePreferencesToRow(next.teacherSchedulePreferences, ctx);
     unwrap(
-      await client
-        .from("teacher_schedule_preferences")
-        .upsert(Map_.teacherSchedulePreferencesToRow(next.teacherSchedulePreferences, ctx)),
-      "upsert teacher_schedule_preferences",
+      await (client as unknown as SchedulePreferencesRpcClient).rpc("save_teacher_schedule_preferences", {
+        p_organization_id: ctx.organizationId,
+        p_lunch_wave: row.lunch_wave,
+        p_active_bell_schedule_id: row.active_bell_schedule_id ?? null,
+        p_changed_columns: Object.keys(preferencesPatch),
+      }),
+      "save teacher_schedule_preferences",
     );
   }
+}
+
+/**
+ * Narrow overlay for the one RPC applyDiff() calls - the generated
+ * lib/data/supabase.types.ts predates it and is never hand-edited (same
+ * approach as lib/data/bellScheduleImportRpc.ts).
+ */
+interface SchedulePreferencesRpcClient {
+  rpc(
+    name: "save_teacher_schedule_preferences",
+    args: {
+      p_organization_id: string;
+      p_lunch_wave: string;
+      p_active_bell_schedule_id: string | null;
+      p_changed_columns: string[];
+    },
+  ): PromiseLike<{ data: unknown; error: { message: string } | null }>;
+}
+
+/** INSERT ... ON CONFLICT DO NOTHING: creates the teacher's row if it is missing, and never modifies one that exists. */
+const CREATE_ONLY = { onConflict: "owner_membership_id", ignoreDuplicates: true } as const;
+
+type WriteResult<T> = { data: T | null; error: { message: string } | null };
+
+/**
+ * Writes changed columns to a one-row-per-teacher table, creating the row
+ * first if it does not exist. The whole row is only ever sent by an INSERT
+ * that does nothing when a row is already there - so this tab's copy of the
+ * columns it did NOT change can never replace anyone else's values:
+ *
+ *   1. UPDATE the changed columns. In the usual case the row exists and
+ *      this is the only request.
+ *   2. If that matched no row: INSERT the full row, ON CONFLICT DO NOTHING.
+ *      Either the row really was missing and is now created from this
+ *      tab's values (there was nothing newer to lose), or another tab
+ *      created it in the meantime and this statement changes nothing.
+ *   3. UPDATE the changed columns again. After (2) a row exists whichever
+ *      tab created it, so the changed columns land on it and every other
+ *      column keeps the value its creator gave it.
+ *
+ * No step is a read-then-decide: each is a single statement whose effect
+ * is correct whatever another tab did just before it.
+ */
+async function patchOrCreateRow(
+  table: string,
+  updateChangedColumns: () => PromiseLike<WriteResult<unknown[]>>,
+  createIfMissing: () => PromiseLike<WriteResult<unknown>>,
+): Promise<void> {
+  if (unwrap(await updateChangedColumns(), `update ${table}`).length > 0) return;
+  unwrap(await createIfMissing(), `insert ${table}`);
+  unwrap(await updateChangedColumns(), `update ${table}`);
+}
+
+/**
+ * The columns whose value differs between `prev` and `next`, or `null` when
+ * none do.
+ *
+ * Why the one-row-per-teacher tables are patched rather than upserted
+ * whole: `prev` and `next` are both THIS TAB's view. A column this tab did
+ * not change may hold a newer value in the database - written by another
+ * tab, another device, or a server-side function - that this tab
+ * has never seen. Sending the whole row would silently put this tab's old
+ * value back (e.g. a tab that only changes the lunch wave clearing the
+ * active schedule another tab just set). Sending only what changed means a
+ * tab can only ever overwrite what its own user actually edited.
+ *
+ * A row that does not exist yet is handled by patchOrCreateRow().
+ */
+function changedColumns<Row extends object>(prev: Row, next: Row): Partial<Row> | null {
+  const patch: Partial<Row> = {};
+  let changed = false;
+  for (const column of Object.keys(next) as Array<keyof Row>) {
+    if (!Map_.deepEqual(prev[column], next[column])) {
+      patch[column] = next[column];
+      changed = true;
+    }
+  }
+  return changed ? patch : null;
+}
+
+// ---------------------------------------------------------------------------
+// Recovering from a failed save
+// ---------------------------------------------------------------------------
+
+/**
+ * What a failed save may or may not have written. applyDiff() is a
+ * sequence of independent writes, so when it throws partway nobody knows
+ * which of the rows it meant to change actually changed. Those rows - and
+ * only those - are "uncertain" until a later save succeeds.
+ */
+export interface UncertainWrites {
+  courses: Set<string>;
+  classSections: Set<string>;
+  schedules: Set<string>;
+  lessons: Set<string>;
+  libraryResources: Set<string>;
+  classPresentationSettings: Set<string>;
+  teacherPeriodAssignments: Set<string>;
+  transitionOverrides: Set<string>;
+  schoolCalendar: boolean;
+  /** Field names (not ids) of the two one-row-per-teacher settings objects. */
+  teacherSchedulePreferences: Set<string>;
+  classroomExperienceSettings: Set<string>;
+}
+
+export function noUncertainWrites(): UncertainWrites {
+  return {
+    courses: new Set(),
+    classSections: new Set(),
+    schedules: new Set(),
+    lessons: new Set(),
+    libraryResources: new Set(),
+    classPresentationSettings: new Set(),
+    teacherPeriodAssignments: new Set(),
+    transitionOverrides: new Set(),
+    schoolCalendar: false,
+    teacherSchedulePreferences: new Set(),
+    classroomExperienceSettings: new Set(),
+  };
+}
+
+const presentationKey = (settings: AppData["classPresentationSettings"][number]) => settings.classSectionId;
+const idKey = (item: Keyed) => item.id;
+
+function addChangedKeys<T>(into: Set<string>, prev: T[], next: T[], keyOf: (item: T) => string): void {
+  const prevByKey = new Map(prev.map((item) => [keyOf(item), item]));
+  const nextKeys = new Set(next.map(keyOf));
+  for (const item of next) {
+    const prior = prevByKey.get(keyOf(item));
+    if (!prior || !Map_.deepEqual(prior, item)) into.add(keyOf(item));
+  }
+  for (const key of prevByKey.keys()) {
+    if (!nextKeys.has(key)) into.add(key);
+  }
+}
+
+/** Records every row a save from `prev` to `next` would have touched. Accumulates across consecutive failures. */
+export function recordAttemptedWrites(into: UncertainWrites, prev: AppData, next: AppData): void {
+  addChangedKeys(into.courses, prev.courses, next.courses, idKey);
+  addChangedKeys(into.classSections, prev.classSections, next.classSections, idKey);
+  addChangedKeys(into.schedules, prev.schedules, next.schedules, idKey);
+  addChangedKeys(into.lessons, prev.lessons, next.lessons, idKey);
+  addChangedKeys(into.libraryResources, prev.libraryResources, next.libraryResources, idKey);
+  addChangedKeys(into.classPresentationSettings, prev.classPresentationSettings, next.classPresentationSettings, presentationKey);
+  addChangedKeys(into.teacherPeriodAssignments, prev.teacherPeriodAssignments, next.teacherPeriodAssignments, idKey);
+  addChangedKeys(into.transitionOverrides, prev.transitionOverrides, next.transitionOverrides, idKey);
+  if (!Map_.deepEqual(prev.schoolCalendar, next.schoolCalendar)) into.schoolCalendar = true;
+  addChangedFields(into.teacherSchedulePreferences, prev.teacherSchedulePreferences, next.teacherSchedulePreferences);
+  addChangedFields(into.classroomExperienceSettings, prev.classroomExperienceSettings, next.classroomExperienceSettings);
+}
+
+function addChangedFields<T extends object>(into: Set<string>, prev: T, next: T): void {
+  for (const field of new Set([...Object.keys(prev), ...Object.keys(next)]) as Set<keyof T & string>) {
+    if (!Map_.deepEqual(prev[field], next[field])) into.add(field);
+  }
+}
+
+/** `baseline`, with just the uncertain fields replaced by what the database now holds for them. */
+function rebaseFields<T extends object>(baseline: T, remote: T, uncertain: Set<string>): T {
+  if (uncertain.size === 0) return baseline;
+  const rebased = { ...baseline };
+  for (const field of uncertain as Set<keyof T & string>) rebased[field] = remote[field];
+  return rebased;
+}
+
+function rebaseList<T>(baseline: T[], remote: T[], uncertain: Set<string>, keyOf: (item: T) => string): T[] {
+  if (uncertain.size === 0) return baseline;
+  return [
+    ...baseline.filter((item) => !uncertain.has(keyOf(item))),
+    ...remote.filter((item) => uncertain.has(keyOf(item))),
+  ];
+}
+
+/**
+ * The baseline to diff the next save against after a failure.
+ *
+ * `baseline` is the last state this tab KNOWS the database held for its own
+ * rows. `remote` is the database as just re-read. For each uncertain row
+ * the truth is taken from `remote` (present with whatever it now holds, or
+ * absent), so the next save corrects exactly what the failed one left
+ * behind. Every other row keeps its `baseline` value.
+ *
+ * What this deliberately does NOT do is adopt `remote` wholesale. `remote`
+ * may contain rows this tab has never loaded - created by another tab,
+ * another device, or a server-side function. Diffed against this tab's memory
+ * they would all look "removed" and be deleted. A row that is neither in
+ * `baseline` nor uncertain is therefore left out entirely: this tab did not
+ * create it, has not seen it, and has no business touching it.
+ *
+ * The two one-row-per-teacher settings follow the same rule one level
+ * down, per field: a field the failed save tried to change is re-read; a
+ * field this tab never changed keeps its `baseline` value, so the
+ * changed-columns-only write (see changedColumns) still cannot touch it.
+ */
+export function rebaseline(baseline: AppData, remote: AppData, uncertain: UncertainWrites): AppData {
+  return {
+    ...baseline,
+    courses: rebaseList(baseline.courses, remote.courses, uncertain.courses, idKey),
+    classSections: rebaseList(baseline.classSections, remote.classSections, uncertain.classSections, idKey),
+    schedules: rebaseList(baseline.schedules, remote.schedules, uncertain.schedules, idKey),
+    lessons: rebaseList(baseline.lessons, remote.lessons, uncertain.lessons, idKey),
+    libraryResources: rebaseList(baseline.libraryResources, remote.libraryResources, uncertain.libraryResources, idKey),
+    classPresentationSettings: rebaseList(
+      baseline.classPresentationSettings,
+      remote.classPresentationSettings,
+      uncertain.classPresentationSettings,
+      presentationKey,
+    ),
+    teacherPeriodAssignments: rebaseList(
+      baseline.teacherPeriodAssignments,
+      remote.teacherPeriodAssignments,
+      uncertain.teacherPeriodAssignments,
+      idKey,
+    ),
+    transitionOverrides: rebaseList(baseline.transitionOverrides, remote.transitionOverrides, uncertain.transitionOverrides, idKey),
+    teacherSchedulePreferences: rebaseFields(
+      baseline.teacherSchedulePreferences,
+      remote.teacherSchedulePreferences,
+      uncertain.teacherSchedulePreferences,
+    ),
+    classroomExperienceSettings: rebaseFields(
+      baseline.classroomExperienceSettings,
+      remote.classroomExperienceSettings,
+      uncertain.classroomExperienceSettings,
+    ),
+    // Same rule for the one calendar: take the re-read value only when it
+    // is the same calendar this tab already knew, never a different one.
+    schoolCalendar:
+      uncertain.schoolCalendar && remote.schoolCalendar !== null && remote.schoolCalendar.id === baseline.schoolCalendar?.id
+        ? remote.schoolCalendar
+        : baseline.schoolCalendar,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Lessons for a class that was deleted somewhere else
+// ---------------------------------------------------------------------------
+
+/**
+ * Class sections this tab still shows that the database no longer has, and
+ * that this tab did not itself try to change: deleted in another tab or on
+ * another device. `baseline` is what this tab last knew the database held,
+ * so a section in it really did exist; a section a failed save of this
+ * tab's own may have half-written is `uncertain` and is not counted.
+ */
+export function classSectionsDeletedElsewhere(baseline: AppData, remote: AppData, uncertain: UncertainWrites): string[] {
+  const remoteIds = new Set(remote.classSections.map(idKey));
+  return baseline.classSections
+    .map(idKey)
+    .filter((id) => !remoteIds.has(id) && !uncertain.classSections.has(id));
+}
+
+/**
+ * The lesson edits in `next` that cannot be written because their class
+ * was deleted elsewhere. Writing one fails its foreign key - every time -
+ * and because applyDiff() stops at the first failure, it would keep
+ * everything after it in the write order from ever being saved.
+ *
+ * A lesson is held back only while this save is not itself writing the
+ * class row (`prev` and `next` agree on it): the class is not re-created
+ * on the lesson's behalf.
+ */
+export function lessonsHeldBack(prev: AppData, next: AppData, deletedElsewhere: ReadonlySet<string>): DailyLesson[] {
+  if (deletedElsewhere.size === 0) return [];
+  const prevSections = new Map(prev.classSections.map((section) => [section.id, section]));
+  const nextSections = new Map(next.classSections.map((section) => [section.id, section]));
+  const prevLessons = new Map(prev.lessons.map((lesson) => [lesson.id, lesson]));
+  return next.lessons.filter((lesson) => {
+    if (!deletedElsewhere.has(lesson.classSectionId)) return false;
+    const section = nextSections.get(lesson.classSectionId);
+    if (!section || !Map_.deepEqual(prevSections.get(section.id), section)) return false;
+    const prior = prevLessons.get(lesson.id);
+    return !prior || !Map_.deepEqual(prior, lesson);
+  });
+}
+
+/** `next` as it can be written: each held-back lesson left exactly as `prev` has it (or absent), so applyDiff() does not touch it. */
+function withoutHeldBackLessons(prev: AppData, next: AppData, held: DailyLesson[]): AppData {
+  if (held.length === 0) return next;
+  const heldIds = new Set(held.map(idKey));
+  const prevLessons = new Map(prev.lessons.map((lesson) => [lesson.id, lesson]));
+  return {
+    ...next,
+    lessons: next.lessons.flatMap((lesson) => {
+      if (!heldIds.has(lesson.id)) return [lesson];
+      const prior = prevLessons.get(lesson.id);
+      return prior ? [prior] : [];
+    }),
+  };
+}
+
+function heldBackMessage(next: AppData, held: DailyLesson[]): string {
+  const sectionIds = new Set(held.map((lesson) => lesson.classSectionId));
+  const names = next.classSections.filter((section) => sectionIds.has(section.id)).map((section) => `"${section.name}"`);
+  const lessons = held.length === 1 ? "1 lesson" : `${held.length} lessons`;
+  const classes = names.length === 1 ? `the class ${names[0]}` : `the classes ${names.join(", ")}`;
+  return (
+    `Your changes to ${lessons} for ${classes} are NOT saved: that class was deleted in another tab or on another device. ` +
+    "Everything else you changed was saved. The lesson is still here in this tab - copy anything you need from it before you reload."
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -549,7 +877,16 @@ export async function applyDiff(client: Client, ctx: OwnerContext, prev: AppData
 export class SupabaseDataRepository implements DataRepository {
   private readonly client: Client;
   private readonly ctx: OwnerContext;
+  /**
+   * What this tab knows the database holds for the rows it has loaded or
+   * written - set by load(), advanced only by a fully successful save, and
+   * never discarded on failure (see runCriticalSection).
+   */
   private lastSnapshot: AppData | null = null;
+  /** Rows one or more failed saves may have half-written; null when the last save succeeded. */
+  private uncertain: UncertainWrites | null = null;
+  /** Class sections found to have been deleted elsewhere (see classSectionsDeletedElsewhere); forgotten on load(). */
+  private readonly deletedElsewhere = new Set<string>();
 
   /**
    * At most one critical section (read baseline -> applyDiff -> advance
@@ -574,6 +911,8 @@ export class SupabaseDataRepository implements DataRepository {
   async load(): Promise<AppData> {
     const data = await fetchAppData(this.client, this.ctx);
     this.lastSnapshot = structuredClone(data);
+    this.uncertain = null;
+    this.deletedElsewhere.clear();
     return data;
   }
 
@@ -586,28 +925,92 @@ export class SupabaseDataRepository implements DataRepository {
     });
   }
 
-  private async runCriticalSection(data: AppData): Promise<SaveResult> {
-    this.inFlight = true;
-    try {
-      const prev =
-        this.lastSnapshot ?? (await fetchAppData(this.client, this.ctx));
+  /** Records class sections `remote` shows were deleted elsewhere; true when it found one not already known. */
+  private noteDeletedElsewhere(remote: AppData): boolean {
+    if (!this.lastSnapshot || !this.uncertain) return false;
+    let found = false;
+    for (const id of classSectionsDeletedElsewhere(this.lastSnapshot, remote, this.uncertain)) {
+      if (!this.deletedElsewhere.has(id)) found = true;
+      this.deletedElsewhere.add(id);
+    }
+    return found;
+  }
 
-      await applyDiff(this.client, this.ctx, prev, data);
+  /** One read-baseline -> applyDiff -> advance-snapshot pass. `reread` is the database as just read, when the caller already has it. */
+  private async attempt(data: AppData, reread?: AppData): Promise<SaveResult> {
+    // The baseline this attempt is diffed against, and what it set out to
+    // write - kept outside the try so a failure can record exactly which
+    // rows the attempt would have touched.
+    let prev: AppData | null = null;
+    let writable = data;
+    try {
+      // A save before any load() has no baseline of its own: the database
+      // as it stands is the only honest starting point.
+      this.lastSnapshot ??= await fetchAppData(this.client, this.ctx);
+
+      // After a failed save, the rows that attempt may have half-written
+      // are re-read so this attempt corrects them from the truth. Only
+      // those rows: see rebaseline() for why the re-read state is never
+      // adopted wholesale.
+      if (this.uncertain) {
+        const remote = reread ?? (await fetchAppData(this.client, this.ctx));
+        this.noteDeletedElsewhere(remote);
+        prev = rebaseline(this.lastSnapshot, remote, this.uncertain);
+      } else {
+        prev = this.lastSnapshot;
+      }
+
+      // Lesson edits for a class deleted elsewhere are left out of the
+      // write (see lessonsHeldBack) so they cannot block everything else.
+      const held = lessonsHeldBack(prev, data, this.deletedElsewhere);
+      writable = withoutHeldBackLessons(prev, data, held);
+
+      // The failed attempt that revealed the deleted class may have got as
+      // far as writing a held-back lesson's `lessons` row before its link
+      // to the class was refused. That row is invisible to every load (a
+      // lesson is read through its class link) and belongs to no class.
+      // Listing it in `prev` makes this diff delete it.
+      const prevLessonIds = new Set(prev.lessons.map(idKey));
+      const halfWritten = held.filter((lesson) => this.uncertain?.lessons.has(lesson.id) && !prevLessonIds.has(lesson.id));
+      if (halfWritten.length > 0) prev = { ...prev, lessons: [...prev.lessons, ...halfWritten] };
+
+      await applyDiff(this.client, this.ctx, prev, writable);
 
       // Only advance the snapshot after every write above succeeded -
-      // Decision 2's core requirement.
-      this.lastSnapshot = structuredClone(data);
+      // Decision 2's core requirement. It advances to what was WRITTEN,
+      // plus, for each held-back lesson, the version this tab last knew
+      // was saved: the lesson stays different from the snapshot, so it is
+      // recognized as unsaved again on every later save, and is no longer
+      // reported once the teacher puts it back the way it was.
+      const writtenLessonIds = new Set(writable.lessons.map(idKey));
+      const heldIds = new Set(held.map(idKey));
+      const lastSaved = this.lastSnapshot.lessons.filter((lesson) => heldIds.has(lesson.id) && !writtenLessonIds.has(lesson.id));
+      this.lastSnapshot = structuredClone({ ...writable, lessons: [...writable.lessons, ...lastSaved] });
+      this.uncertain = null;
 
-      return { ok: true };
+      // Never { ok: true } while an edit is held back: the caller would
+      // show "saved" for work that is not.
+      return held.length === 0 ? { ok: true } : { ok: false, reason: "held-back", message: heldBackMessage(data, held) };
     } catch (error) {
       // applyDiff is not atomic - it issues a sequence of independent
       // upserts/deletes, so a failure partway through may have already
-      // written part of this attempt to the database. The cached baseline
-      // can therefore no longer be trusted: invalidate it so the next
-      // critical section re-fetches real cloud state (via the `??
-      // fetchAppData(...)` fallback above) instead of diffing against a
-      // baseline that might already be stale or wrong.
-      this.lastSnapshot = null;
+      // written part of this attempt to the database. The baseline is KEPT
+      // (it is still what this tab last knew), and the rows this attempt
+      // set out to change are marked uncertain, so the next critical
+      // section re-reads real cloud state for exactly those rows.
+      //
+      // The baseline used to be discarded here and replaced by a full
+      // re-read. That re-read includes rows this tab never loaded; diffed
+      // against this tab's memory they looked removed and were deleted -
+      // see scripts/verify-stale-tab-save-safety.ts.
+      //
+      // `data` is not consumed by a failure: AppDataProvider still holds
+      // it and passes it (or its successor) to the next save(), so the
+      // teacher's unsaved edits are retried, never dropped.
+      if (prev) {
+        this.uncertain ??= noUncertainWrites();
+        recordAttemptedWrites(this.uncertain, prev, writable);
+      }
       return {
         ok: false,
         reason: "unknown",
@@ -616,6 +1019,23 @@ export class SupabaseDataRepository implements DataRepository {
             ? error.message
             : "Unknown error saving to Supabase.",
       };
+    }
+  }
+
+  private async runCriticalSection(data: AppData): Promise<SaveResult> {
+    this.inFlight = true;
+    try {
+      const result = await this.attempt(data);
+      if (result.ok || !this.uncertain || !this.lastSnapshot) return result;
+
+      // The attempt failed. If a fresh read shows why - a class this tab
+      // still shows was deleted elsewhere - try once more straight away
+      // with that class's lessons held back, so the rest of this save is
+      // not left waiting for the teacher's next edit. Any other failure is
+      // returned as it is; nothing here retries in a loop.
+      const reread = await fetchAppData(this.client, this.ctx).catch(() => null);
+      if (!reread || !this.noteDeletedElsewhere(reread)) return result;
+      return await this.attempt(data, reread);
     } finally {
       this.inFlight = false;
       const promoted = this.pending;

@@ -25,9 +25,13 @@
  * A third property, required by the coalescing design itself: applyDiff()
  * is not atomic (it's a sequence of independent upserts/deletes), so a
  * failure partway through may have already partially written the database.
- * The cached baseline (`lastSnapshot`) is therefore invalidated on ANY
- * failure, forcing the next critical section to re-fetch real cloud state
- * rather than diff against a baseline that might already be wrong.
+ * After ANY failure the next critical section therefore re-fetches real
+ * cloud state for the rows the failed save set out to change, rather than
+ * trusting its cached baseline (`lastSnapshot`) for them. (The baseline
+ * itself is kept for every other row - see rebaseline() in
+ * lib/data/supabaseDataRepository.ts and
+ * scripts/verify-stale-tab-save-safety.ts for why it is no longer thrown
+ * away wholesale.)
  *
  * This exercises the real `SupabaseDataRepository` class and its real
  * `applyDiff`, against a STATEFUL in-memory fake Supabase client - no
@@ -64,7 +68,7 @@ const SINGLETON_TABLES = new Set(["classroom_experience_settings", "teacher_sche
 
 interface WriteRecord {
   table: string;
-  op: "upsert" | "delete";
+  op: "upsert" | "delete" | "update";
   payload: unknown;
   resolvedAtMs: number;
 }
@@ -78,7 +82,7 @@ interface FakeClientOptions {
   /** Delay (ms) before an upsert/delete resolves. */
   writeDelayMs: () => number;
   /** Whether this write call should resolve as a Supabase error instead of succeeding. */
-  shouldFailWrite: (table: string, op: "upsert" | "delete", payload: unknown, writeCallIndex: number) => boolean;
+  shouldFailWrite: (table: string, op: "upsert" | "delete" | "update", payload: unknown, writeCallIndex: number) => boolean;
   onWrite: (record: WriteRecord) => void;
 }
 
@@ -95,13 +99,17 @@ function createFakeClient(opts: FakeClientOptions) {
   let writeCallIndex = 0;
 
   function from(table: string) {
-    let op: "select" | "upsert" | "delete" = "select";
+    let op: "select" | "upsert" | "delete" | "update" = "select";
     let payload: unknown = null;
     const eqFilters: Array<[string, unknown]> = [];
+    // INSERT ... ON CONFLICT DO NOTHING - an existing row is left exactly as it is.
+    let ignoreDuplicates = false;
 
     const builder = {
       select() {
-        op = "select";
+        // `.update(...).select(...)` asks for the updated rows back - it
+        // must not turn the call into a plain read.
+        if (op !== "update") op = "select";
         return builder;
       },
       eq(column: string, value: unknown) {
@@ -114,13 +122,23 @@ function createFakeClient(opts: FakeClientOptions) {
       maybeSingle() {
         return builder;
       },
-      upsert(rows: unknown) {
+      upsert(rows: unknown, options?: { ignoreDuplicates?: boolean }) {
         op = "upsert";
         payload = rows;
+        ignoreDuplicates = options?.ignoreDuplicates === true;
         return builder;
       },
       delete() {
         op = "delete";
+        return builder;
+      },
+      // The two one-row-per-teacher tables are written as
+      // `.update(changedColumns).eq(...).select(...)`, resolving with the
+      // rows that matched - none when the row does not exist yet, which is
+      // what makes applyDiff fall back to inserting it.
+      update(patch: unknown) {
+        op = "update";
+        payload = patch;
         return builder;
       },
       then(
@@ -138,6 +156,12 @@ function createFakeClient(opts: FakeClientOptions) {
           if (opts.shouldFailWrite(table, op, payload, callIndex)) {
             return { data: null, error: { message: `simulated failure writing ${table}` } };
           }
+          if (op === "update") {
+            const matched = (db[table] ?? []).filter((r) => eqFilters.every(([c, v]) => r[c] === v));
+            for (const row of matched) Object.assign(row, payload as Record<string, unknown>);
+            opts.onWrite({ table, op, payload, resolvedAtMs: Date.now() });
+            return { data: matched, error: null };
+          }
           if (op === "upsert") {
             const key = upsertKeyFor(table);
             const existing = db[table] ?? (db[table] = []);
@@ -145,7 +169,7 @@ function createFakeClient(opts: FakeClientOptions) {
             for (const row of rowsToUpsert) {
               const idx = existing.findIndex((r) => r[key] === row[key]);
               if (idx === -1) existing.push(row);
-              else existing[idx] = row;
+              else if (!ignoreDuplicates) existing[idx] = row;
             }
           } else {
             const existing = db[table] ?? [];
