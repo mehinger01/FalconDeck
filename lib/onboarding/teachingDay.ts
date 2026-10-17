@@ -120,8 +120,12 @@ export function teachingDayIssues(draft: SetupDraft, reference: { courses: Cours
 
 export interface DraftSummary {
   scheduleName: string | null;
+  /** How many periods that schedule has - so choosing a version shows when it would drop periods. */
+  periodCount: number;
   classNames: string[];
   lunchWave: SetupDraft["lunchWave"];
+  /** The first lesson's learning target, if one was written. */
+  lessonTarget: string | null;
 }
 
 /** A short description of a draft, for choosing between two versions in a conflict. */
@@ -133,16 +137,23 @@ export function summarizeDraft(draft: SetupDraft, schedules: BellSchedule[]): Dr
       : schedule.mode === "own"
         ? schedule.name.trim() || "Your own schedule"
         : (schedules.find((candidate) => candidate.id === schedule.scheduleId)?.name ?? "Your school's schedule");
-  return { scheduleName, classNames: draft.classSections.map((section) => section.name), lunchWave: draft.lunchWave };
+  return {
+    scheduleName,
+    periodCount: teachingDayPeriods(draft).length,
+    classNames: draft.classSections.map((section) => section.name),
+    lunchWave: draft.lunchWave,
+    lessonTarget: draft.firstLesson?.learningTarget.trim() || null,
+  };
 }
 
 // ---------------------------------------------------------------------------
 // Choosing or building the schedule
 // ---------------------------------------------------------------------------
 
-/** A schedule change drops every class mapping - the periods they named are gone. */
+/** A schedule change drops every class mapping - the periods they named are gone. A first lesson keeps its content but loses its class. */
 function withSchedule(draft: SetupDraft, schedule: SetupDraftSchedule | null): SetupDraft {
-  return { ...draft, schedule, courses: [], classSections: [] };
+  const firstLesson = draft.firstLesson ? { ...draft.firstLesson, classSectionId: "" } : null;
+  return { ...draft, schedule, courses: [], classSections: [], firstLesson };
 }
 
 /** Selects a school schedule. Only a usable organization schedule can be chosen. */
@@ -361,7 +372,13 @@ function normalizeClasses(draft: SetupDraft, schoolCourses: Course[] = []): Setu
     const live = new Set(classSections.map((section) => section.id));
     schedule = { ...schedule, assignments: schedule.assignments.filter((assignment) => live.has(assignment.classSectionId)) };
   }
-  return { ...draft, courses, classSections, schedule };
+  // A first lesson whose class is gone keeps everything written for it, but asks for its class again.
+  const lesson = draft.firstLesson;
+  const firstLesson =
+    lesson && lesson.classSectionId !== "" && !classSections.some((section) => section.id === lesson.classSectionId)
+      ? { ...lesson, classSectionId: "" }
+      : lesson;
+  return { ...draft, courses, classSections, schedule, firstLesson };
 }
 
 export function setLunchWave(draft: SetupDraft, lunchWave: SetupDraft["lunchWave"]): SetupDraft {

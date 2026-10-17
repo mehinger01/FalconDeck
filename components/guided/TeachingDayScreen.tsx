@@ -68,7 +68,8 @@ export interface TeachingDayScreenProps {
   schoolSchedules: BellSchedule[];
   schoolCourses: Course[];
   disabled: boolean;
-  onChange: (next: SetupDraft) => void;
+  /** Applies a change to the session's CURRENT draft - never to a copy captured earlier (see GuidedSetup). */
+  onEdit: (change: (draft: SetupDraft) => SetupDraft) => void;
   onPendingChange: (key: string, pending: boolean) => void;
 }
 
@@ -92,7 +93,7 @@ export function TeachingDayScreen(props: TeachingDayScreenProps) {
 function ScheduleSection({
   draft,
   schoolSchedules,
-  onChange,
+  onEdit,
   showBuilder,
   buildingOwn,
   onBuildOwn,
@@ -109,7 +110,7 @@ function ScheduleSection({
       return;
     }
     onBuildOwn(false);
-    onChange(chooseSharedSchedule(draft, target));
+    onEdit((d) => chooseSharedSchedule(d, target));
   };
   const requestSwitch = (target: BellSchedule | "own") => {
     // Choosing "build my own" changes nothing until periods are laid out; a different school schedule replaces the current one now.
@@ -182,16 +183,16 @@ function ScheduleSection({
         </div>
       )}
 
-      {showBuilder && <OwnScheduleBuilder draft={draft} onChange={onChange} onPendingChange={onPendingChange} />}
+      {showBuilder && <OwnScheduleBuilder draft={draft} onEdit={onEdit} onPendingChange={onPendingChange} />}
     </section>
   );
 }
 
 function OwnScheduleBuilder({
   draft,
-  onChange,
+  onEdit,
   onPendingChange,
-}: Pick<TeachingDayScreenProps, "draft" | "onChange" | "onPendingChange">) {
+}: Pick<TeachingDayScreenProps, "draft" | "onEdit" | "onPendingChange">) {
   const own = draft.schedule?.mode === "own" ? draft.schedule : null;
   const [name, setName] = useState(own?.name ?? "");
   const [timeZone, setTimeZone] = useState(own?.timeZone ?? browserTimeZone());
@@ -215,7 +216,7 @@ function OwnScheduleBuilder({
     if (!result.ok) return setError(result.message);
     setError(null);
     setConfirmReplace(false);
-    onChange(startOwnSchedule(draft, { name: name.trim(), timeZone: timeZone.trim(), blocks: result.blocks }));
+    onEdit((d) => startOwnSchedule(d, { name: name.trim(), timeZone: timeZone.trim(), blocks: result.blocks }));
   };
 
   return (
@@ -274,7 +275,7 @@ function OwnScheduleBuilder({
           )}
         </>
       ) : (
-        own && <OwnPeriodsEditor draft={draft} onChange={onChange} onPendingChange={onPendingChange} onRebuild={() => setConfirmReplace(true)} />
+        own && <OwnPeriodsEditor draft={draft} onEdit={onEdit} onPendingChange={onPendingChange} onRebuild={() => setConfirmReplace(true)} />
       )}
     </div>
   );
@@ -282,10 +283,10 @@ function OwnScheduleBuilder({
 
 function OwnPeriodsEditor({
   draft,
-  onChange,
+  onEdit,
   onPendingChange,
   onRebuild,
-}: Pick<TeachingDayScreenProps, "draft" | "onChange" | "onPendingChange"> & { onRebuild: () => void }) {
+}: Pick<TeachingDayScreenProps, "draft" | "onEdit" | "onPendingChange"> & { onRebuild: () => void }) {
   const own = draft.schedule?.mode === "own" ? draft.schedule : null;
   if (!own) return null;
   const periods = teachingDayPeriods(draft);
@@ -297,7 +298,7 @@ function OwnPeriodsEditor({
           <DraftTextInput
             className={FIELD}
             value={own.name}
-            onCommit={(value) => onChange(updateOwnScheduleDetails(draft, { name: value }))}
+            onCommit={(value) => onEdit((d) => updateOwnScheduleDetails(d, { name: value }))}
             onPendingChange={(pending) => onPendingChange("schedule-name", pending)}
           />
         </label>
@@ -306,7 +307,7 @@ function OwnPeriodsEditor({
           <DraftTextInput
             className={FIELD}
             value={own.timeZone}
-            onCommit={(value) => onChange(updateOwnScheduleDetails(draft, { timeZone: value }))}
+            onCommit={(value) => onEdit((d) => updateOwnScheduleDetails(d, { timeZone: value }))}
             onPendingChange={(pending) => onPendingChange("schedule-zone", pending)}
           />
         </label>
@@ -320,7 +321,7 @@ function OwnPeriodsEditor({
               <DraftTextInput
                 className={FIELD}
                 value={period.label}
-                onCommit={(value) => onChange(updateOwnBlock(draft, period.blockId, { label: value }))}
+                onCommit={(value) => onEdit((d) => updateOwnBlock(d, period.blockId, { label: value }))}
                 onPendingChange={(pending) => onPendingChange(`label-${period.blockId}`, pending)}
               />
             </label>
@@ -330,7 +331,7 @@ function OwnPeriodsEditor({
                 className={FIELD}
                 type="time"
                 value={period.startTime}
-                onCommit={(value) => onChange(updateOwnBlock(draft, period.blockId, { startTime: value }))}
+                onCommit={(value) => onEdit((d) => updateOwnBlock(d, period.blockId, { startTime: value }))}
                 onPendingChange={(pending) => onPendingChange(`start-${period.blockId}`, pending)}
               />
             </label>
@@ -340,7 +341,7 @@ function OwnPeriodsEditor({
                 className={FIELD}
                 type="time"
                 value={period.endTime}
-                onCommit={(value) => onChange(updateOwnBlock(draft, period.blockId, { endTime: value }))}
+                onCommit={(value) => onEdit((d) => updateOwnBlock(d, period.blockId, { endTime: value }))}
                 onPendingChange={(pending) => onPendingChange(`end-${period.blockId}`, pending)}
               />
             </label>
@@ -349,7 +350,7 @@ function OwnPeriodsEditor({
               <select
                 className={FIELD}
                 value={period.kind}
-                onChange={(e) => onChange(updateOwnBlock(draft, period.blockId, { kind: e.target.value as BlockKind }))}
+                onChange={(e) => onEdit((d) => updateOwnBlock(d, period.blockId, { kind: e.target.value as BlockKind }))}
               >
                 {BLOCK_KINDS.map((kind) => (
                   <option key={kind} value={kind}>
@@ -361,7 +362,7 @@ function OwnPeriodsEditor({
             <button
               type="button"
               className={`${BUTTON_SECONDARY} col-span-2 sm:col-span-1`}
-              onClick={() => onChange(removeOwnBlock(draft, period.blockId))}
+              onClick={() => onEdit((d) => removeOwnBlock(d, period.blockId))}
               aria-label={`Remove ${period.label}`}
             >
               Remove
@@ -370,7 +371,7 @@ function OwnPeriodsEditor({
         ))}
       </ul>
       <div className="flex flex-wrap gap-2">
-        <button type="button" className={BUTTON_SECONDARY} onClick={() => onChange(addOwnBlock(draft))} disabled={own.blocks.length === 0}>
+        <button type="button" className={BUTTON_SECONDARY} onClick={() => onEdit((d) => addOwnBlock(d))} disabled={own.blocks.length === 0}>
           Add a period
         </button>
         <button type="button" className={BUTTON_SECONDARY} onClick={onRebuild}>
@@ -383,7 +384,7 @@ function OwnPeriodsEditor({
 
 // ---------------------------------------------------------------------------
 
-function ClassesSection({ draft, schoolCourses, onChange, onPendingChange }: TeachingDayScreenProps) {
+function ClassesSection({ draft, schoolCourses, onEdit, onPendingChange }: TeachingDayScreenProps) {
   const periods = teachingDayPeriods(draft);
   const options = courseOptions(draft, schoolCourses);
   const [newCourseFor, setNewCourseFor] = useState<string | null>(null);
@@ -391,7 +392,7 @@ function ClassesSection({ draft, schoolCourses, onChange, onPendingChange }: Tea
 
   const addNewCourse = (blockId: string) => {
     if (newCourseName.trim() === "") return;
-    onChange(setPeriodCourse(draft, blockId, { kind: "new", name: newCourseName }, schoolCourses));
+    onEdit((d) => setPeriodCourse(d, blockId, { kind: "new", name: newCourseName }, schoolCourses));
     setNewCourseFor(null);
     setNewCourseName("");
     onPendingChange(`new-course-${blockId}`, false);
@@ -477,7 +478,7 @@ function ClassesSection({ draft, schoolCourses, onChange, onPendingChange }: Tea
                             setNewCourseName("");
                             return;
                           }
-                          onChange(setPeriodCourse(draft, period.blockId, value === "" ? { kind: "none" } : { kind: "course", courseId: value }, schoolCourses));
+                          onEdit((d) => setPeriodCourse(d, period.blockId, value === "" ? { kind: "none" } : { kind: "course", courseId: value }, schoolCourses));
                         }}
                       >
                         <option value="">No class this period</option>
@@ -520,7 +521,7 @@ function ClassesSection({ draft, schoolCourses, onChange, onPendingChange }: Tea
   );
 }
 
-function LunchSection({ draft, onChange }: TeachingDayScreenProps) {
+function LunchSection({ draft, onEdit }: TeachingDayScreenProps) {
   const groupName = useId();
   return (
     <section aria-labelledby="lunch-heading" className="flex flex-col gap-2">
@@ -538,7 +539,7 @@ function LunchSection({ draft, onChange }: TeachingDayScreenProps) {
               draft.lunchWave === option.value ? "border-falcon-gold-500 bg-falcon-gold-300/20 font-semibold" : "border-falcon-brown-700/30 bg-white"
             }`}
           >
-            <input type="radio" name={groupName} checked={draft.lunchWave === option.value} onChange={() => onChange(setLunchWave(draft, option.value))} />
+            <input type="radio" name={groupName} checked={draft.lunchWave === option.value} onChange={() => onEdit((d) => setLunchWave(d, option.value))} />
             {option.label}
           </label>
         ))}

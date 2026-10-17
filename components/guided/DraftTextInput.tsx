@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type InputHTMLAttributes } from "react";
+import { useEffect, useId, useRef, useState, type InputHTMLAttributes, type Ref } from "react";
 
 type BaseProps = Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "defaultValue" | "onChange" | "onBlur" | "id">;
 
@@ -12,6 +12,7 @@ interface DraftTextInputProps extends BaseProps {
   id?: string;
   /** Milliseconds of no typing before the text is committed anyway. */
   delay?: number;
+  ref?: Ref<HTMLInputElement>;
 }
 
 /**
@@ -20,7 +21,7 @@ interface DraftTextInputProps extends BaseProps {
  * Uncommitted text is reported through onPendingChange so the page can
  * show "Unsaved changes" and warn before leaving.
  */
-export function DraftTextInput({ value, onCommit, onPendingChange, delay = 700, id, ...inputProps }: DraftTextInputProps) {
+export function DraftTextInput({ value, onCommit, onPendingChange, delay = 700, id, ref, ...inputProps }: DraftTextInputProps) {
   const generatedId = useId();
   const [local, setLocal] = useState(value);
   // Follow a value replaced from outside (e.g. a saved version chosen in a conflict).
@@ -51,6 +52,7 @@ export function DraftTextInput({ value, onCommit, onPendingChange, delay = 700, 
   return (
     <input
       {...inputProps}
+      ref={ref}
       id={id ?? generatedId}
       value={local}
       onChange={(event) => {

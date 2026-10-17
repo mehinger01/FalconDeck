@@ -16,7 +16,18 @@ import { deepEqual } from "@/lib/data/supabaseMapping";
 import { SupabaseSetupRepository, type SetupRpcClient } from "@/lib/data/supabaseSetupRepository";
 import type { AppData } from "@/lib/data/types";
 import { guidedSetupEntry, isGuidedSetupEnabled } from "@/lib/onboarding/guidedSetupFlag";
-import { createEmptySetupDraft, createSetupDraftFromSeed } from "@/lib/onboarding/setupDraft";
+import {
+  addAgendaItem,
+  addAnnouncement,
+  addResource,
+  describeLessonDate,
+  firstLessonIssues,
+  sampleLearningTarget,
+  setStep,
+  todayInSchoolTime,
+  updateLesson,
+} from "@/lib/onboarding/firstLesson";
+import { createEmptySetupDraft, createSetupDraftFromSeed, validateSetupDraft } from "@/lib/onboarding/setupDraft";
 import { SetupDraftSession } from "@/lib/onboarding/setupDraftSession";
 import type { SetupRepository, SetupState } from "@/lib/onboarding/setupRepository";
 import {
@@ -169,6 +180,35 @@ function pureChecks() {
   check("adopting a lunch-only change keeps the classes", sameSchedule.classSections.length === 2 && sameSchedule.lunchWave === "C");
   check("a conflict summary includes the lunch wave", summarizeDraft(mapped, [regular]).lunchWave === "A" && summarizeDraft(mapped, [regular]).scheduleName === "Regular Day");
 
+  check("a conflict summary counts the schedule's periods", summarizeDraft(own, []).periodCount === 3 && summarizeDraft(addOwnBlock(own, ids), []).periodCount === 4);
+
+  console.log("7a. First lesson");
+  const fresh = setPeriodCourse(chooseSharedSchedule(createEmptySetupDraft(), regular), "p1", { kind: "new", name: "Geometry" }, [], ids, uuid);
+  const sectionId = fresh.classSections[0].id;
+  check("an untouched lesson step lists class, date and learning target", deepEqual(firstLessonIssues(fresh), ["Choose the class this lesson is for.", "Choose the date you'll teach it.", "Write a learning target."]));
+  check("a class not in this draft cannot be chosen", deepEqual(updateLesson(fresh, { classSectionId: "section-elsewhere" }, ids), fresh));
+  let withLesson = updateLesson(updateLesson(fresh, { classSectionId: sectionId }, ids), { date: "2026-10-19" }, ids);
+  check("the first edit creates the lesson with an id, empty target and no optional content", withLesson.firstLesson !== null && withLesson.firstLesson.id.startsWith("lesson") && withLesson.firstLesson.learningTarget === "" && withLesson.firstLesson.agendaItems.length === 0);
+  check("the sample names the class's course - and nothing applies it on its own", sampleLearningTarget(withLesson) === "I can explain and use today's key idea in Geometry." && withLesson.firstLesson?.learningTarget === "");
+  withLesson = updateLesson(withLesson, { learningTarget: "I can measure angles." }, ids);
+  check("class, date and learning target satisfy the step", firstLessonIssues(withLesson).length === 0);
+  check("...and the server's \"prepared\" rule", validateSetupDraft(withLesson, { courses: [], schedules: [regular] }).every((i) => i.step !== "first-lesson"));
+  const optional = addAnnouncement(addResource(addAgendaItem(withLesson, "Warm-up", ids), { title: "Slides", url: "https://example.test/s" }, ids), "Quiz Friday", ids);
+  check("agenda, resources and announcements are optional extras", optional.firstLesson?.agendaItems[0]?.title === "Warm-up" && optional.firstLesson.resources[0]?.type === "link" && optional.firstLesson.announcements[0]?.text === "Quiz Friday");
+  check("blank optional entries are ignored", deepEqual(addAgendaItem(withLesson, "  ", ids), withLesson) && deepEqual(addResource(withLesson, { title: "x", url: "" }, ids), withLesson));
+  const cleared = setPeriodCourse(withLesson, "p1", { kind: "none" }, [], ids, uuid);
+  check("removing the lesson's class on step 1 keeps the lesson but asks for a class again", cleared.firstLesson?.classSectionId === "" && cleared.firstLesson.learningTarget === "I can measure angles." && cleared.firstLesson.date === "2026-10-19");
+  check("switching schedules does the same", chooseSharedSchedule(withLesson, late).firstLesson?.classSectionId === "" && chooseSharedSchedule(withLesson, late).firstLesson?.learningTarget === "I can measure angles.");
+  check("steps move only by an explicit step change", setStep(withLesson, "first-lesson").step === "first-lesson" && setStep(withLesson, "teaching-day") === withLesson);
+  const evening = new Date("2026-10-17T03:00:00Z"); // 11 pm on Oct 16 in Detroit
+  check("\"today\" is the date in the schedule's own time zone", todayInSchoolTime(withLesson, [regular], evening) === "2026-10-16");
+  check("...and there is no \"today\" without a schedule", todayInSchoolTime(createEmptySetupDraft(), [regular], evening) === null);
+  check("without a school calendar, a date is only named - no weekend or holiday is assumed", deepEqual(describeLessonDate(withLesson, { schoolSchedules: [regular], schoolCalendar: null }, "2026-10-17"), { tone: "info", message: "Saturday, October 17, 2026" }));
+  const calendar = { id: "c", name: "2026-27", schoolYear: "2026-2027", timeZone: "America/Detroit", firstStudentDay: "2026-08-31", lastStudentDay: "2027-06-11", defaultBellScheduleId: "", exceptions: [{ id: "x", startDate: "2026-10-23", endDate: "2026-10-23", type: "no-school" as const, title: "PD Day" }] };
+  check("with the school's calendar, a no-school day is described (not blocked)", describeLessonDate(withLesson, { schoolSchedules: [regular], schoolCalendar: calendar }, "2026-10-23")?.tone === "warn");
+  check("...and so is a weekend", /weekend/.test(describeLessonDate(withLesson, { schoolSchedules: [regular], schoolCalendar: calendar }, "2026-10-24")?.message ?? ""));
+  check("...and an ordinary school day is just named", describeLessonDate(withLesson, { schoolSchedules: [regular], schoolCalendar: calendar }, "2026-10-19")?.tone === "info");
+
   console.log("7b. What the save indicator says");
   const label = (...args: Parameters<typeof saveIndicator>) => saveIndicator(...args).label;
   check("fresh, untouched: nothing to save", label({ kind: "idle" }, false, false) === "Nothing to save yet");
@@ -254,6 +294,24 @@ async function databaseChecks() {
   check("a resumed session saves on top of the stored revision", again.ok && again.value.status === "in-progress" && again.value.draft.revision === 2 && deepEqual(again.value.draft.payload, edited));
   check("still no operational rows after resuming and editing", (await operationalRows(a.membershipId)) === 0);
 
+  console.log("8b. The first lesson is saved in the draft only - never as a lesson");
+  const lessonDraft = updateLesson(
+    updateLesson(setStep(again.ok && again.value.status === "in-progress" ? again.value.draft.payload : edited, "first-lesson"), { classSectionId: edited.classSections[0].id, date: "2026-10-19" }),
+    { learningTarget: "I can measure angles." },
+  );
+  resumed.update(addAgendaItem(lessonDraft, "Warm-up"));
+  await resumed.flush();
+  const withLessonState = await a.repository.getState();
+  check("the lesson and the step are in the saved draft", withLessonState.ok && withLessonState.value.status === "in-progress" && withLessonState.value.draft.payload.step === "first-lesson" && withLessonState.value.draft.payload.firstLesson?.learningTarget === "I can measure angles.");
+  const [lessonRows] = await db.admin<{ lessons: number; links: number; completions: number }>(
+    `select (select count(*)::int from public.lessons where owner_membership_id = $1) as lessons,
+            (select count(*)::int from public.lesson_class_sections where owner_membership_id = $1) as links,
+            (select count(*)::int from public.setup_completions where owner_membership_id = $1) as completions`,
+    [a.membershipId],
+  );
+  check("no lesson or lesson-class row, and no completion, exists", lessonRows.lessons === 0 && lessonRows.links === 0 && lessonRows.completions === 0, lessonRows);
+  check("still no operational rows at all", (await operationalRows(a.membershipId)) === 0);
+
   console.log("9. A failed save keeps the edit and recovers");
   const flaky = flakyRepository(a.repository);
   const stored = (await a.repository.getState()) as { ok: true; value: Extract<SetupState, { status: "in-progress" }> };
@@ -266,11 +324,11 @@ async function databaseChecks() {
   check("status is save-failed", failed.status.kind === "save-failed");
   check("the edit is kept on screen and still marked unsaved", failed.dirty && deepEqual(failed.draft, offlineEdit));
   const serverDuringOutage = await a.repository.getState();
-  check("the server still holds the previous revision", serverDuringOutage.ok && serverDuringOutage.value.status === "in-progress" && serverDuringOutage.value.draft.revision === 2);
+  check("the server still holds the previous revision", serverDuringOutage.ok && serverDuringOutage.value.status === "in-progress" && serverDuringOutage.value.draft.revision === stored.value.draft.revision);
   flaky.failing = false;
   await recovering.retrySave();
   const afterRetry = await a.repository.getState();
-  check("Retry saves the kept edit once", recovering.getSnapshot().status.kind === "saved" && afterRetry.ok && afterRetry.value.status === "in-progress" && afterRetry.value.draft.revision === 3 && deepEqual(afterRetry.value.draft.payload, offlineEdit));
+  check("Retry saves the kept edit once", recovering.getSnapshot().status.kind === "saved" && afterRetry.ok && afterRetry.value.status === "in-progress" && afterRetry.value.draft.revision === stored.value.draft.revision + 1 && deepEqual(afterRetry.value.draft.payload, offlineEdit));
 
   console.log("10. A stale tab cannot silently overwrite");
   const current = (await a.repository.getState()) as { ok: true; value: Extract<SetupState, { status: "in-progress" }> };

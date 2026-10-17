@@ -32,6 +32,7 @@ export default async function StartPage() {
       setupState={setupState}
       schoolSchedules={reference.schedules.filter(isUsableSharedSchedule)}
       schoolCourses={reference.courses}
+      schoolCalendar={reference.schoolCalendar}
     />
   );
 }
