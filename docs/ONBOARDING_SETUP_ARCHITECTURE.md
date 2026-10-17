@@ -623,6 +623,18 @@ has been changed again since the draft was created (§8.4).
 "Existing app" means today's behaviour exactly: `/setup`, `ActiveScheduleGate`,
 `MigrationSetupCard`. Nothing calls `deriveSetupEntry` yet.
 
+**As built (§9.3):** with the switch on, the entry is enforced in the `(app)` and
+`/present` layouts (`redirectToGuidedSetupIfDue()`), after the school is resolved
+and before `CutoverAppDataProvider` renders. It cannot live in `/setup`'s page
+alone: `ActiveScheduleGate` renders nothing in place of the page for an account
+with no active schedule (every guided account) and replaces the URL with
+`/setup/schedule`, so the page's redirect never reached the browser and a new
+account signing in landed on the old schedule screen (found on staging). With the
+switch off the helper returns before any RPC. A consequence: while guided setup is
+due, every ordinary route, `/setup/schedule` and `/schedule` included, goes to
+`/start`; only a tab already open from before can change schedule preferences,
+which is what the preferences-changed recovery exists for.
+
 ---
 
 ## 11. Unresolved limitations
