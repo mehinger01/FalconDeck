@@ -733,7 +733,7 @@ Chromium.
 | Schedule-only and lunch-wave-only preference changes after draft creation; baseline survives saves; committed operations still replay | db §19 |
 | Ordinary preference writes and completion, each order, first row and existing row | concurrency §10 |
 | Preferences changed between reading the seed and the first draft save; baseline cannot be chosen by the caller | db §22 |
-| Guided screens: one commit for repeated presses; failed and lost answers retried under the same operation id; each conflict's recovery; pending text committed before Edit, Back, Continue and Start; no leave-page warning at the moment of navigation; refusals never show raw database errors | `verify:guided-setup-interactions` §16–25 (real Chromium) |
+| Guided screens: one commit for repeated presses; failed and lost answers retried under the same operation id; each conflict's recovery; pending text committed before Edit, Back, Continue and Start; no leave-page warning at the moment of navigation; refusals never show raw database errors | `verify:guided-setup-interactions` §16–25 (Playwright Chromium and WebKit) |
 | Optional items are draft-backed (pending, saved, reloaded, validated); a failed save stops Back, Continue and Start at the action with a focused Retry | `verify:guided-setup-interactions` §26–27 |
 | Entry: `/` and `/setup` reach guided setup; ordinary routes, established, completed, legacy, unreadable, switch-off and production unchanged; the real gate rendered | `verify:guided-setup-routing` |
 | Raw versus validation refusals classified from real `complete_setup` errors | db §6, §13 (`userFacing`) |
@@ -751,7 +751,8 @@ The three `verify:onboarding-setup-*` scripts and `verify:stale-tab-save-safety`
 are in `npm run verify`. The three `verify:guided-setup-*` scripts are not;
 they run in their own CI job (`.github/workflows/guided-setup.yml`) on pull
 requests and pushes to `main`, using only these local harnesses and Playwright's
-Chromium. The database
+Chromium and WebKit (`GUIDED_BROWSER=webkit`; WebKit is the engine Safari uses,
+not Safari). The database
 ones start a PostgreSQL 17 server in a temporary directory, apply every file in
 `supabase/migrations` to it, and delete it. They read no environment file and
 connect to nothing else.
@@ -775,7 +776,8 @@ Activation is therefore a reviewed code change, not a settings change.
    document §4).
 3. The open items in §11 that bear on activation have been accepted or closed:
    concurrency through Supavisor (2), the preferences protection's limits (10),
-   and real Safari, which has not been run.
+   and real Safari, which has not been run: the guided interaction suite passes
+   in Playwright's WebKit build, which is not Safari or iPadOS input.
 
 **Steps**
 

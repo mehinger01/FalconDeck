@@ -10,10 +10,15 @@
  * conflict's recovery.
  *
  *   npm run verify:guided-setup-interactions
+ *   GUIDED_BROWSER=webkit npm run verify:guided-setup-interactions
+ *
+ * GUIDED_BROWSER=webkit runs the same checks in Playwright's WebKit build
+ * (`npx playwright install webkit`). That is WebKit, the engine Safari uses,
+ * not Safari itself: no Safari shell or iPadOS input stack.
  */
 import { build } from "esbuild";
 import { join } from "node:path";
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, webkit, type Browser, type Page } from "playwright";
 import type { GuidedSetupProps } from "@/components/guided/GuidedSetup";
 import { baseAppData } from "@/lib/onboarding/review";
 import { snapshotSharedBlocks } from "@/lib/onboarding/setupDraft";
@@ -327,7 +332,8 @@ async function scenarioLessonStep(browser: Browser) {
   console.log("10. Stage 1 → Stage 2: class, date, sample learning target, optional content");
   const page = await mount(browser, ownDraft());
   await toLessonStep(page);
-  check("Continue moves to \"Your first lesson\" and saves that step", (await stored(page))?.payload.step === "first-lesson");
+  // The screen moves on at once and the step is saved right after (in WebKit it lands ~40 ms after the heading).
+  check("Continue moves to \"Your first lesson\" and saves that step", await waitFor(page, async () => (await stored(page))?.payload.step === "first-lesson", 1000), (await stored(page))?.payload.step);
   check("focus moves to the new step's heading", await page.evaluate(() => document.activeElement?.tagName === "H1"));
   check("no lesson exists until the teacher edits one", (await lessonOf(page)) === null);
   check("the learning target starts empty - no sample until asked", (await page.getByRole("textbox", { name: "Learning target" }).inputValue()) === "");
@@ -575,7 +581,8 @@ async function scenarioFinishWithPendingTextAndDuplicateClicks(browser: Browser)
   check("one course, one class, one lesson", done[0]?.courses === 1 && done[0].classSections === 1 && done[0].lessons === 1);
   check("success navigates to /present, once", deepEqualJson(await navigations(page), ["/present"]));
   check("the screen says the classroom is ready, with a link to /present", (await page.getByRole("link", { name: "Open your classroom display" }).getAttribute("href")) === "/present");
-  check("...and that it is opening it (this tab is navigating)", (await page.locator("main").innerText()).includes("Opening your classroom display…"));
+  // The navigation is recorded in the same tick as the state change; the text follows on the next render.
+  check("...and that it is opening it (this tab is navigating)", await waitFor(page, async () => (await page.locator("main").innerText()).includes("Opening your classroom display…"), 1000));
   check("no unsaved-work warning blocks leaving", await page.evaluate(() => {
     const event = new Event("beforeunload", { cancelable: true });
     window.dispatchEvent(event);
@@ -751,7 +758,9 @@ async function scenarioOptionalItemsAreDraftBacked(browser: Browser) {
   await page.getByLabel("Resource 1 title").waitFor({ timeout: 3000 });
   check("Add resource adds an entry and focuses its title", await page.evaluate(() => document.activeElement?.id.startsWith("resource-title-") === true));
   await page.keyboard.type("Notes slides");
-  check("typed resource text reads as unsaved, never \"All changes saved\"", (await indicator(page)) === "Unsaved changes…", await indicator(page));
+  // Adding the entry is itself saved, so "Saving…" can still be showing as the title is typed; it must never read as saved.
+  check("typed resource text never reads \"All changes saved\"", (await indicator(page)) !== "All changes saved", await indicator(page));
+  check("...and reads as unsaved once the entry's own save is done", await waitFor(page, async () => (await indicator(page)) === "Unsaved changes…", 500), await indicator(page));
   check("...and leaving the page asks first", await leavingIsBlocked(page));
   await page.getByRole("button", { name: "Continue" }).click();
   // The list appears as Continue is pressed; wait for it to reflect the committed title, and for that save.
@@ -846,7 +855,11 @@ async function scenarioSaveFailureAtTheAction(browser: Browser) {
   await page.keyboard.type("!");
   await page.getByRole("button", { name: "Back" }).click();
   await actionError(page).waitFor({ timeout: 3000 });
-  check("Back is stopped the same way, focus on the error", (await page.getByRole("heading", { level: 1 }).innerText()) === "Your first lesson" && (await page.evaluate(() => document.activeElement?.getAttribute("role") === "alert")));
+  check(
+    "Back is stopped the same way, focus on the error",
+    (await page.getByRole("heading", { level: 1 }).innerText()) === "Your first lesson" &&
+      (await waitFor(page, () => page.evaluate(() => document.activeElement?.getAttribute("role") === "alert"), 1000)),
+  );
   await setRepo(page, { failing: false });
   await actionError(page).getByRole("button", { name: "Retry saving" }).click();
   await page.getByText("All changes saved").waitFor({ timeout: 3000 });
@@ -868,8 +881,11 @@ async function scenarioSaveFailureAtTheAction(browser: Browser) {
 }
 
 async function main() {
+  const engine = process.env.GUIDED_BROWSER ?? "chromium";
+  if (engine !== "chromium" && engine !== "webkit") throw new Error(`GUIDED_BROWSER must be "chromium" or "webkit", not "${engine}"`);
   bundled = await bundle();
-  const browser = await chromium.launch();
+  const browser = await (engine === "webkit" ? webkit : chromium).launch();
+  console.log(`Browser: Playwright ${engine} ${browser.version()}\n`);
   try {
     await scenarioEnterBeforeDebounce(browser);
     await scenarioContinueBeforeDebounce(browser);

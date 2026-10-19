@@ -1,6 +1,7 @@
 # Guided setup checks, on their own so they report independently of the
 # aggregate `npm run verify`. Local harnesses only: embedded PostgreSQL
-# (started and deleted by the teaching-day suite) and Playwright's Chromium.
+# (started and deleted by the teaching-day suite) and Playwright's Chromium
+# and WebKit.
 # No secrets, no hosted Supabase, no network services beyond package and
 # browser downloads.
 name: Guided setup
@@ -33,14 +34,20 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Install Chromium and its system dependencies
-        run: npx playwright install --with-deps chromium
+      - name: Install Chromium, WebKit and their system dependencies
+        run: npx playwright install --with-deps chromium webkit
 
       - name: Draft logic, boundaries and completion against embedded PostgreSQL
         run: npm run verify:guided-setup-teaching-day
 
       - name: Guided screens in Chromium
         run: npm run verify:guided-setup-interactions
+
+      # Playwright's WebKit build - the engine Safari uses, not Safari itself.
+      - name: Guided screens in WebKit
+        run: npm run verify:guided-setup-interactions
+        env:
+          GUIDED_BROWSER: webkit
 
       - name: Entry routing (decisions and the rendered gate)
         run: npm run verify:guided-setup-routing
