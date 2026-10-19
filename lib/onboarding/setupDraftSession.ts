@@ -53,8 +53,13 @@ export type SetupSessionStatus =
   | { kind: "conflict"; reason: SetupConflictReason; serverDraft: StoredSetupDraft | null; preferences?: SetupSeed }
   | { kind: "ineligible"; reason: SetupIneligibilityReason }
   | { kind: "completing" }
-  /** The server refused; nothing was committed. */
-  | { kind: "completion-rejected"; message: string }
+  /**
+   * The server refused; nothing was committed. `userFacing` is true when
+   * `message` was written for teachers (the setup functions' own
+   * validation, SQLSTATE 22023); anything else (a key collision, a timeout)
+   * is a raw database message the screen must not show.
+   */
+  | { kind: "completion-rejected"; message: string; userFacing: boolean }
   /** No answer arrived - setup may or may not have been committed. complete() again asks about the same operation. */
   | { kind: "completion-unconfirmed"; message: string }
   | { kind: "completed"; completion: SetupCompletion };
@@ -210,7 +215,7 @@ export class SetupDraftSession {
     const afterFlush = this.getSnapshot().status;
     if (afterFlush.kind === "completed" || this.dirty || !this.canAutosave()) return afterFlush;
     if (this.operationId === null || this.revision === null) {
-      this.setStatus({ kind: "completion-rejected", message: "There is nothing to finish yet." });
+      this.setStatus({ kind: "completion-rejected", message: "There is nothing to finish yet.", userFacing: true });
       return this.status;
     }
 
@@ -218,10 +223,11 @@ export class SetupDraftSession {
     const result = await this.repository.completeSetup(this.operationId, this.revision);
 
     if (!result.ok) {
-      this.setStatus({
-        kind: result.kind === "unknown" ? "completion-unconfirmed" : "completion-rejected",
-        message: result.message,
-      });
+      this.setStatus(
+        result.kind === "unknown"
+          ? { kind: "completion-unconfirmed", message: result.message }
+          : { kind: "completion-rejected", message: result.message, userFacing: result.code === "22023" },
+      );
       return this.status;
     }
 
@@ -252,12 +258,20 @@ export class SetupDraftSession {
     return !AUTOSAVE_BLOCKING_STATUSES.includes(this.status.kind);
   }
 
+  /**
+   * Runs one save pass, or joins the pass in flight. A caller that joins
+   * may have unblocked saving since that pass checked (resolveConflict()
+   * right after an update() held by the conflict, in the same tick): once
+   * the pass settles, outstanding edits get a pass of their own - unless the
+   * pass stopped on a failed save, which is retried only on request.
+   */
   private pump(): Promise<void> {
-    if (!this.saving) {
-      this.saving = this.runSaves().finally(() => {
-        this.saving = null;
-      });
+    if (this.saving) {
+      return this.saving.then(() => (this.dirty && this.canAutosave() && this.status.kind !== "save-failed" ? this.pump() : undefined));
     }
+    this.saving = this.runSaves().finally(() => {
+      this.saving = null;
+    });
     return this.saving;
   }
 

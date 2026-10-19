@@ -1,8 +1,12 @@
 # Streamlined Onboarding — Architecture Decisions
 
-**Status:** persistence foundation implemented and tested in isolation, awaiting
-review. The two migrations below are **not applied to any Supabase project**. No
-route, screen, or redirect has changed; no existing account behaves differently.
+**Status:** the persistence foundation is merged (PR #4). Its three migrations are
+applied to the staging project (`falcondeck-staging`); their Production rollout
+follows `docs/ONBOARDING_SETUP_RELEASE.md` and is not covered here. The guided
+screens (§9.3, PR #6) are built behind a server-side switch that is off by default
+and always off in Production; with it off, no route, screen, or redirect has
+changed and no existing account behaves differently. Activating them in Production
+needs a separate change (§13).
 The stale-tab data loss found during review is fixed in the save engine and
 covered by regression tests (§9.2); what that fix does not cover is listed there.
 
@@ -531,6 +535,70 @@ state on the client. It would cover old bundles and make a stale tab reload
 instead of merely being harmless. It is not needed for the data-loss cases above
 and is not implemented.
 
+### 9.3 As built: the guided screens (`/start`)
+
+Three steps, all writing through `SetupDraftSession` only: "Your teaching day",
+"Your first lesson", "Review and start". `/start` renders only when the entry rule
+(§10) answers `guided-setup` and `FALCON_GUIDED_SETUP=on` outside Production;
+otherwise it redirects to `/setup`.
+
+- **Review** summarizes the schedule, each period's class, the lunch wave and the
+  lesson, with Edit actions back to step 1 or 2. Every step change commits typed
+  text and waits for the save first.
+- **Optional lesson items** (agenda, resources, announcements) are draft-backed
+  like every other field: "Add …" appends an empty entry to the draft and focuses
+  it, and each entry is edited in place, so typed text reports as unsaved,
+  autosaves and survives a reload. Empty entries, and resources missing a title
+  or link, are kept and reported (`firstLessonIssues`), blocking Continue and
+  Start until filled in or removed.
+- **A failed save at an action:** when Back, Edit, Continue or Start stops because
+  its save failed, an alert next to the buttons takes focus, says nothing was
+  lost, and offers "Retry saving". Start stays pressable; pressing it saves again
+  first.
+- **Preview (§9.1.3):** the existing `PreviewPresentScreen`, inside an
+  `AppDataProvider` given `readOnlyRepository(projectSetupDraftToAppData(...))`.
+  That repository's `save()` writes nowhere; no `CutoverAppDataProvider`,
+  `useAppData` caller or localStorage repository exists on the page, and the
+  boundary checks assert it. Its period comes from `previewPeriods()`: the
+  projected active schedule resolved for the lesson's weekday
+  (`resolveActiveSchedule` + `resolveScheduleForWeekday`, as Present's Preview
+  Mode does), keeping the blocks that hold the lesson's class. A lesson belongs
+  to a class and date, not a period, so: one match is shown; several (a class
+  meeting more than once that day, e.g. via a weekday override) get a period
+  picker; none (the class is unassigned that weekday) is said plainly and the
+  display shows no period. The guided draft makes one class per period, so in
+  practice there is one match.
+- **Start my classroom** saves anything outstanding, re-checks the draft, then
+  calls `complete()` once. While it runs, further presses do nothing and the steps
+  are locked. The operation id is fixed for the draft, so pressing again after an
+  unconfirmed answer is answered from the committed record (§7). A save that learns
+  setup already committed counts as success.
+- **Refused (`completion-rejected`):** nothing was created. The server's message is
+  shown only when it is the setup functions' own validation wording (SQLSTATE
+  `22023`); any other database error (a key collision, a timeout) is replaced by
+  plain wording. Pressing Start again retries under the same operation id.
+- **Finished elsewhere:** a tab whose save learns setup is already complete shows
+  "Setup is finished" with a link to `/present`; it navigates only after its own
+  Start.
+- **On success (§9.1.4):** a full document load of `/present`
+  (`window.location.assign`), not a client-side route change, so the new
+  `CutoverAppDataProvider` loads the committed rows.
+- **Conflict recovery:**
+
+  | Answer | What the teacher sees and can do |
+  |---|---|
+  | `stale-revision` | Both versions, then "Use the saved version" or "Keep what's on this screen". |
+  | `shared-schedule-changed` | Reloads the school's schedules (`loadGuidedReference`, read-only). `refreshSharedSchedule` keeps classes in periods that still exist and the lesson. Returns to step 1 to review. |
+  | `preferences-changed` | Shows the stored schedule and lunch wave. "Use these settings and continue" adopts them through `adoptPreferences`; there is no way to insist on the older choice. A different schedule returns to step 1; the lesson keeps its date and target. |
+  | `no-longer-eligible` | Back to the existing app (`/setup`), nothing written. |
+  | `already-completed` | Treated as success (§7). |
+
+**Session fix found by this work.** `pump()` joined a save pass in flight even when
+that pass had already decided there was nothing it could send. A recovery that
+rebuilds the draft and resolves the conflict in the same tick (the schedule refresh
+above) was therefore never saved. A joining caller now gets a pass of its own once
+the current one settles, if edits are outstanding and the pass didn't stop on a
+failed save. Covered by `verify:guided-setup-teaching-day` §10.
 ## 10. Entry: new and interrupted accounts only
 
 `get_setup_state` reports one of `completed`, `in-progress`, or `not-started` with
@@ -574,6 +642,26 @@ has been changed again since the draft was created (§8.4).
 "Existing app" means today's behaviour exactly: `/setup`, `ActiveScheduleGate`,
 `MigrationSetupCard`. Nothing calls `deriveSetupEntry` yet.
 
+**As built (§9.3): entry points.** Only `/` and `/setup` send an account to
+guided setup; `/start` itself still requires the guided entry and the switch, and
+ordinary routes opened directly behave exactly as before.
+- `/` (`app/page.tsx`, outside every layout): `rootDestination(entry)`: `/start`
+  when guided setup is due, otherwise `/present` as before. With the switch off it
+  never reads the request, so it stays a static redirect to `/present`.
+- `/setup`: its page redirects guided accounts to `/start`, but `ActiveScheduleGate`
+  renders nothing in place of the page for an account with no active schedule and
+  replaces the URL with `/setup/schedule`, so that redirect never reached the
+  browser (found on staging: a new account signing in saw the old schedule
+  screen). The `(app)` layout now passes `guidedSetupDue` (false, with no lookup,
+  while the switch is off) through `CutoverAppDataProvider` to the gate, and
+  `gateDestination()` sends bare `/setup` to `/start` in that one case. Every other
+  path keeps the gate's existing rule; the `/present` layout passes nothing.
+- Cost: with the switch on, every `(app)` page load reads the setup state once.
+
+Covered by `npm run verify:guided-setup-routing`: the decisions for each kind of
+account with the switch on, off and in production, and the real gate rendered in
+Chromium.
+
 ---
 
 ## 11. Unresolved limitations
@@ -600,9 +688,11 @@ has been changed again since the draft was created (§8.4).
    primary keys across all schools. A draft id that collides with any existing row
    fails the whole completion with Postgres's own message. Ids are generated with
    `crypto.randomUUID()`, so this is not expected in practice.
-6. **Raw database messages can reach `completion-rejected`.** Validation failures
-   carry written-for-users messages; unexpected failures do not. The UI should show
-   its own wording for anything it does not recognise.
+6. **Raw database messages reach `completion-rejected` in the session.** Validation
+   failures carry written-for-users messages; unexpected failures do not. The guided
+   review shows the message only for SQLSTATE `22023` and its own wording
+   otherwise (§9.3); any other caller of `SetupDraftSession` must do the same
+   (`userFacing`).
 7. **One completion per membership, and no discard.** There is no "start over" or
    "run setup again". A draft can be overwritten but not deleted by the client;
    abandoned drafts do not expire. A draft whose account was then set up through
@@ -643,6 +733,12 @@ has been changed again since the draft was created (§8.4).
 | Schedule-only and lunch-wave-only preference changes after draft creation; baseline survives saves; committed operations still replay | db §19 |
 | Ordinary preference writes and completion, each order, first row and existing row | concurrency §10 |
 | Preferences changed between reading the seed and the first draft save; baseline cannot be chosen by the caller | db §22 |
+| Guided screens: one commit for repeated presses; failed and lost answers retried under the same operation id; each conflict's recovery; pending text committed before Edit, Back, Continue and Start; no leave-page warning at the moment of navigation; refusals never show raw database errors | `verify:guided-setup-interactions` §16–25 (real Chromium) |
+| Optional items are draft-backed (pending, saved, reloaded, validated); a failed save stops Back, Continue and Start at the action with a focused Retry | `verify:guided-setup-interactions` §26–27 |
+| Entry: `/` and `/setup` reach guided setup; ordinary routes, established, completed, legacy, unreadable, switch-off and production unchanged; the real gate rendered | `verify:guided-setup-routing` |
+| Raw versus validation refusals classified from real `complete_setup` errors | db §6, §13 (`userFacing`) |
+| Guided completion against PostgreSQL: lost answer then replay, rows created once, reload leaves guided setup, `/present`'s repository loads the committed lesson | `verify:guided-setup-teaching-day` §14 |
+| The review preview's provider is read-only and the only one on the guided page | `verify:guided-setup-teaching-day` §7c, §13 |
 | Ordinary preference writes keep their authorization | db §23 |
 | The ordinary save writes preferences only through the RPC | stale-tab §9 |
 | Genuinely overlapping requests | `verify:onboarding-setup-concurrency` |
@@ -652,7 +748,55 @@ has been changed again since the draft was created (§8.4).
 | Admin edit of a shared schedule overlapping a completion | concurrency §9 |
 
 The three `verify:onboarding-setup-*` scripts and `verify:stale-tab-save-safety`
-are in `npm run verify`. The database
+are in `npm run verify`. The three `verify:guided-setup-*` scripts are not;
+they run in their own CI job (`.github/workflows/guided-setup.yml`) on pull
+requests and pushes to `main`, using only these local harnesses and Playwright's
+Chromium. The database
 ones start a PostgreSQL 17 server in a temporary directory, apply every file in
 `supabase/migrations` to it, and delete it. They read no environment file and
 connect to nothing else.
+
+---
+
+## 13. Activating guided setup in Production, and rolling back
+
+Guided setup cannot be switched on in Production today: `isGuidedSetupEnabled()`
+returns false whenever `VERCEL_ENV=production`, whatever `FALCON_GUIDED_SETUP` says.
+Activation is therefore a reviewed code change, not a settings change.
+
+**Preconditions**
+
+1. The foundation release (`docs/ONBOARDING_SETUP_RELEASE.md`) is complete in
+   Production: the three migrations applied and verified (its Step 2), and the
+   application deployed that writes preferences through
+   `save_teacher_schedule_preferences`.
+2. Old bundles have aged out: no tab still running a client from before that
+   deployment, which wrote preferences outside the protocol (§8.3, §9.2; release
+   document §4).
+3. The open items in §11 that bear on activation have been accepted or closed:
+   concurrency through Supavisor (2), the preferences protection's limits (10),
+   and real Safari, which has not been run.
+
+**Steps**
+
+1. A PR that replaces the Production guard with an explicit Production opt-in (for
+   example, honouring `FALCON_GUIDED_SETUP=on` in Production), with its own tests.
+   Merging it changes nothing until the variable is set.
+2. Set `FALCON_GUIDED_SETUP=on` for Production in Vercel and **redeploy**: `/` is
+   prerendered while the switch is off, and Vercel applies environment changes
+   only to new deployments.
+3. Verify with a fresh synthetic account (sign-in reaches `/start`, completion,
+   `/present`), and with an established account (unchanged).
+
+**Rollback**
+
+- **Switch off:** remove `FALCON_GUIDED_SETUP` (or set it to anything but `on`)
+  and redeploy, or use Vercel's instant rollback to the previous deployment.
+  Every account then gets the existing app: `/start` redirects to `/setup`,
+  and `/` and `/setup` behave as before.
+- **Data needs no conversion.** Completed setups are ordinary operational rows
+  (courses, classes, a lesson, preferences, assignments) that the existing app
+  already reads. Unfinished drafts stay in `setup_drafts`, unread; if guided setup
+  returns, an account that is still eligible resumes its draft.
+- **Keep the database objects.** They are inert without the switch (release
+  document §4). Never drop them while any deployment can call them.

@@ -434,6 +434,7 @@ async function main() {
     const status = await session.complete();
     check("the completion is reported as rejected, not as unknown", status.kind === "completion-rejected");
     check("...and it was the final lesson write that failed, not an earlier check", status.kind === "completion-rejected" && status.message.includes("lessons_pkey"));
+    check("...marked as not worded for teachers, so the screen won't show it", status.kind === "completion-rejected" && !status.userFacing);
 
     const counts = await ownedRowCounts(founder.membershipId);
     check("no course, section, schedule, block, preference, or lesson survived", operationalRowTotal(counts) === 0);
@@ -701,6 +702,7 @@ async function main() {
       }
       if (testCase.message) {
         check("  ...with the wording the client validator shows for the same problem", status.kind === "completion-rejected" && status.message === testCase.message && clientIssues.some((issue) => issue.message === CLIENT_WORDING[testCase.message ?? ""]));
+        check("  ...marked as worded for teachers (22023)", status.kind === "completion-rejected" && status.userFacing);
       }
     }
   }

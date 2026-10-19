@@ -94,16 +94,38 @@ export function shouldEnforceGate(
   return enabled && shouldGateRedirect(pathname, teacherSchedulePreferences);
 }
 
-export function ActiveScheduleGate({ enabled, children }: { enabled: boolean; children: ReactNode }) {
+/**
+ * Where the gate sends this request, or null to render the page. The
+ * schedule rule above, plus one guided-setup case: bare /setup is the
+ * entry point sign-in lands on, and its page redirects guided accounts to
+ * /start - but this gate renders nothing in place of that page for an
+ * account with no active schedule, so the page's redirect never reaches
+ * the browser. When the server says guided setup is due (`guidedSetupDue`,
+ * from app/(app)/layout.tsx - always false with the switch off), /setup goes
+ * to /start instead of /setup/schedule. Every other path is unchanged: the
+ * gate never sends an ordinary route to guided setup.
+ */
+export function gateDestination(
+  enabled: boolean,
+  pathname: string,
+  teacherSchedulePreferences: Pick<TeacherSchedulePreferences, "activeBellScheduleId">,
+  guidedSetupDue = false,
+): "/setup/schedule" | "/start" | null {
+  if (!shouldEnforceGate(enabled, pathname, teacherSchedulePreferences)) return null;
+  return guidedSetupDue && pathname === "/setup" ? "/start" : "/setup/schedule";
+}
+
+export function ActiveScheduleGate({ enabled, guidedSetupDue = false, children }: { enabled: boolean; guidedSetupDue?: boolean; children: ReactNode }) {
   const { data } = useAppData();
   const pathname = usePathname();
   const router = useRouter();
 
-  const mustRedirect = shouldEnforceGate(enabled, pathname, data.teacherSchedulePreferences);
+  const destination = gateDestination(enabled, pathname, data.teacherSchedulePreferences, guidedSetupDue);
+  const mustRedirect = destination !== null;
 
   useEffect(() => {
-    if (mustRedirect) router.replace("/setup/schedule");
-  }, [mustRedirect, router]);
+    if (destination) router.replace(destination);
+  }, [destination, router]);
 
   // Never render the protected page while a redirect is pending - matches
   // (app)/layout.tsx's own "redirect above, nothing rendered below" shape

@@ -34,3 +34,12 @@ export function deriveSetupEntry(authority: DataAuthorityState, setupState: Setu
   if (setupState.status === "not-started" && setupState.eligible) return "guided-setup";
   return "existing-app";
 }
+
+/**
+ * Where "/" sends a request: guided setup when it is due, otherwise the
+ * classroom display as before. "/" sits outside every layout (no
+ * ActiveScheduleGate), so the server decides it directly.
+ */
+export function rootDestination(entry: SetupEntry): "/start" | "/present" {
+  return entry === "guided-setup" ? "/start" : "/present";
+}

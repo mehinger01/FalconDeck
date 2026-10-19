@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { NavBar } from "@/components/layout/NavBar";
 import { destinationForResolution, requireAuthenticatedUser, resolveActiveOrganization } from "@/lib/auth/dal";
+import { resolveGuidedSetupContext } from "@/lib/auth/guidedSetupEntry";
 import { deriveDataAuthorityState } from "@/lib/auth/dataAuthority";
 import { CutoverAppDataProvider } from "@/lib/store/CutoverAppDataProvider";
 import type { ReactNode } from "react";
@@ -60,9 +61,11 @@ export default async function AppSectionLayout({ children }: { children: ReactNo
   if (resolution.state !== "resolved") redirect(destinationForResolution(resolution));
 
   const authority = deriveDataAuthorityState(resolution);
+  // Lets ActiveScheduleGate send bare /setup to /start for a guided account (see gateDestination). False, with no RPC, while the switch is off.
+  const guidedSetupDue = (await resolveGuidedSetupContext()).entry === "guided-setup";
 
   return (
-    <CutoverAppDataProvider authority={authority}>
+    <CutoverAppDataProvider authority={authority} guidedSetupDue={guidedSetupDue}>
       <div className="flex min-h-full flex-1 flex-col bg-falcon-cream-200 text-falcon-brown-900">
         <NavBar organizationName={resolution.membership.organizationName} />
         <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">{children}</main>

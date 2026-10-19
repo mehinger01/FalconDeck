@@ -76,7 +76,8 @@ export type CompleteSetupResult =
  */
 export type SetupCallResult<T> =
   | { ok: true; value: T }
-  | { ok: false; kind: "rejected" | "unknown"; message: string };
+  /** `code` is the Postgres error code of a rejection, when there is one ("22023" = the setup functions' own validation, worded for teachers). */
+  | { ok: false; kind: "rejected" | "unknown"; message: string; code?: string };
 
 export interface SetupRepository {
   getState(): Promise<SetupCallResult<SetupState>>;
