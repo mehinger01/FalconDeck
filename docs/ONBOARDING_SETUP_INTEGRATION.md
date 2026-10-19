@@ -454,3 +454,76 @@ git worktree remove ../falcon-deployed                  # after deleting its nod
 The stack writes nothing into the repository.
 - `next dev` may re-add its block to `AGENTS.md`; discard that.
 - `.next/` is ignored.
+
+## 6. Hosted pooler checks (staging only)
+
+`npm run verify:onboarding-setup-pooler` runs completion against ordinary
+preference saves, in both orders and for the first preferences row, through
+Supabase's **transaction pooler** on `falcondeck-staging`
+(`fkqplulzwchunhthyoym`). It is the hosted counterpart of
+`verify:onboarding-setup-concurrency` §10. It is not PostgREST: the deployed app
+reaches the database through PostgREST, which does not go through the pooler; the
+HTTPS checks (release document §5) cover that path.
+
+**Target.** `scripts/support/stagingPooler.ts` refuses, before connecting, any URL
+that is not `postgres.fkqplulzwchunhthyoym@aws-N-<region>.pooler.supabase.com:6543/postgres`
+(production's ref is refused by name). After connecting, and before any write, it
+refuses a database with any Auth user outside `@example.test`, or without the
+onboarding migrations recorded. It never applies a migration.
+
+**Fixtures and cleanup.** Every case makes a new `pooler-<run>-<case>+<tag>@example.test`
+user and school through `bootstrap_organization()`. Everything else (every
+school-scoped table, `organizations`, `auth.users`) is fingerprinted before and
+after and must be unchanged. Cleanup removes only the run's users, memberships and
+schools, in one transaction, and refuses if any of them is not a fixture.
+
+**Transactions.** Every unit is one explicit `begin` … `commit` (or one statement)
+using `set local` only; nothing relies on session state.
+
+### Getting the connection string
+
+1. In the Supabase dashboard, open **falcondeck-staging**. Check that the address
+   bar shows `fkqplulzwchunhthyoym` - not `rlfydgbololkbrcloneb` (production).
+2. Press **Connect** (top bar) → **Connection String** → Type **URI**, Source
+   **Primary database**, Method **Transaction pooler**. Copy the URI. It contains
+   `[YOUR-PASSWORD]`, not the password.
+3. The password is the `postgres` password chosen when the project was created; the
+   dashboard cannot show it. If nobody has it, it has to be reset (Project Settings →
+   Database → Reset database password). That changes only staging's `postgres` login
+   password: Vercel Preview (publishable API key), the Supabase connector (management
+   API) and Supabase's own service roles do not use it. Production is a different
+   project and is not affected.
+
+### Storing it without displaying it
+
+In your own PowerShell window at the repository root (it prompts, so not through
+an agent):
+
+```powershell
+$uri = Read-Host "Pooler URI with [YOUR-PASSWORD] still in it"
+$secure = Read-Host "Database password" -AsSecureString
+$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+try {
+  $encoded = [Uri]::EscapeDataString([Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr))
+  Set-Content -Path .env.staging-pooler.local -Value ("FALCON_TEST_DATABASE_URL=" + $uri.Replace('[YOUR-PASSWORD]', $encoded)) -Encoding ascii -NoNewline
+} finally {
+  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+  Remove-Variable encoded, secure, bstr -ErrorAction SilentlyContinue
+}
+git check-ignore -v .env.staging-pooler.local   # must print the .env* rule
+```
+
+Keep it in that file, not in a persistent environment variable: the local database
+suites read `FALCON_TEST_DATABASE_URL` too, and refuse any host but this machine.
+
+### Running
+
+```bash
+npm run verify:onboarding-setup-pooler                       # target check only; writes nothing
+npm run verify:onboarding-setup-pooler -- --run              # the scenarios
+npm run verify:onboarding-setup-pooler -- --cleanup-leftovers # fixtures left by a crashed run
+```
+
+Only host, port and user are ever printed. Delete `.env.staging-pooler.local` when
+done. Staging is a Free-plan project and pauses after about a week idle; restore it
+from the dashboard first if the connection times out.

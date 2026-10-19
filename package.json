@@ -40,6 +40,7 @@
     "verify:onboarding-setup-foundation": "tsx scripts/verify-onboarding-setup-foundation.ts",
     "verify:onboarding-setup-db": "tsx scripts/verify-onboarding-setup-db.ts",
     "verify:onboarding-setup-concurrency": "tsx scripts/verify-onboarding-setup-concurrency.ts",
+    "verify:onboarding-setup-pooler": "tsx scripts/verify-onboarding-setup-pooler.ts",
     "verify:guided-setup-teaching-day": "tsx scripts/verify-guided-setup-teaching-day.ts",
     "verify:guided-setup-interactions": "tsx scripts/verify-guided-setup-interactions.ts",
     "verify:guided-setup-routing": "tsx scripts/verify-guided-setup-routing.ts",

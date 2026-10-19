@@ -771,13 +771,26 @@ Activation is therefore a reviewed code change, not a settings change.
    Production: the three migrations applied and verified (its Step 2), and the
    application deployed that writes preferences through
    `save_teacher_schedule_preferences`.
-2. Old bundles have aged out: no tab still running a client from before that
-   deployment, which wrote preferences outside the protocol (§8.3, §9.2; release
-   document §4).
+2. Clients from before that deployment (`e265b80`, live 2026-10-17 00:04 UTC) are
+   an accepted, measured risk - not a waiting period, because no one can show that
+   every old tab has closed. Such a tab writes preferences directly, outside the
+   protocol, and still has the pre-§9.2 save recovery. It can affect only the
+   account it is signed in to, and only if that account completes guided setup
+   while the tab stays open and unreloaded. At activation, record:
+   - read-only, how many memberships eligible for guided setup existed before that
+     deployment (an account must have existed for an old tab to be signed in to it);
+   - from the Production Supabase API logs, for whatever window the plan retains,
+     direct writes to `/rest/v1/teacher_schedule_preferences` (old clients, and the
+     one-time legacy migration, which never runs for an eligible account) against `POST /rest/v1/rpc/save_teacher_schedule_preferences` (current
+     clients).
+   Neither proves that no old tab is open; together they bound how many accounts
+   could be exposed. Activation proceeds on that record, not on a wait.
 3. The open items in §11 that bear on activation have been accepted or closed:
-   concurrency through Supavisor (2), the preferences protection's limits (10),
-   and real Safari, which has not been run: the guided interaction suite passes
-   in Playwright's WebKit build, which is not Safari or iPadOS input.
+   concurrency through Supavisor (2) and the preferences protection's limits (10).
+4. Browser coverage is recorded as two separate items: Playwright's WebKit build
+   (the guided interaction suite passes in it) and real Safari on macOS and iPadOS
+   (not run). The first does not stand in for the second: WebKit is not Safari or
+   iPadOS input.
 
 **Steps**
 

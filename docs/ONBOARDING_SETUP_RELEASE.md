@@ -169,8 +169,9 @@ are ordinary rows. Guided setup is inactive, so no draft or completion rows exis
 **Mixed bundles during rollout.** Tabs opened before the deploy keep writing
 preferences directly until they reload. That is outside the write protocol, but it
 only matters while a `complete_setup` runs, and nothing calls `complete_setup` until
-guided setup is activated. Before activating it, allow time for old bundles to age
-out (architecture document §8.3, §9.2).
+guided setup is activated. Activation does not wait for old tabs to close, which
+cannot be shown; it records how many accounts could be exposed instead
+(architecture document §13, precondition 2).
 
 ## 5. What has and has not been validated
 

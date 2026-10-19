@@ -309,7 +309,13 @@ function attachExternal(connectionString: string): TestDatabase {
   return attach(pool, () => pool.end(), true);
 }
 
-function attach(pool: Pool, shutDown: () => Promise<void>, external: boolean): TestDatabase {
+/**
+ * The TestDatabase API over an existing pool. Every user-side call is one
+ * explicit transaction (`begin` … `set local` … `commit`) and nothing sets
+ * session state, so it also runs through a transaction pooler - which is how
+ * scripts/support/stagingPooler.ts uses it, behind its own target checks.
+ */
+export function attach(pool: Pool, shutDown: () => Promise<void>, external: boolean): TestDatabase {
   const primaryKeys = new Map<string, string[]>();
   async function primaryKeyColumns(table: string): Promise<string[]> {
     const cached = primaryKeys.get(table);
