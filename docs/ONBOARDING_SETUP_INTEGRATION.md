@@ -496,22 +496,21 @@ using `set local` only; nothing relies on session state.
 
 ### Storing it without displaying it
 
-In your own PowerShell window at the repository root (it prompts, so not through
-an agent):
+In your own PowerShell window (it prompts, so not through an agent):
 
 ```powershell
-$uri = Read-Host "Pooler URI with [YOUR-PASSWORD] still in it"
-$secure = Read-Host "Database password" -AsSecureString
-$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
-try {
-  $encoded = [Uri]::EscapeDataString([Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr))
-  Set-Content -Path .env.staging-pooler.local -Value ("FALCON_TEST_DATABASE_URL=" + $uri.Replace('[YOUR-PASSWORD]', $encoded)) -Encoding ascii -NoNewline
-} finally {
-  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
-  Remove-Variable encoded, secure, bstr -ErrorAction SilentlyContinue
-}
-git check-ignore -v .env.staging-pooler.local   # must print the .env* rule
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\set-staging-pooler-url.ps1
 ```
+
+`scripts/set-staging-pooler-url.ps1` holds staging's pooler host, port, database
+and user (`aws-0-us-east-2.pooler.supabase.com:6543`, `postgres`,
+`postgres.fkqplulzwchunhthyoym`) and contains no secret. It refuses to write unless
+git reports `.env.staging-pooler.local` ignored and untracked, prompts for the
+password with masked input, URL-encodes it, writes the one line, re-checks git
+afterwards (deleting the file if it is not ignored), and prints only user, host,
+port and database. `-ExecutionPolicy Bypass` applies to that one process. It runs
+in Windows PowerShell 5.1 (no `--error-unmatch`, whose stderr becomes a
+terminating error there).
 
 Keep it in that file, not in a persistent environment variable: the local database
 suites read `FALCON_TEST_DATABASE_URL` too, and refuse any host but this machine.
@@ -527,3 +526,7 @@ npm run verify:onboarding-setup-pooler -- --cleanup-leftovers # fixtures left by
 Only host, port and user are ever printed. Delete `.env.staging-pooler.local` when
 done. Staging is a Free-plan project and pauses after about a week idle; restore it
 from the dashboard first if the connection times out.
+
+**Last run:** 2026-10-27, `pooler-20261027-edb109`: 29 of 29 checks passed; 11
+fixture users and schools removed; every unrelated row unchanged. Results are in
+architecture document §8.3 and release document §5.

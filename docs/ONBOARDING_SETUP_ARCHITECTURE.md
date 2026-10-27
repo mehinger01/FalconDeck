@@ -278,16 +278,39 @@ and default privileges, and a gateway standing in for Kong.
 - **The existing suite on the same database.** `verify:onboarding-setup-concurrency`
   passed against the stack's database (71 checks), over direct connections.
 
-**On hosted Supabase.** Functional and authorization checks passed on the hosted
-staging project, `falcondeck-staging` (release document §5). The lock-order
-scenarios did not run there; they need a direct database connection.
+**On hosted Supabase, through PostgREST.** Functional and authorization checks
+passed on the hosted staging project, `falcondeck-staging` (release document §5),
+over HTTPS through Kong, Auth and PostgREST. Those are not lock-order checks.
+
+**On hosted Supabase, through the transaction pooler.**
+`verify:onboarding-setup-pooler --run` passed all 29 checks on 2026-10-27 (run
+`pooler-20261027-edb109`) against `falcondeck-staging` (PostgreSQL 17.11) through
+Supavisor's transaction pooler (port 6543). Every unit of work was one explicit
+transaction using only `set local`, as transaction pooling requires.
+
+- The §8.2 ordering cases, made deterministic the same way: ordinary save and
+  completion in both orders, for an existing row and for the first row. Each time
+  the side that went second waited without having touched
+  `teacher_schedule_preferences`, on a different pooled backend, then gave the
+  §8.2 outcome; completed operations still replayed.
+- The control: a direct table `UPDATE` after a completion waited holding the row,
+  then was rejected by RLS (`42501`) - so the checks above could have failed.
+- 6 unsynchronized rounds: completion refused 5, ordinary write on top 1; no write
+  rejected.
+- No setup advisory lock or open transaction of the run was left behind.
+- Its 11 synthetic `@example.test` users and 11 schools were removed, and every row
+  outside them (all school-scoped tables, `organizations`, `auth.users`) was
+  fingerprinted before and after and was unchanged.
+
+This proves the lock order on a Supabase-hosted Postgres with transactions passing
+through Supavisor. It does not exercise the deployed request path: PostgREST
+connects to Postgres directly, not through the pooler, and its lock order was
+shown on the local stack (above). Browser coverage is separate again (§12).
 
 Still not exercised:
 
-- **Supabase's pooler (Supavisor), and lock order on a Supabase project.** The
-  design relies on each RPC being one transaction at READ COMMITTED.
-  Transaction-level advisory and row locks are safe under transaction pooling, but
-  this has not been observed on a Supabase project.
+- Lock order through PostgREST on a Supabase project (hosted PostgREST was checked
+  functionally only).
 - Real network latency and client retry timing.
 
 **One protocol for preference writes.** The ordinary save used to write
@@ -671,11 +694,15 @@ Chromium.
    and an explicitly edited field is last-write-wins. Edits to a class deleted
    elsewhere are handled for lessons only, and no screen but two shows a failed
    save (§9.2).
-2. **Concurrency through the Supabase pooler is unverified.** Through PostgREST it
-   was verified on a local integration stack (§8.3).
+2. **Concurrency on hosted Supabase: verified through the transaction pooler, not
+   through hosted PostgREST.** The lock-order scenarios passed on
+   `falcondeck-staging` through Supavisor (29 checks, 2026-10-27); through
+   PostgREST they were verified on the local integration stack (§8.3).
 3. **The non-production Supabase project is a Free-plan staging project**
-   (`falcondeck-staging`). It pauses after about a week of inactivity, and nobody
-   here holds a direct database connection to it. A Supabase preview branch
+   (`falcondeck-staging`). It pauses after about a week of inactivity. Its only
+   database connection here is the transaction-pooler URL a maintainer stores
+   locally in the git-ignored `.env.staging-pooler.local` (integration document
+   §6). A Supabase preview branch
    would not work as-is:
    `20260922000000_organization_memberships_account_origin.sql` refuses to apply
    unless two specific production rows exist. The test harness seeds those rows.
@@ -731,7 +758,7 @@ Chromium.
 | Interrupted accounts resume; established and legacy accounts unchanged | db §2, §15, §16; foundation §8 |
 | Draft started, then ordinary setup: entry bypasses guided setup; saves and completion cannot reopen it; draft retained | db §15c, §17, §18 |
 | Schedule-only and lunch-wave-only preference changes after draft creation; baseline survives saves; committed operations still replay | db §19 |
-| Ordinary preference writes and completion, each order, first row and existing row | concurrency §10 |
+| Ordinary preference writes and completion, each order, first row and existing row | concurrency §10; on hosted staging through Supavisor's transaction pooler, `verify:onboarding-setup-pooler --run` §1–5 (§8.3) |
 | Preferences changed between reading the seed and the first draft save; baseline cannot be chosen by the caller | db §22 |
 | Guided screens: one commit for repeated presses; failed and lost answers retried under the same operation id; each conflict's recovery; pending text committed before Edit, Back, Continue and Start; no leave-page warning at the moment of navigation; refusals never show raw database errors | `verify:guided-setup-interactions` §16–25 (Playwright Chromium and WebKit) |
 | Optional items are draft-backed (pending, saved, reloaded, validated); a failed save stops Back, Continue and Start at the action with a focused Retry | `verify:guided-setup-interactions` §26–27 |
@@ -756,6 +783,10 @@ not Safari). The database
 ones start a PostgreSQL 17 server in a temporary directory, apply every file in
 `supabase/migrations` to it, and delete it. They read no environment file and
 connect to nothing else.
+
+`verify:onboarding-setup-pooler` is the exception, and is in neither: it is run by
+hand against `falcondeck-staging` only, through its transaction pooler, with a
+locally stored connection string (integration document §6).
 
 ---
 
@@ -786,7 +817,9 @@ Activation is therefore a reviewed code change, not a settings change.
    Neither proves that no old tab is open; together they bound how many accounts
    could be exposed. Activation proceeds on that record, not on a wait.
 3. The open items in §11 that bear on activation have been accepted or closed:
-   concurrency through Supavisor (2) and the preferences protection's limits (10).
+   concurrency through Supavisor (2) is closed - 29 checks on `falcondeck-staging`,
+   2026-10-27 (§8.3); the preferences protection's limits (10) are open, pending
+   risk acceptance together with precondition 2.
 4. Browser coverage is recorded as two separate items: Playwright's WebKit build
    (the guided interaction suite passes in it) and real Safari on macOS and iPadOS
    (not run). The first does not stand in for the second: WebKit is not Safari or
