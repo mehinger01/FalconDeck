@@ -167,9 +167,11 @@ files.
 are ordinary rows. Guided setup is inactive, so no draft or completion rows exist.
 
 **Mixed bundles during rollout.** Tabs opened before the deploy keep writing
-preferences directly until they reload. That is outside the write protocol, but it
-only matters while a `complete_setup` runs, and nothing calls `complete_setup` until
-guided setup is activated. Activation does not wait for old tabs to close, which
+preferences directly until they reload. That is outside the write protocol. It
+matters for an account that completes guided setup while such a tab is open - during
+the completion and after it (reproduced: architecture document §8.3,
+`verify:old-client-exposure`) - and nothing calls `complete_setup` until guided
+setup is activated. Activation does not wait for old tabs to close, which
 cannot be shown; it records how many accounts could be exposed instead
 (architecture document §13, precondition 2).
 

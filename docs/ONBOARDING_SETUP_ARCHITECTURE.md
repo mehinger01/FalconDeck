@@ -332,11 +332,26 @@ policy is admin-only. Both observed problems are gone for writes made this way
 - **Writers outside the protocol.** A client bundle from before this change, a
   direct API call, and the one-time legacy migration
   (`lib/data/migration/migrateLocalData.ts`, which upserts the row) still write the
-  table directly. RLS still governs them, but they can still be rejected while a
+  table directly. RLS still governs them. A plain `UPDATE` can be rejected while a
   completion commits (§8.2 control), and a direct first-row insert can still take
   its locks in the opposite order. The legacy migration only runs for legacy
   accounts, which are never eligible for guided setup. Direct writes were not
   revoked; that would be a wider change.
+
+  **The deployed old bundle specifically** (Production until `e265b80`,
+  2026-10-17 00:04 UTC; its engine is `ecb7467`'s) does not write a plain `UPDATE`:
+  it upserts the whole row. `verify:old-client-exposure` runs that engine, taken
+  from git, against today's migrations and the real `complete_setup()` (local
+  PostgreSQL 17, 31 checks). Overlapping a completion, for an existing row and
+  for the first row, its upsert waits and is **not rejected**: it succeeds once
+  the completion commits and **clears the active schedule the completion just
+  set** - case A of §9.2 arriving through the overlap. So an overlap is not a
+  harmless rejection, and later saves are not safe either: the first failed save
+  from that tab, at any time afterwards, makes the next one delete setup's first
+  lesson (and, for a shared schedule, its class and period assignment) while the
+  completion stays recorded (§9.2 B, B2, reproduced again). What such a tab does
+  not do: a save with no edits writes nothing, and an edit that does not touch
+  preferences, with no failed save, leaves setup's rows and active schedule alone.
 - **Deploy order.** The ordinary save now depends on the new function. Applying the
   migration has to come before, or with, shipping this client code; otherwise every
   preference save fails.
@@ -731,7 +746,10 @@ Chromium.
     `save_teacher_schedule_preferences` protocol, the deploy order it creates, and
     unlocked checks in `save_setup_draft`. See §8.3. A `preferences-changed` conflict
     can only be resolved by changing the draft or the stored preferences; there is
-    no "replace anyway".
+    no "replace anyway". For the deployed old bundle the effect is reproduced, not
+    inferred: a cleared active schedule, and after any failed save, deleted setup
+    rows (§8.3, `verify:old-client-exposure`). Mitigation is undecided (§13,
+    precondition 2).
 11. **Follow-ups left for a later pass.** `timeZone`, `colorHex`, a course
     `description` and the elements of the first lesson's arrays are stored without
     validation beyond the draft size cap. And `complete_setup` answers differently
@@ -773,6 +791,7 @@ Chromium.
 | Lesson edit for a class deleted elsewhere is held back, reported, and blocks nothing else | stale-tab §10 |
 | Completion refused once the account is set up the ordinary way; committed operations still replay | db §17; concurrency §8 |
 | Admin edit of a shared schedule overlapping a completion | concurrency §9 |
+| What the pre-foundation bundle (`ecb7467`) still does after a completion: cases A, B, B2, the overlap, and what it leaves alone; current engine as control | `verify:old-client-exposure` (reproduction; not in `npm run verify` - it reads that commit from git history) |
 
 The three `verify:onboarding-setup-*` scripts and `verify:stale-tab-save-safety`
 are in `npm run verify`. The three `verify:guided-setup-*` scripts are not;
@@ -816,6 +835,14 @@ Activation is therefore a reviewed code change, not a settings change.
      clients).
    Neither proves that no old tab is open; together they bound how many accounts
    could be exposed. Activation proceeds on that record, not on a wait.
+
+   What such a tab does is reproduced locally (§8.3, `verify:old-client-exposure`):
+   a lunch-wave edit clears setup's active schedule, including when it overlaps the
+   completion, and any failed save followed by another deletes setup's first lesson
+   (with a shared schedule, its class and period assignment too). Proposed, not
+   decided or implemented: a first rollout limited to accounts created after the
+   old bundle stopped being served, which no old tab can be signed in to. Risk
+   acceptance stays pending.
 3. The open items in §11 that bear on activation have been accepted or closed:
    concurrency through Supavisor (2) is closed - 29 checks on `falcondeck-staging`,
    2026-10-27 (§8.3); the preferences protection's limits (10) are open, pending
