@@ -840,9 +840,15 @@ Activation is therefore a reviewed code change, not a settings change.
    a lunch-wave edit clears setup's active schedule, including when it overlaps the
    completion, and any failed save followed by another deletes setup's first lesson
    (with a shared schedule, its class and period assignment too). Proposed, not
-   decided or implemented: a first rollout limited to accounts created after the
-   old bundle stopped being served, which no old tab can be signed in to. Risk
-   acceptance stays pending.
+   decided or implemented: a first rollout limited to a user AND a membership both
+   created after a provisional cutoff (2026-10-18 00:00 UTC; e265b80 was READY at
+   2026-10-17 00:04:09 UTC). An old tab can carry a newer account's session (another
+   tab switches it), but its save code targets the membership its page was rendered
+   with, and every such write was rejected; sign-in, sign-up and "Create school"
+   from an old document are unknown server actions to the new build. Locally
+   observed, not on Vercel (integration document, "Old tabs across a deployment").
+   It holds only while Skew Protection is off and no deployment older than e265b80
+   is promoted. Risk acceptance stays pending.
 3. The open items in §11 that bear on activation have been accepted or closed:
    concurrency through Supavisor (2) is closed - 29 checks on `falcondeck-staging`,
    2026-10-27 (§8.3); the preferences protection's limits (10) are open, pending

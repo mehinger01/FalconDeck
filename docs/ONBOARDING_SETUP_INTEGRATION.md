@@ -443,12 +443,85 @@ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=$FALCON_INTEGRATION_ANON_KEY npx next dev -
    `127.0.0.1:54321`, and that preference saves are
    `POST /rest/v1/rpc/save_teacher_schedule_preferences`.
 
+### Old tabs across a deployment
+
+`scripts/integration/old-tab-account-switch.ts` asks whether a tab still running
+the pre-foundation client (`ecb7467`) can run its save code against an account or
+membership created after a newer build replaced it. Two real `next start` builds
+take turns on `:3000` against the stack; stopping one and starting the other on
+the same origin stands in for a deployment. It is **not** Vercel: no CDN, no
+alias switch, no Skew Protection. Playwright drives Chromium or WebKit (WebKit is
+not Safari).
+
+Build each commit in its own checkout. Each needs its **own** `node_modules`:
+Turbopack refuses a linked `node_modules` that points outside the project.
+
+```bash
+git worktree add --detach ../falcon-old ecb7467
+git worktree add --detach ../falcon-new HEAD
+for d in ../falcon-old ../falcon-new; do
+  (cd "$d" && npm ci --ignore-scripts &&
+   NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 \
+   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=$FALCON_INTEGRATION_ANON_KEY npx next build)
+done
+FALCON_OLD_APP_DIR=../falcon-old FALCON_NEW_APP_DIR=../falcon-new FALCON_BROWSER=chromium \
+  npm run integration:old-tab-account-switch          # then FALCON_BROWSER=webkit
+```
+
+Neither checkout gets an `.env.local`. The script refuses a build whose browser
+bundle names a hosted Supabase project, or does not name the stack, and refuses
+to start if anything already listens on `:3000`. It prints accounts by label
+only - no email, password or token.
+
+| Path | What it does |
+|---|---|
+| A1 | Old `/login`, signed out: sign in as an account created after the switch |
+| A2 | Old tab signed in: NavBar sign-out, then sign in as the new account |
+| A3 | Old `/schedule` and `/classes` tabs stay open while another tab in the same browser switches the session to the new account; both old tabs save twice |
+| A4 | Old `/login`: Sign up |
+| A5 | Old onboarding tab of a user with no school; another tab switches to a new user with no school; the old tab submits "Create school" |
+| A6 | Browser Back to a document loaded before the switch (is the back-forward cache used?) |
+| A7 | Browser Back across a client-side navigation made before the switch |
+| B | The old save engine (from `FALCON_OLD_APP_DIR`), loaded as an existing account, with the session switched underneath it: lesson edit, new class, reassigned period, lunch wave; a rejected save then a second save; deletes of the lesson, class and period assignment while the loaded data is still its baseline |
+
+Every account's memberships and every row of every table with
+`owner_membership_id` are fingerprinted before and after.
+
+**Result, 2026-10-27** (`docs/evidence/old-tab-account-switch/`, Chromium 153 and
+WebKit 26.6, all checks passed in both):
+
+- **Sign-in, sign-up and "Create school" from an old document** (A1, A4, A5): the
+  server action is unknown to the new build (`404`, `x-nextjs-action-not-found`;
+  action ids differ per build even for unchanged source). No session, account,
+  school or membership is created; the old document shows "This page couldn't
+  load"; a reload gets the new build.
+- **Sign-out** (A2) is a plain form POST: the old document is replaced by the new
+  build before any new sign-in.
+- **Session switched in another tab** (A3): the old documents stay old, and their
+  save code runs carrying the new account's session - but every write targets the
+  membership the old page was rendered with, and every one was rejected (`403`).
+- **Back** (A6): neither engine restored from the back-forward cache
+  (`pageshow.persisted` false; a fresh new-build document). Dynamic pages are sent
+  `Cache-Control: no-store`. **Back across a client-side navigation** (A7) stays in
+  the old document and writes as the account it loaded - a pre-switch account.
+- **Old engine** (B): every write and the second save after a failure were
+  rejected; deletes while the loaded data was its baseline reported success and
+  removed nothing (the rows are invisible to the new session). Both accounts'
+  fingerprints unchanged.
+- Every post-switch account was unchanged; no write from an old document carrying
+  a post-switch account's session succeeded.
+
+Not covered: Vercel routing and caching, Skew Protection, real Safari, a real
+browser's own back-forward cache policy for `no-store` pages, and old documents
+older than `ecb7467`.
+
 ## 5. Cleanup
 
 ```bash
 bash "$STACK_SRC/down.sh"
 rm -rf "${STACK_DIR:-$HOME/falcon-integration-stack}"   # binaries, data, logs, generated keys
 git worktree remove ../falcon-deployed                  # after deleting its node_modules link
+git worktree remove --force ../falcon-old; git worktree remove --force ../falcon-new
 ```
 
 The stack writes nothing into the repository.
