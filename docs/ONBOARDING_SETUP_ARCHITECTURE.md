@@ -278,16 +278,39 @@ and default privileges, and a gateway standing in for Kong.
 - **The existing suite on the same database.** `verify:onboarding-setup-concurrency`
   passed against the stack's database (71 checks), over direct connections.
 
-**On hosted Supabase.** Functional and authorization checks passed on the hosted
-staging project, `falcondeck-staging` (release document §5). The lock-order
-scenarios did not run there; they need a direct database connection.
+**On hosted Supabase, through PostgREST.** Functional and authorization checks
+passed on the hosted staging project, `falcondeck-staging` (release document §5),
+over HTTPS through Kong, Auth and PostgREST. Those are not lock-order checks.
+
+**On hosted Supabase, through the transaction pooler.**
+`verify:onboarding-setup-pooler --run` passed all 29 checks on 2026-10-27 (run
+`pooler-20261027-edb109`) against `falcondeck-staging` (PostgreSQL 17.11) through
+Supavisor's transaction pooler (port 6543). Every unit of work was one explicit
+transaction using only `set local`, as transaction pooling requires.
+
+- The §8.2 ordering cases, made deterministic the same way: ordinary save and
+  completion in both orders, for an existing row and for the first row. Each time
+  the side that went second waited without having touched
+  `teacher_schedule_preferences`, on a different pooled backend, then gave the
+  §8.2 outcome; completed operations still replayed.
+- The control: a direct table `UPDATE` after a completion waited holding the row,
+  then was rejected by RLS (`42501`) - so the checks above could have failed.
+- 6 unsynchronized rounds: completion refused 5, ordinary write on top 1; no write
+  rejected.
+- No setup advisory lock or open transaction of the run was left behind.
+- Its 11 synthetic `@example.test` users and 11 schools were removed, and every row
+  outside them (all school-scoped tables, `organizations`, `auth.users`) was
+  fingerprinted before and after and was unchanged.
+
+This proves the lock order on a Supabase-hosted Postgres with transactions passing
+through Supavisor. It does not exercise the deployed request path: PostgREST
+connects to Postgres directly, not through the pooler, and its lock order was
+shown on the local stack (above). Browser coverage is separate again (§12).
 
 Still not exercised:
 
-- **Supabase's pooler (Supavisor), and lock order on a Supabase project.** The
-  design relies on each RPC being one transaction at READ COMMITTED.
-  Transaction-level advisory and row locks are safe under transaction pooling, but
-  this has not been observed on a Supabase project.
+- Lock order through PostgREST on a Supabase project (hosted PostgREST was checked
+  functionally only).
 - Real network latency and client retry timing.
 
 **One protocol for preference writes.** The ordinary save used to write
@@ -309,11 +332,26 @@ policy is admin-only. Both observed problems are gone for writes made this way
 - **Writers outside the protocol.** A client bundle from before this change, a
   direct API call, and the one-time legacy migration
   (`lib/data/migration/migrateLocalData.ts`, which upserts the row) still write the
-  table directly. RLS still governs them, but they can still be rejected while a
+  table directly. RLS still governs them. A plain `UPDATE` can be rejected while a
   completion commits (§8.2 control), and a direct first-row insert can still take
   its locks in the opposite order. The legacy migration only runs for legacy
   accounts, which are never eligible for guided setup. Direct writes were not
   revoked; that would be a wider change.
+
+  **The deployed old bundle specifically** (Production until `e265b80`,
+  2026-10-17 00:04 UTC; its engine is `ecb7467`'s) does not write a plain `UPDATE`:
+  it upserts the whole row. `verify:old-client-exposure` runs that engine, taken
+  from git, against today's migrations and the real `complete_setup()` (local
+  PostgreSQL 17, 31 checks). Overlapping a completion, for an existing row and
+  for the first row, its upsert waits and is **not rejected**: it succeeds once
+  the completion commits and **clears the active schedule the completion just
+  set** - case A of §9.2 arriving through the overlap. So an overlap is not a
+  harmless rejection, and later saves are not safe either: the first failed save
+  from that tab, at any time afterwards, makes the next one delete setup's first
+  lesson (and, for a shared schedule, its class and period assignment) while the
+  completion stays recorded (§9.2 B, B2, reproduced again). What such a tab does
+  not do: a save with no edits writes nothing, and an edit that does not touch
+  preferences, with no failed save, leaves setup's rows and active schedule alone.
 - **Deploy order.** The ordinary save now depends on the new function. Applying the
   migration has to come before, or with, shipping this client code; otherwise every
   preference save fails.
@@ -671,11 +709,15 @@ Chromium.
    and an explicitly edited field is last-write-wins. Edits to a class deleted
    elsewhere are handled for lessons only, and no screen but two shows a failed
    save (§9.2).
-2. **Concurrency through the Supabase pooler is unverified.** Through PostgREST it
-   was verified on a local integration stack (§8.3).
+2. **Concurrency on hosted Supabase: verified through the transaction pooler, not
+   through hosted PostgREST.** The lock-order scenarios passed on
+   `falcondeck-staging` through Supavisor (29 checks, 2026-10-27); through
+   PostgREST they were verified on the local integration stack (§8.3).
 3. **The non-production Supabase project is a Free-plan staging project**
-   (`falcondeck-staging`). It pauses after about a week of inactivity, and nobody
-   here holds a direct database connection to it. A Supabase preview branch
+   (`falcondeck-staging`). It pauses after about a week of inactivity. Its only
+   database connection here is the transaction-pooler URL a maintainer stores
+   locally in the git-ignored `.env.staging-pooler.local` (integration document
+   §6). A Supabase preview branch
    would not work as-is:
    `20260922000000_organization_memberships_account_origin.sql` refuses to apply
    unless two specific production rows exist. The test harness seeds those rows.
@@ -704,7 +746,10 @@ Chromium.
     `save_teacher_schedule_preferences` protocol, the deploy order it creates, and
     unlocked checks in `save_setup_draft`. See §8.3. A `preferences-changed` conflict
     can only be resolved by changing the draft or the stored preferences; there is
-    no "replace anyway".
+    no "replace anyway". For the deployed old bundle the effect is reproduced, not
+    inferred: a cleared active schedule, and after any failed save, deleted setup
+    rows (§8.3, `verify:old-client-exposure`). Mitigation is undecided (§13,
+    precondition 2).
 11. **Follow-ups left for a later pass.** `timeZone`, `colorHex`, a course
     `description` and the elements of the first lesson's arrays are stored without
     validation beyond the draft size cap. And `complete_setup` answers differently
@@ -731,7 +776,7 @@ Chromium.
 | Interrupted accounts resume; established and legacy accounts unchanged | db §2, §15, §16; foundation §8 |
 | Draft started, then ordinary setup: entry bypasses guided setup; saves and completion cannot reopen it; draft retained | db §15c, §17, §18 |
 | Schedule-only and lunch-wave-only preference changes after draft creation; baseline survives saves; committed operations still replay | db §19 |
-| Ordinary preference writes and completion, each order, first row and existing row | concurrency §10 |
+| Ordinary preference writes and completion, each order, first row and existing row | concurrency §10; on hosted staging through Supavisor's transaction pooler, `verify:onboarding-setup-pooler --run` §1–5 (§8.3) |
 | Preferences changed between reading the seed and the first draft save; baseline cannot be chosen by the caller | db §22 |
 | Guided screens: one commit for repeated presses; failed and lost answers retried under the same operation id; each conflict's recovery; pending text committed before Edit, Back, Continue and Start; no leave-page warning at the moment of navigation; refusals never show raw database errors | `verify:guided-setup-interactions` §16–25 (Playwright Chromium and WebKit) |
 | Optional items are draft-backed (pending, saved, reloaded, validated); a failed save stops Back, Continue and Start at the action with a focused Retry | `verify:guided-setup-interactions` §26–27 |
@@ -746,6 +791,7 @@ Chromium.
 | Lesson edit for a class deleted elsewhere is held back, reported, and blocks nothing else | stale-tab §10 |
 | Completion refused once the account is set up the ordinary way; committed operations still replay | db §17; concurrency §8 |
 | Admin edit of a shared schedule overlapping a completion | concurrency §9 |
+| What the pre-foundation bundle (`ecb7467`) still does after a completion: cases A, B, B2, the overlap, and what it leaves alone; current engine as control | `verify:old-client-exposure` (reproduction; not in `npm run verify` - it reads that commit from git history) |
 
 The three `verify:onboarding-setup-*` scripts and `verify:stale-tab-save-safety`
 are in `npm run verify`. The three `verify:guided-setup-*` scripts are not;
@@ -756,6 +802,10 @@ not Safari). The database
 ones start a PostgreSQL 17 server in a temporary directory, apply every file in
 `supabase/migrations` to it, and delete it. They read no environment file and
 connect to nothing else.
+
+`verify:onboarding-setup-pooler` is the exception, and is in neither: it is run by
+hand against `falcondeck-staging` only, through its transaction pooler, with a
+locally stored connection string (integration document §6).
 
 ---
 
@@ -771,13 +821,42 @@ Activation is therefore a reviewed code change, not a settings change.
    Production: the three migrations applied and verified (its Step 2), and the
    application deployed that writes preferences through
    `save_teacher_schedule_preferences`.
-2. Old bundles have aged out: no tab still running a client from before that
-   deployment, which wrote preferences outside the protocol (§8.3, §9.2; release
-   document §4).
+2. Clients from before that deployment (`e265b80`, live 2026-10-17 00:04 UTC) are
+   an accepted, measured risk - not a waiting period, because no one can show that
+   every old tab has closed. Such a tab writes preferences directly, outside the
+   protocol, and still has the pre-§9.2 save recovery. It can affect only the
+   account it is signed in to, and only if that account completes guided setup
+   while the tab stays open and unreloaded. At activation, record:
+   - read-only, how many memberships eligible for guided setup existed before that
+     deployment (an account must have existed for an old tab to be signed in to it);
+   - from the Production Supabase API logs, for whatever window the plan retains,
+     direct writes to `/rest/v1/teacher_schedule_preferences` (old clients, and the
+     one-time legacy migration, which never runs for an eligible account) against `POST /rest/v1/rpc/save_teacher_schedule_preferences` (current
+     clients).
+   Neither proves that no old tab is open; together they bound how many accounts
+   could be exposed. Activation proceeds on that record, not on a wait.
+
+   What such a tab does is reproduced locally (§8.3, `verify:old-client-exposure`):
+   a lunch-wave edit clears setup's active schedule, including when it overlaps the
+   completion, and any failed save followed by another deletes setup's first lesson
+   (with a shared schedule, its class and period assignment too). Proposed, not
+   decided or implemented: a first rollout limited to a user AND a membership both
+   created after a provisional cutoff (2026-10-18 00:00 UTC; e265b80 was READY at
+   2026-10-17 00:04:09 UTC). An old tab can carry a newer account's session (another
+   tab switches it), but its save code targets the membership its page was rendered
+   with, and every such write was rejected; sign-in, sign-up and "Create school"
+   from an old document are unknown server actions to the new build. Locally
+   observed, not on Vercel (integration document, "Old tabs across a deployment").
+   It holds only while Skew Protection is off and no deployment older than e265b80
+   is promoted. Risk acceptance stays pending.
 3. The open items in §11 that bear on activation have been accepted or closed:
-   concurrency through Supavisor (2), the preferences protection's limits (10),
-   and real Safari, which has not been run: the guided interaction suite passes
-   in Playwright's WebKit build, which is not Safari or iPadOS input.
+   concurrency through Supavisor (2) is closed - 29 checks on `falcondeck-staging`,
+   2026-10-27 (§8.3); the preferences protection's limits (10) are open, pending
+   risk acceptance together with precondition 2.
+4. Browser coverage is recorded as two separate items: Playwright's WebKit build
+   (the guided interaction suite passes in it) and real Safari on macOS and iPadOS
+   (not run). The first does not stand in for the second: WebKit is not Safari or
+   iPadOS input.
 
 **Steps**
 

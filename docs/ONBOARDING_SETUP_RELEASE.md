@@ -167,10 +167,13 @@ files.
 are ordinary rows. Guided setup is inactive, so no draft or completion rows exist.
 
 **Mixed bundles during rollout.** Tabs opened before the deploy keep writing
-preferences directly until they reload. That is outside the write protocol, but it
-only matters while a `complete_setup` runs, and nothing calls `complete_setup` until
-guided setup is activated. Before activating it, allow time for old bundles to age
-out (architecture document §8.3, §9.2).
+preferences directly until they reload. That is outside the write protocol. It
+matters for an account that completes guided setup while such a tab is open - during
+the completion and after it (reproduced: architecture document §8.3,
+`verify:old-client-exposure`) - and nothing calls `complete_setup` until guided
+setup is activated. Activation does not wait for old tabs to close, which
+cannot be shown; it records how many accounts could be exposed instead
+(architecture document §13, precondition 2).
 
 ## 5. What has and has not been validated
 
@@ -216,8 +219,20 @@ Free-plan Supabase project that Vercel Preview now points at; never production.
   - completion and replay;
   - preferences changed before the first save and before completion;
   - anonymous and cross-owner rejection.
-- **Not run on staging: the lock-order checks.** They need a direct database
-  connection, and none is available to staging here.
+- **Through Supavisor's transaction pooler** (port 6543, PostgreSQL 17.11):
+  `verify:onboarding-setup-pooler --run`, 29 checks, all pass (2026-10-27, run
+  `pooler-20261027-edb109`).
+  - The lock-order scenarios: ordinary save and completion in both orders, for an
+    existing row and the first row; the second side waited without touching
+    `teacher_schedule_preferences`, then gave the local outcome. A direct
+    `UPDATE` control was rejected (`42501`), as expected. 6 unsynchronized rounds
+    ended safely. No lock or transaction was left open.
+  - **Cleanup:** the run's 11 synthetic users and 11 schools were removed.
+  - **Unrelated data unchanged:** every row outside them - all school-scoped
+    tables, `organizations`, `auth.users` - fingerprinted before and after, equal.
+  - This is the pooler and hosted Postgres, not the deployed request path:
+    PostgREST does not go through the pooler. Hosted PostgREST was covered
+    functionally above, and its lock order only on the local stack.
 - **Browser, signed in, on PR #4's preview build** (`dpl_D27HvJv6xNMmneu3jXprxHZp3dYK`,
   commit `4e23df5`):
   - chose a school schedule on `/setup/schedule`, then changed the lunch wave and
@@ -229,8 +244,9 @@ Free-plan Supabase project that Vercel Preview now points at; never production.
 
 **Not validated:**
 
-- Supavisor (the pooler);
-- lock order on hosted Supabase;
+- lock order through hosted PostgREST (through the pooler it is validated above);
+- real Safari on macOS and iPadOS (the guided suite passes in Playwright WebKit,
+  which is not Safari);
 - the production application and production database;
 - sign-up and password-reset email redirects on staging (they need a real inbox);
 - real network latency under load.

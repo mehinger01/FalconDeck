@@ -1,0 +1,88 @@
+Old-tab account switch - Playwright webkit 26.6, run oldtabmvrd9jl1
+old build FrGuZ4Yv8kLoEmeYm6Y0f, new build CRn7E8vu2e2zHu8zsCwO5
+
+Before the switch (every tab on the old build)
+  ok  - A1 is on the old build at /login
+  ok  - A2 is on the old build at /schedule
+  ok  - A3-schedule is on the old build at /schedule
+  ok  - A3-classes is on the old build at /classes
+  ok  - A4 is on the old build at /login
+  ok  - A5 is on the old build at /onboarding?screen=create
+  ok  - A6 is on the old build at /classes
+  ok  - A7 is on the old build at /lessons
+  ok  - the post-switch accounts were created after the switch
+
+A1 old /login (signed out) -> sign in as NEW
+  obs - A1 server action: [{"tab":"A1","path":"/login","action":"406c07fc","status":404,"notFound":true}]
+  obs - A1 tab afterwards: {"path":"/login","build":"old","marker":"loaded-before-switch"}
+  obs - A1 what the old document shows now: This page couldnâ€™t load Reload to try again, or go back. Reload Back
+  ok  - A1 no old document is left signed in to an app page
+
+A2 old tab signed in as EXISTING -> NavBar sign-out -> sign in as NEW
+  ok  - A2 sign-out replaced the old document with the new build
+  ok  - A2 signing in as NEW happens on the new build
+
+A3 old /schedule and /classes tabs stay open; another tab in the same browser switches to NEW
+  ok  - A3 both old tabs are still the old documents
+  obs - A3 writes from the old tabs: ["POST teacher_schedule_preferences as NEW -> 403","POST courses as NEW -> 403","POST courses as NEW -> 403","POST courses as NEW -> 403"]
+  ok  - A3 the old tabs did write (so the check below means something)
+  ok  - A3 every old-tab write carried NEW's session
+  ok  - A3 every one of them was rejected (4xx)
+  ok  - A3 the old tabs are still old documents afterwards
+
+A4 old /login -> Sign up
+  obs - A4 server action: [{"tab":"A4","path":"/login","action":"40f8c542","status":404,"notFound":true}]
+  obs - A4 tab afterwards: {"path":"/login","build":"old","marker":"loaded-before-switch"}
+  ok  - A4 no account was created from the old tab
+
+A5 old onboarding tab (EXISTING-NO-SCHOOL, no school); another tab switches to NEW-NO-SCHOOL; the old tab creates a school
+  obs - A5 the switcher tab (new build) landed on: /onboarding
+  ok  - A5 the old onboarding tab is still the old document
+  obs - A5 server action: [{"tab":"A5","path":"/login","action":"406c07fc","status":200,"notFound":false},{"tab":"A5","path":"/onboarding","action":"407afc6f","status":404,"notFound":true}]
+  obs - A5 tab afterwards: {"path":"/onboarding?screen=create","build":"old","marker":"loaded-before-switch"}
+  obs - A5 schools created by the old tab's form / NEW-NO-SCHOOL memberships: {"schoolsCreated":0,"newcomerMemberships":0}
+  ok  - A5 if a school or membership was created, the tab is no longer an old document
+  obs - A5 old document's console errors: ["Failed to load resource: the server responded with a status of 404 (Not Found)"]
+  obs - A5 what the old document shows now: This page couldnâ€™t load Reload to try again, or go back. Reload Back
+  obs - A5 'Back to school search' links found: 0
+  obs - A5 link click: click failed: locator.click: Timeout 5000ms exceeded.
+  obs - A5 after the link: {"replaced":false,"path":"/onboarding?screen=create","build":"old","marker":"loaded-before-switch"}
+  ok  - A5 the old document that stays wrote nothing to the database
+  ok  - A5 a reload of that tab gets the new build
+
+A6 browser Back to a document loaded before the switch
+  obs - A6 after Back (webkit): {"marker":null,"navigationType":"back_forward","pageshowPersisted":[false],"build":"new","path":"/schedule","restoredFromBfcache":false}
+  ok  - A6 Back loaded a fresh document from the new build
+  obs - A6 after Forward: {"path":"/classes","build":"new","marker":null}
+
+A7 browser Back across a client-side navigation made before the switch
+  obs - A7 after Back: {"path":"/schedule","build":"old","marker":"loaded-before-switch"}
+  obs - A7 old document's writes: ["POST teacher_schedule_preferences as EXISTING-BACK -> 200"]
+  ok  - A7 the old document writes only as the account it loaded (EXISTING-BACK)
+
+B. The old save engine (from the old checkout) loaded as an existing account, then the session switches underneath it
+  ok  - (EXISTING -> NEW) first save (lesson edit, new class, reassigned period, lunch wave) is rejected
+  ok  - (EXISTING -> NEW) the second save, after the failed one, is rejected too
+  obs - (EXISTING -> NEW) delete-first save (lesson, class, period assignment) reports: ok
+  obs - (EXISTING -> NEW) ...and a second save after it reports: failed: upsert teacher_schedule_preferences: new row violates row-level security policy for table
+  obs - (EXISTING -> NEW) first engine, delete-only save after its two failures, reports: failed: upsert courses: new row violates row-level security policy for table "courses"
+  ok  - (EXISTING -> NEW) EXISTING's rows are unchanged
+  ok  - (EXISTING -> NEW) NEW's rows and memberships are unchanged
+  ok  - (EXISTING -> NEW-NO-SCHOOL) first save (lesson edit, new class, reassigned period, lunch wave) is rejected
+  ok  - (EXISTING -> NEW-NO-SCHOOL) the second save, after the failed one, is rejected too
+  obs - (EXISTING -> NEW-NO-SCHOOL) delete-first save (lesson, class, period assignment) reports: ok
+  obs - (EXISTING -> NEW-NO-SCHOOL) ...and a second save after it reports: failed: upsert teacher_schedule_preferences: new row violates row-level security policy for table
+  obs - (EXISTING -> NEW-NO-SCHOOL) first engine, delete-only save after its two failures, reports: failed: upsert courses: new row violates row-level security policy for table "courses"
+  ok  - (EXISTING -> NEW-NO-SCHOOL) EXISTING's rows are unchanged
+  ok  - (EXISTING -> NEW-NO-SCHOOL) NEW-NO-SCHOOL's rows and memberships are unchanged
+
+Every account, before vs after the browser paths (Part B checks its own)
+  ok  - EXISTING unchanged (memberships and every owned row)
+  obs - EXISTING-BACK (its own old tabs in A6/A7 may change its lunch wave): {"before":{"bell_schedules":1,"class_sections":1,"courses":1,"lesson_class_sections":1,"lessons":1,"schedule_blocks":1,"setup_completions":1,"teacher_schedule_preferences":1},"after":{"bell_schedules":1,"class_sections":1,"courses":1,"lesson_class_sections":1,"lessons":1,"schedule_blocks":1,"setup_completions":1,"teacher_schedule_preferences":1}}
+  ok  - EXISTING-BACK membership unchanged
+  ok  - EXISTING-NO-SCHOOL unchanged (memberships and every owned row)
+  ok  - NEW unchanged (memberships and every owned row)
+  ok  - NEW-NO-SCHOOL unchanged (memberships and every owned row)
+  ok  - no write from an old document carrying a post-switch account's session succeeded
+
+All checks passed.
